@@ -814,7 +814,7 @@ Runtime responses include branch progress when a scenario is running:
       "step_count": 3,
       "current_step_index": 2,
       "state": "waiting",
-      "wait_type": "event"
+      "wait_type": "any_events"
     }
   ]
 }
@@ -1051,6 +1051,16 @@ Response:
   "scenario_last_error": ""
 }
 ```
+
+Runtime wait type values:
+
+- `none`
+- `time`
+- `event` for `WAIT_DEVICE_EVENT`
+- `any_events` for `WAIT_ANY_DEVICE_EVENT`
+- `all_events` for `WAIT_ALL_DEVICE_EVENTS`
+- `flags`
+- `operator`
 
 ### `GET /api/gm/room/scenarios/export`
 

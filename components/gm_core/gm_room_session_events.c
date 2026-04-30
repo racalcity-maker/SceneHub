@@ -163,6 +163,7 @@ esp_err_t gm_room_session_scenario_on_event(const event_bus_message_t *message)
             if (!branch->active ||
                 branch->scenario_state != GM_ROOM_SCENARIO_WAITING ||
                 (branch->wait_type != GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT &&
+                 branch->wait_type != GM_ROOM_SCENARIO_WAIT_ANY_DEVICE_EVENT &&
                  branch->wait_type != GM_ROOM_SCENARIO_WAIT_ALL_DEVICE_EVENTS)) {
                 continue;
             }

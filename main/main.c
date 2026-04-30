@@ -22,6 +22,7 @@
 #include "service_status.h"
 #include "esp_task_wdt.h"
 #include <inttypes.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -106,6 +107,15 @@ static void stats_task(void *param)
 {
     (void)param;
     const TickType_t period = pdMS_TO_TICKS(10000);
+    const uint32_t low_heap_threshold = 50U * 1024U;
+    const uint32_t low_largest_block_threshold = 24U * 1024U;
+    bool low_heap_active = false;
+    uint32_t lowest_logged_heap_int = UINT32_MAX;
+    uint32_t lowest_logged_largest_int = UINT32_MAX;
+    uint32_t prev_total_runtime = 0;
+    uint32_t prev_idle_runtime = 0;
+    bool have_prev_runtime = false;
+
     vTaskDelay(period);
     while (1) {
         UBaseType_t count = uxTaskGetNumberOfTasks();
@@ -123,15 +133,55 @@ static void stats_task(void *param)
         }
 
         float cpu = 0.0f;
-        if (total > 0 && idle <= total) {
-            cpu = ((float)(total - idle) * 100.0f) / (float)total;
+        if (have_prev_runtime) {
+            uint32_t delta_total = total - prev_total_runtime;
+            uint32_t delta_idle = idle - prev_idle_runtime;
+            if (delta_total > 0 && delta_idle <= delta_total) {
+                cpu = ((float)(delta_total - delta_idle) * 100.0f) / (float)delta_total;
+            }
         }
+        prev_total_runtime = total;
+        prev_idle_runtime = idle;
+        have_prev_runtime = total > 0;
+
         uint32_t heap_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        uint32_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         uint32_t heap_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         uint32_t min_int = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (heap_int < 50 * 1024 || min_int < 50 * 1024) {
-            ESP_LOGW("stats", "low heap: heap_int=%" PRIu32 " min_int=%" PRIu32 " psram=%" PRIu32 " cpu=%.1f%% tasks=%" PRIu32,
-                     heap_int, min_int, heap_spiram, cpu, (uint32_t)count);
+
+        bool current_low = heap_int < low_heap_threshold || largest_int < low_largest_block_threshold;
+        bool new_low_watermark = heap_int + 4096U < lowest_logged_heap_int ||
+                                 largest_int + 4096U < lowest_logged_largest_int;
+        if (current_low && (!low_heap_active || new_low_watermark)) {
+            ESP_LOGW("stats",
+                     "low heap now: heap_int=%" PRIu32 " largest_int=%" PRIu32 " min_int=%" PRIu32
+                     " psram=%" PRIu32 " cpu=%.1f%% tasks=%" PRIu32,
+                     heap_int,
+                     largest_int,
+                     min_int,
+                     heap_spiram,
+                     cpu,
+                     (uint32_t)count);
+            low_heap_active = true;
+            if (heap_int < lowest_logged_heap_int) {
+                lowest_logged_heap_int = heap_int;
+            }
+            if (largest_int < lowest_logged_largest_int) {
+                lowest_logged_largest_int = largest_int;
+            }
+        } else if (!current_low && low_heap_active) {
+            ESP_LOGI("stats",
+                     "heap recovered: heap_int=%" PRIu32 " largest_int=%" PRIu32 " min_int=%" PRIu32
+                     " psram=%" PRIu32 " cpu=%.1f%% tasks=%" PRIu32,
+                     heap_int,
+                     largest_int,
+                     min_int,
+                     heap_spiram,
+                     cpu,
+                     (uint32_t)count);
+            low_heap_active = false;
+            lowest_logged_heap_int = UINT32_MAX;
+            lowest_logged_largest_int = UINT32_MAX;
         }
         if (tasks) {
             free(tasks);

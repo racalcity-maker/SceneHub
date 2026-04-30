@@ -237,6 +237,8 @@ static const char *api_room_scenario_wait_type_str(gm_room_scenario_wait_type_t 
         return "time";
     case GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT:
         return "event";
+    case GM_ROOM_SCENARIO_WAIT_ANY_DEVICE_EVENT:
+        return "any_events";
     case GM_ROOM_SCENARIO_WAIT_ALL_DEVICE_EVENTS:
         return "all_events";
     case GM_ROOM_SCENARIO_WAIT_OPERATOR:

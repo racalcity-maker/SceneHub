@@ -162,7 +162,7 @@ static esp_err_t scenario_enter_wait_any_device_event_locked(gm_room_session_t *
     }
     session->scenario_state = GM_ROOM_SCENARIO_WAITING;
     gm_room_session_scenario_clear_wait_locked(session);
-    session->wait_type = GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT;
+    session->wait_type = GM_ROOM_SCENARIO_WAIT_ANY_DEVICE_EVENT;
     session->wait_started_at_ms = now_ms;
     session->wait_event_count = wait_any->event_count;
     for (uint8_t i = 0; i < wait_any->event_count; ++i) {
@@ -874,7 +874,8 @@ void gm_room_session_scenario_tick(void)
                     gm_room_session_scenario_clear_wait_locked(session);
                     gm_room_session_mark_session_changed_locked(session);
                 } else if (session->scenario_state == GM_ROOM_SCENARIO_WAITING &&
-                           session->wait_type == GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT) {
+                           (session->wait_type == GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT ||
+                            session->wait_type == GM_ROOM_SCENARIO_WAIT_ANY_DEVICE_EVENT)) {
                     if (!scenario_apply_wait_timeout_locked(session,
                                                             &session->running_scenario,
                                                             now_ms)) {
