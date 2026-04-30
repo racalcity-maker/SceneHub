@@ -1,21 +1,35 @@
-MIT License
+SceneHub Source-Available Proprietary License
 
-Copyright (c) 2025 racalcity-maker
+Copyright (c) 2025-2026 racalcity-maker. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This repository and its contents are provided for source review,
+evaluation, and collaboration with the copyright holder only.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+No license is granted to use, copy, modify, merge, publish, distribute,
+sublicense, sell, deploy, host, manufacture, or otherwise exploit this
+software, firmware, documentation, designs, or derivative works, except
+with prior written permission from the copyright holder.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+You may clone or download this repository only for personal review or
+evaluation. Any production use, commercial use, public deployment,
+redistribution, derivative product, service offering, hardware bundle,
+or use in an escape-room, exhibit, venue, installation, or customer
+project requires a separate written license agreement.
+
+This license does not grant rights to use the names, logos, trademarks,
+or branding associated with SceneHub or racalcity-maker.
+
+Third-party components included in this repository remain licensed under
+their own license terms. Those third-party license terms apply only to
+the respective third-party components and do not grant rights to the
+SceneHub proprietary code, firmware, documentation, or product design.
+
+THE SOFTWARE AND MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT,
+AVAILABILITY, SAFETY, OR RELIABILITY. TO THE MAXIMUM EXTENT PERMITTED BY
+LAW, THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+OTHER LIABILITY ARISING FROM OR RELATED TO THIS SOFTWARE OR MATERIALS.
+
+For licensing inquiries, contact the copyright holder through the
+repository owner account.

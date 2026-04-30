@@ -439,6 +439,12 @@ main/
 - `docs/QUEST_DEVICE_SETUP_RUS.md` - Quest Device setup guide
 - `docs/ROOM_SCENARIO_SETUP_RUS.md` - Room Scenario and Game Mode setup guide
 
+## License
+
+SceneHub is source-available proprietary software. The code is visible for review and collaboration, but use, copying, modification, redistribution, deployment, production installation, commercial use, or derivative products require prior written permission from the copyright holder.
+
+See `LICENSE` for details. Third-party components remain under their own license terms.
+
 ## Notes for Further Work
 
 Likely next evolutions:
