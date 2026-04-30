@@ -1,0 +1,50 @@
+# ESP-IDF build output
+build/
+cmake-build-*/
+dist/
+out/
+
+# ESP-IDF generated files
+sdkconfig.old
+compile_commands.json
+managed_components/
+tests/**/managed_components/
+legacy/tests/**/managed_components/
+*.bin
+*.elf
+*.map
+*.uf2
+
+# Logs and local dumps
+*.log
+*.tmp
+*.bak
+build_unused.log
+v.1.03.zip
+
+# Test app build output
+tests/**/build/
+tests/**/sdkconfig.old
+
+# Local archive/reference code, not part of the SceneHub product tree
+legacy/
+
+# IDE and editor state
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Generated web assets
+components/web_ui/assets/devices_wizard.js

@@ -1,0 +1,13 @@
+#pragma once
+
+#define QUEST_ID_MAX_LEN               32
+#define QUEST_ROOM_ID_MAX_LEN          32
+#define QUEST_NAME_MAX_LEN             48
+#define QUEST_TOPIC_MAX_LEN            96
+#define QUEST_PAYLOAD_MAX_LEN         160
+#define QUEST_FLAG_NAME_MAX_LEN        32
+#define QUEST_TRACK_NAME_MAX_LEN      128
+#define QUEST_BUTTON_LABEL_MAX_LEN     QUEST_NAME_MAX_LEN
+#define QUEST_BINDING_SLOT_MAX_LEN     32
+#define QUEST_BINDING_ENDPOINT_MAX_LEN 32
+#define QUEST_PHYSICAL_ID_MAX_LEN      QUEST_ID_MAX_LEN
