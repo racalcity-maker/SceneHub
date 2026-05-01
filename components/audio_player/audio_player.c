@@ -113,7 +113,7 @@ esp_err_t audio_player_play(const char *path)
         return ESP_ERR_INVALID_ARG;
     }
     audio_cmd_t cmd = {
-        .type = AUDIO_CMD_PLAY_EFFECT,
+        .type = AUDIO_CMD_PLAY,
         .channel = AUDIO_PLAYER_CHANNEL_EFFECT,
         .volume = -1,
         .seek_ratio = -1.0f,
@@ -129,7 +129,7 @@ esp_err_t audio_player_play_seek(const char *path, float seek_ratio)
         return ESP_ERR_INVALID_ARG;
     }
     audio_cmd_t cmd = {
-        .type = AUDIO_CMD_PLAY_EFFECT,
+        .type = AUDIO_CMD_PLAY,
         .channel = AUDIO_PLAYER_CHANNEL_EFFECT,
         .volume = -1,
         .seek_ratio = -1.0f,

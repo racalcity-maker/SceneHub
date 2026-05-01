@@ -11,6 +11,8 @@
 
 static const char *TAG = "helix_mp3";
 
+#define MP3_SEEK_DISCARD_FRAMES 6
+
 static size_t convert_and_write(const short *pcm, int samples, int nChans, int sampleRate, int volume_percent, mp3_write_cb_t writer, void *user)
 {
     const int target_rate = 44100;
@@ -112,6 +114,7 @@ bool helix_mp3_decode_file(const char *path,
     uint32_t seek_base_ms = 0;
     bool seek_base_set = false;
     bool use_seek = ratio > 0.0f;
+    int seek_discard_frames = use_seek ? MP3_SEEK_DISCARD_FRAMES : 0;
 
     while (1) {
         if (bytesLeft < MAINBUF_SIZE) {
@@ -171,6 +174,10 @@ bool helix_mp3_decode_file(const char *path,
         if (progress_user) {
             int kbps = info.bitrate / 1000;
             *((int *)progress_user) = kbps;
+        }
+        if (seek_discard_frames > 0) {
+            --seek_discard_frames;
+            continue;
         }
         if (convert_and_write(pcm, samples, chans, rate, volume_percent, writer, user) == 0) {
             ok = false;

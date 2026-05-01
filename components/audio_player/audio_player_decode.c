@@ -16,6 +16,8 @@
 
 #define AUDIO_SAMPLE_RATE 44100
 #define AUDIO_CHANNELS    2
+#define AUDIO_WAV_EDGE_FADE_MS 24
+#define AUDIO_WAV_EDGE_FADE_FRAMES ((AUDIO_SAMPLE_RATE * AUDIO_WAV_EDGE_FADE_MS) / 1000)
 
 static const char *TAG = "audio_player";
 
@@ -82,39 +84,77 @@ static audio_format_t detect_format(const uint8_t *hdr, size_t len)
 
 static esp_err_t parse_wav_header(FILE *f, audio_info_t *info, long *data_offset, uint32_t *data_size)
 {
-    struct __attribute__((packed)) wav_header {
+    struct __attribute__((packed)) riff_header {
         char riff[4];
         uint32_t size;
         char wave[4];
-        char fmt[4];
-        uint32_t fmt_size;
+    } riff;
+    struct __attribute__((packed)) chunk_header {
+        char id[4];
+        uint32_t size;
+    } chunk;
+    struct __attribute__((packed)) fmt_chunk {
         uint16_t audio_format;
         uint16_t num_channels;
         uint32_t sample_rate;
         uint32_t byte_rate;
         uint16_t block_align;
         uint16_t bits_per_sample;
-        char data_id[4];
-        uint32_t data_size;
-    } hdr;
+    } fmt;
 
-    if (fread(&hdr, 1, sizeof(hdr), f) != sizeof(hdr)) {
+    if (!f || !info || !data_offset || !data_size) {
         return ESP_FAIL;
     }
-    if (strncmp(hdr.riff, "RIFF", 4) != 0 || strncmp(hdr.wave, "WAVE", 4) != 0) {
+    memset(info, 0, sizeof(*info));
+    *data_offset = 0;
+    *data_size = 0;
+
+    if (fread(&riff, 1, sizeof(riff), f) != sizeof(riff)) {
         return ESP_FAIL;
     }
-    if (hdr.audio_format != 1 || hdr.bits_per_sample != 16) {
+    if (memcmp(riff.riff, "RIFF", 4) != 0 || memcmp(riff.wave, "WAVE", 4) != 0) {
         return ESP_FAIL;
     }
 
-    info->fmt = AUDIO_FMT_WAV;
-    info->sample_rate = hdr.sample_rate;
-    info->channels = hdr.num_channels;
-    info->bits_per_sample = hdr.bits_per_sample;
-    *data_offset = ftell(f);
-    *data_size = hdr.data_size;
-    return ESP_OK;
+    bool fmt_found = false;
+    while (fread(&chunk, 1, sizeof(chunk), f) == sizeof(chunk)) {
+        long payload_offset = ftell(f);
+        if (payload_offset < 0) {
+            return ESP_FAIL;
+        }
+
+        if (memcmp(chunk.id, "fmt ", 4) == 0) {
+            if (chunk.size < sizeof(fmt) ||
+                fread(&fmt, 1, sizeof(fmt), f) != sizeof(fmt)) {
+                return ESP_FAIL;
+            }
+            if (fmt.audio_format != 1 || fmt.bits_per_sample != 16 ||
+                fmt.num_channels == 0 || fmt.num_channels > 2 ||
+                fmt.sample_rate == 0 || fmt.block_align == 0) {
+                return ESP_FAIL;
+            }
+            info->fmt = AUDIO_FMT_WAV;
+            info->sample_rate = fmt.sample_rate;
+            info->channels = (uint8_t)fmt.num_channels;
+            info->bits_per_sample = (uint8_t)fmt.bits_per_sample;
+            fmt_found = true;
+        } else if (memcmp(chunk.id, "data", 4) == 0) {
+            if (!fmt_found || chunk.size == 0) {
+                return ESP_FAIL;
+            }
+            *data_offset = payload_offset;
+            *data_size = chunk.size;
+            fseek(f, *data_offset, SEEK_SET);
+            return ESP_OK;
+        }
+
+        long next = payload_offset + (long)chunk.size + (long)(chunk.size & 1U);
+        if (fseek(f, next, SEEK_SET) != 0) {
+            return ESP_FAIL;
+        }
+    }
+
+    return ESP_FAIL;
 }
 
 static size_t convert_pcm_to_output(const int16_t *in, size_t frames_in, const audio_info_t *info, int16_t *out, float gain)
@@ -160,6 +200,47 @@ static size_t convert_pcm_to_output(const int16_t *in, size_t frames_in, const a
     return out_frames;
 }
 
+static void apply_output_fade_in(int16_t *out, size_t frames, size_t fade_frames)
+{
+    if (!out || frames == 0 || fade_frames == 0) {
+        return;
+    }
+    size_t count = frames < fade_frames ? frames : fade_frames;
+    for (size_t frame = 0; frame < count; ++frame) {
+        int32_t gain = (int32_t)(frame + 1);
+        for (size_t ch = 0; ch < AUDIO_CHANNELS; ++ch) {
+            size_t sample = frame * AUDIO_CHANNELS + ch;
+            out[sample] = (int16_t)(((int32_t)out[sample] * gain) / (int32_t)fade_frames);
+        }
+    }
+}
+
+static void apply_output_fade_out(int16_t *out, size_t frames, size_t fade_frames)
+{
+    if (!out || frames == 0 || fade_frames == 0) {
+        return;
+    }
+    size_t count = frames < fade_frames ? frames : fade_frames;
+    size_t start = frames - count;
+    for (size_t i = 0; i < count; ++i) {
+        int32_t gain = (int32_t)(count - i - 1);
+        for (size_t ch = 0; ch < AUDIO_CHANNELS; ++ch) {
+            size_t sample = (start + i) * AUDIO_CHANNELS + ch;
+            out[sample] = (int16_t)(((int32_t)out[sample] * gain) / (int32_t)count);
+        }
+    }
+}
+
+static bool wav_edge_fade_enabled(const audio_reader_ctx_t *ctx)
+{
+    if (!ctx) {
+        return false;
+    }
+    return ctx->cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ||
+           ctx->cmd.type == AUDIO_CMD_PLAY ||
+           ctx->cmd.type == AUDIO_CMD_SEEK;
+}
+
 static bool decode_wav_to_output(FILE *f,
                                  const audio_reader_ctx_t *ctx,
                                  const audio_info_t *info,
@@ -179,6 +260,7 @@ static bool decode_wav_to_output(FILE *f,
 
     size_t bytes_read = 0;
     size_t bytes_done = initial_bytes_done;
+    size_t output_frames_done = 0;
     const uint32_t byte_rate = info->sample_rate * info->channels * (info->bits_per_sample / 8);
     while ((bytes_read = fread(in_buf, 1, in_buf_frames * info->channels * sizeof(int16_t), f)) > 0) {
         if (audio_player_reader_stop_requested(ctx)) {
@@ -190,6 +272,15 @@ static bool decode_wav_to_output(FILE *f,
 
         size_t frames = bytes_read / (info->channels * sizeof(int16_t));
         size_t out_frames = convert_pcm_to_output(in_buf, frames, info, out_buf, gain);
+        bool final_chunk = bytes_done + bytes_read >= data_size;
+        bool edge_fade = wav_edge_fade_enabled(ctx);
+        if (edge_fade && initial_bytes_done == 0 && output_frames_done < AUDIO_WAV_EDGE_FADE_FRAMES) {
+            size_t remaining_fade = AUDIO_WAV_EDGE_FADE_FRAMES - output_frames_done;
+            apply_output_fade_in(out_buf, out_frames, remaining_fade);
+        }
+        if (edge_fade && final_chunk) {
+            apply_output_fade_out(out_buf, out_frames, AUDIO_WAV_EDGE_FADE_FRAMES);
+        }
         size_t out_bytes = out_frames * AUDIO_CHANNELS * sizeof(int16_t);
         audio_mixer_channel_t mixer_ch = ctx->cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
             AUDIO_MIXER_CHANNEL_BACKGROUND : AUDIO_MIXER_CHANNEL_EFFECT;
@@ -198,11 +289,18 @@ static bool decode_wav_to_output(FILE *f,
             break;
         }
         if (written != out_bytes) {
-            ESP_LOGW(TAG, "mixer write incomplete");
+            if (!audio_player_reader_stop_requested(ctx)) {
+                ESP_LOGW(TAG,
+                         "mixer write incomplete: written=%u expected=%u channel=%d",
+                         (unsigned)written,
+                         (unsigned)out_bytes,
+                         (int)ctx->cmd.channel);
+            }
             break;
         }
 
         bytes_done += bytes_read;
+        output_frames_done += out_frames;
         if (byte_rate > 0) {
             uint32_t pos_ms = (uint32_t)((bytes_done * 1000ULL) / byte_rate);
             uint32_t dur_ms = data_size > 0 ? (uint32_t)((data_size * 1000ULL) / byte_rate) : 0;
@@ -281,8 +379,20 @@ void audio_player_reader_task(void *param)
             size_t skip_bytes = 0;
             if (cmd.seek_ratio >= 0.0f && cmd.seek_ratio <= 1.0f) {
                 skip_bytes = (size_t)((float)data_size * cmd.seek_ratio);
+                if (info.channels > 0 && info.bits_per_sample > 0) {
+                    size_t block_align = (size_t)info.channels * ((size_t)info.bits_per_sample / 8U);
+                    if (block_align > 0) {
+                        skip_bytes -= skip_bytes % block_align;
+                    }
+                }
                 if (skip_bytes >= data_size) {
                     skip_bytes = data_size > 0 ? data_size - 1 : 0;
+                    if (info.channels > 0 && info.bits_per_sample > 0) {
+                        size_t block_align = (size_t)info.channels * ((size_t)info.bits_per_sample / 8U);
+                        if (block_align > 0) {
+                            skip_bytes -= skip_bytes % block_align;
+                        }
+                    }
                 }
             }
             bool decode_ok = true;
