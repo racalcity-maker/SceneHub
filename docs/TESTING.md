@@ -20,7 +20,7 @@ This is the main integration test app for the current quest backend:
 Run from:
 
 ```powershell
-cd C:\Users\test\Documents\Arduino\zal\brocker\v.1.03\tests\quest_backend
+cd D:\Projects\SceneHub\tests\quest_backend
 idf.py build
 idf.py flash monitor
 ```
@@ -35,7 +35,7 @@ MQTT core coverage for publish/subscribe behavior and payload handling.
 Run from:
 
 ```powershell
-cd C:\Users\test\Documents\Arduino\zal\brocker\v.1.03\tests\mqtt_core
+cd D:\Projects\SceneHub\tests\mqtt_core
 idf.py build
 idf.py flash monitor
 ```

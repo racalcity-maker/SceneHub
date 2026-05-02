@@ -35,6 +35,109 @@ typedef struct {
 static ota_manager_state_t s_ota = {0};
 
 static void ota_confirm_task(void *arg);
+static void ota_reboot_task(void *arg);
+static const esp_partition_t *default_get_running_partition(void);
+static const esp_partition_t *default_get_boot_partition(void);
+static const esp_app_desc_t *default_get_app_description(void);
+static esp_err_t default_get_state_partition(const esp_partition_t *partition, esp_ota_img_states_t *out_state);
+static const esp_partition_t *default_get_next_update_partition(const esp_partition_t *start_from);
+static esp_err_t default_begin(const esp_partition_t *partition, size_t image_size, esp_ota_handle_t *out_handle);
+static esp_err_t default_write(esp_ota_handle_t handle, const void *data, size_t len);
+static esp_err_t default_end(esp_ota_handle_t handle);
+static esp_err_t default_set_boot_partition(const esp_partition_t *partition);
+static esp_err_t default_abort(esp_ota_handle_t handle);
+static esp_err_t default_mark_app_valid_cancel_rollback(void);
+static esp_err_t default_start_confirm_task(void);
+static esp_err_t default_start_reboot_task(void);
+
+static const ota_manager_backend_t s_default_backend = {
+    .get_running_partition = default_get_running_partition,
+    .get_boot_partition = default_get_boot_partition,
+    .get_app_description = default_get_app_description,
+    .get_state_partition = default_get_state_partition,
+    .get_next_update_partition = default_get_next_update_partition,
+    .begin = default_begin,
+    .write = default_write,
+    .end = default_end,
+    .set_boot_partition = default_set_boot_partition,
+    .abort = default_abort,
+    .mark_app_valid_cancel_rollback = default_mark_app_valid_cancel_rollback,
+    .start_confirm_task = default_start_confirm_task,
+    .start_reboot_task = default_start_reboot_task,
+};
+
+static const ota_manager_backend_t *s_backend = &s_default_backend;
+
+static const esp_partition_t *default_get_running_partition(void)
+{
+    return esp_ota_get_running_partition();
+}
+
+static const esp_partition_t *default_get_boot_partition(void)
+{
+    return esp_ota_get_boot_partition();
+}
+
+static const esp_app_desc_t *default_get_app_description(void)
+{
+    return esp_app_get_description();
+}
+
+static esp_err_t default_get_state_partition(const esp_partition_t *partition, esp_ota_img_states_t *out_state)
+{
+    return esp_ota_get_state_partition(partition, out_state);
+}
+
+static const esp_partition_t *default_get_next_update_partition(const esp_partition_t *start_from)
+{
+    return esp_ota_get_next_update_partition(start_from);
+}
+
+static esp_err_t default_begin(const esp_partition_t *partition, size_t image_size, esp_ota_handle_t *out_handle)
+{
+    return esp_ota_begin(partition, image_size, out_handle);
+}
+
+static esp_err_t default_write(esp_ota_handle_t handle, const void *data, size_t len)
+{
+    return esp_ota_write(handle, data, len);
+}
+
+static esp_err_t default_end(esp_ota_handle_t handle)
+{
+    return esp_ota_end(handle);
+}
+
+static esp_err_t default_set_boot_partition(const esp_partition_t *partition)
+{
+    return esp_ota_set_boot_partition(partition);
+}
+
+static esp_err_t default_abort(esp_ota_handle_t handle)
+{
+    return esp_ota_abort(handle);
+}
+
+static esp_err_t default_mark_app_valid_cancel_rollback(void)
+{
+    return esp_ota_mark_app_valid_cancel_rollback();
+}
+
+static esp_err_t default_start_confirm_task(void)
+{
+    if (xTaskCreate(ota_confirm_task, "ota_confirm", 4096, NULL, 4, NULL) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t default_start_reboot_task(void)
+{
+    if (xTaskCreate(ota_reboot_task, "ota_reboot", 3072, NULL, 4, NULL) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
 
 static bool ota_rollback_enabled(void)
 {
@@ -133,7 +236,8 @@ static esp_err_t ota_start_confirm_task_locked(void)
         return ESP_OK;
     }
     s_ota.confirm_task_started = true;
-    if (xTaskCreate(ota_confirm_task, "ota_confirm", 4096, NULL, 4, NULL) != pdPASS) {
+    if (!s_backend || !s_backend->start_confirm_task ||
+        s_backend->start_confirm_task() != ESP_OK) {
         s_ota.confirm_task_started = false;
         set_last_error_locked("confirm task create failed");
         return ESP_ERR_NO_MEM;
@@ -164,7 +268,7 @@ static void ota_confirm_task(void *arg)
         return;
     }
 
-    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    esp_err_t err = s_backend->mark_app_valid_cancel_rollback();
     if (ota_lock(portMAX_DELAY)) {
         s_ota.confirm_task_started = false;
         if (err == ESP_OK) {
@@ -189,9 +293,11 @@ esp_err_t ota_manager_init(void)
     if (s_ota.initialized) {
         return ESP_OK;
     }
-    s_ota.mutex = xSemaphoreCreateMutex();
     if (!s_ota.mutex) {
-        return ESP_ERR_NO_MEM;
+        s_ota.mutex = xSemaphoreCreateMutex();
+        if (!s_ota.mutex) {
+            return ESP_ERR_NO_MEM;
+        }
     }
     s_ota.rollback_supported = ota_rollback_enabled();
     s_ota.last_success = true;
@@ -206,13 +312,13 @@ esp_err_t ota_manager_notify_boot(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *running = s_backend->get_running_partition();
     if (!running) {
         return ESP_FAIL;
     }
 
     esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
-    esp_err_t err = esp_ota_get_state_partition(running, &state);
+    esp_err_t err = s_backend->get_state_partition(running, &state);
     bool pending_verify = (err == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY);
 
     if (ota_lock(portMAX_DELAY)) {
@@ -270,9 +376,9 @@ void ota_manager_get_status(ota_manager_status_t *out)
     strncpy(out->phase, OTA_MANAGER_PHASE_IDLE, sizeof(out->phase) - 1);
     out->phase[sizeof(out->phase) - 1] = '\0';
 
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    const esp_partition_t *boot = esp_ota_get_boot_partition();
-    const esp_app_desc_t *desc = esp_app_get_description();
+    const esp_partition_t *running = s_backend->get_running_partition();
+    const esp_partition_t *boot = s_backend->get_boot_partition();
+    const esp_app_desc_t *desc = s_backend->get_app_description();
 
     if (ota_lock(portMAX_DELAY)) {
         out->rollback_supported = s_ota.rollback_supported;
@@ -320,7 +426,7 @@ esp_err_t ota_manager_begin_upload(size_t image_size)
         return ESP_ERR_INVALID_STATE;
     }
 
-    const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
+    const esp_partition_t *target = s_backend->get_next_update_partition(NULL);
     if (!target) {
         if (ota_lock(portMAX_DELAY)) {
             s_ota.last_success = false;
@@ -349,7 +455,7 @@ esp_err_t ota_manager_begin_upload(size_t image_size)
     ota_unlock();
 
     esp_ota_handle_t handle = 0;
-    esp_err_t err = esp_ota_begin(target, image_size, &handle);
+    esp_err_t err = s_backend->begin(target, image_size, &handle);
     if (err != ESP_OK) {
         if (ota_lock(portMAX_DELAY)) {
             s_ota.last_success = false;
@@ -362,7 +468,7 @@ esp_err_t ota_manager_begin_upload(size_t image_size)
     }
 
     if (!ota_lock(portMAX_DELAY)) {
-        esp_ota_abort(handle);
+        s_backend->abort(handle);
         return ESP_ERR_TIMEOUT;
     }
     s_ota.handle = handle;
@@ -381,6 +487,9 @@ esp_err_t ota_manager_begin_upload(size_t image_size)
 
 esp_err_t ota_manager_write_chunk(const void *data, size_t len)
 {
+    if (!s_ota.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
     if (!data || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -394,7 +503,7 @@ esp_err_t ota_manager_write_chunk(const void *data, size_t len)
     esp_ota_handle_t handle = s_ota.handle;
     ota_unlock();
 
-    esp_err_t err = esp_ota_write(handle, data, len);
+    esp_err_t err = s_backend->write(handle, data, len);
     if (!ota_lock(portMAX_DELAY)) {
         return ESP_ERR_TIMEOUT;
     }
@@ -410,6 +519,9 @@ esp_err_t ota_manager_write_chunk(const void *data, size_t len)
 
 esp_err_t ota_manager_finish_upload(void)
 {
+    if (!s_ota.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
     if (!ota_lock(portMAX_DELAY)) {
         return ESP_ERR_TIMEOUT;
     }
@@ -421,7 +533,7 @@ esp_err_t ota_manager_finish_upload(void)
     const esp_partition_t *target = s_ota.target_partition;
     ota_unlock();
 
-    esp_err_t err = esp_ota_end(handle);
+    esp_err_t err = s_backend->end(handle);
     if (err != ESP_OK) {
         if (ota_lock(portMAX_DELAY)) {
             s_ota.last_success = false;
@@ -432,7 +544,7 @@ esp_err_t ota_manager_finish_upload(void)
         return err;
     }
 
-    err = esp_ota_set_boot_partition(target);
+    err = s_backend->set_boot_partition(target);
     if (err != ESP_OK) {
         if (ota_lock(portMAX_DELAY)) {
             s_ota.last_success = false;
@@ -473,7 +585,8 @@ esp_err_t ota_manager_request_reboot(void)
     s_ota.reboot_task_started = true;
     ota_unlock();
 
-    if (xTaskCreate(ota_reboot_task, "ota_reboot", 3072, NULL, 4, NULL) != pdPASS) {
+    if (!s_backend || !s_backend->start_reboot_task ||
+        s_backend->start_reboot_task() != ESP_OK) {
         if (ota_lock(portMAX_DELAY)) {
             s_ota.reboot_task_started = false;
             s_ota.last_success = false;
@@ -501,6 +614,19 @@ void ota_manager_abort_upload(void)
     reset_upload_state_locked();
     ota_unlock();
 
-    esp_ota_abort(handle);
+    s_backend->abort(handle);
     ESP_LOGW(TAG, "OTA upload aborted");
+}
+
+void ota_manager_set_backend_for_test(const ota_manager_backend_t *backend)
+{
+    s_backend = backend ? backend : &s_default_backend;
+}
+
+void ota_manager_reset_for_test(void)
+{
+    SemaphoreHandle_t mutex = s_ota.mutex;
+    memset(&s_ota, 0, sizeof(s_ota));
+    s_ota.mutex = mutex;
+    s_backend = &s_default_backend;
 }

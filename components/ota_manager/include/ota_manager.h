@@ -3,7 +3,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "esp_app_desc.h"
 #include "esp_err.h"
+#include "esp_ota_ops.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +39,22 @@ typedef struct {
     char last_error[OTA_MANAGER_ERROR_MAX];
 } ota_manager_status_t;
 
+typedef struct {
+    const esp_partition_t *(*get_running_partition)(void);
+    const esp_partition_t *(*get_boot_partition)(void);
+    const esp_app_desc_t *(*get_app_description)(void);
+    esp_err_t (*get_state_partition)(const esp_partition_t *partition, esp_ota_img_states_t *out_state);
+    const esp_partition_t *(*get_next_update_partition)(const esp_partition_t *start_from);
+    esp_err_t (*begin)(const esp_partition_t *partition, size_t image_size, esp_ota_handle_t *out_handle);
+    esp_err_t (*write)(esp_ota_handle_t handle, const void *data, size_t len);
+    esp_err_t (*end)(esp_ota_handle_t handle);
+    esp_err_t (*set_boot_partition)(const esp_partition_t *partition);
+    esp_err_t (*abort)(esp_ota_handle_t handle);
+    esp_err_t (*mark_app_valid_cancel_rollback)(void);
+    esp_err_t (*start_confirm_task)(void);
+    esp_err_t (*start_reboot_task)(void);
+} ota_manager_backend_t;
+
 esp_err_t ota_manager_init(void);
 esp_err_t ota_manager_notify_boot(void);
 void ota_manager_notify_system_ready(void);
@@ -47,6 +65,8 @@ esp_err_t ota_manager_write_chunk(const void *data, size_t len);
 esp_err_t ota_manager_finish_upload(void);
 esp_err_t ota_manager_request_reboot(void);
 void ota_manager_abort_upload(void);
+void ota_manager_set_backend_for_test(const ota_manager_backend_t *backend);
+void ota_manager_reset_for_test(void);
 
 #ifdef __cplusplus
 }

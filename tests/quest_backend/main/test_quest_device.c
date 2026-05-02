@@ -101,9 +101,30 @@ static void test_quest_device_rejects_duplicate_event_id(void)
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, quest_device_upsert(&device));
 }
 
+static void test_system_audio_play_command_exposes_background_repeat_params(void)
+{
+    quest_device_command_t command = {0};
+
+    qd_test_bootstrap();
+
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_AUDIO_ID, "play", &command));
+    TEST_ASSERT_EQUAL_STRING("internal_audio_play", command.kind);
+    TEST_ASSERT_EQUAL_UINT8(4, command.param_count);
+    TEST_ASSERT_EQUAL_STRING("file", command.params[0].key);
+    TEST_ASSERT_EQUAL(QUEST_DEVICE_COMMAND_PARAM_AUDIO_FILE_SELECT, command.params[0].type);
+    TEST_ASSERT_EQUAL_STRING("volume", command.params[1].key);
+    TEST_ASSERT_EQUAL(QUEST_DEVICE_COMMAND_PARAM_NUMBER, command.params[1].type);
+    TEST_ASSERT_EQUAL_STRING("channel", command.params[2].key);
+    TEST_ASSERT_EQUAL(QUEST_DEVICE_COMMAND_PARAM_TEXT, command.params[2].type);
+    TEST_ASSERT_EQUAL_STRING("repeat", command.params[3].key);
+    TEST_ASSERT_EQUAL(QUEST_DEVICE_COMMAND_PARAM_CHECKBOX, command.params[3].type);
+    TEST_ASSERT_TRUE(command.params[3].optional);
+}
+
 void register_quest_device_tests(void)
 {
     RUN_TEST(test_quest_device_rejects_duplicate_client_id);
     RUN_TEST(test_quest_device_rejects_duplicate_command_id);
     RUN_TEST(test_quest_device_rejects_duplicate_event_id);
+    RUN_TEST(test_system_audio_play_command_exposes_background_repeat_params);
 }

@@ -25,6 +25,8 @@ v.1.03.zip
 # Test app build output
 tests/**/build/
 tests/**/sdkconfig.old
+tests/quest_backend/dependencies.lock
+tests/quest_backend/sdkconfig
 
 # Local archive/reference code, not part of the SceneHub product tree
 legacy/

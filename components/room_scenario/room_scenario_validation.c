@@ -101,28 +101,23 @@ static bool room_scenario_step_is_reactive_trigger(room_scenario_step_type_t typ
     }
 }
 
-static bool room_scenario_branch_first_enabled_step(const room_scenario_t *scenario,
-                                                    const room_scenario_branch_t *branch,
-                                                    const room_scenario_step_t **out_step)
+static bool room_scenario_branch_first_step(const room_scenario_t *scenario,
+                                            const room_scenario_branch_t *branch,
+                                            const room_scenario_step_t **out_step)
 {
     uint32_t end_index = 0;
     if (out_step) {
         *out_step = NULL;
     }
-    if (!scenario || !branch || !out_step) {
+    if (!scenario || !branch || !out_step || branch->step_count == 0) {
         return false;
     }
     end_index = (uint32_t)branch->step_start_index + branch->step_count;
     if (end_index > scenario->step_count) {
         return false;
     }
-    for (uint32_t i = branch->step_start_index; i < end_index; ++i) {
-        if (scenario->steps[i].enabled) {
-            *out_step = &scenario->steps[i];
-            return true;
-        }
-    }
-    return false;
+    *out_step = &scenario->steps[branch->step_start_index];
+    return true;
 }
 
 static bool room_scenario_has_duplicate_branch_ids(const room_scenario_t *scenario)
@@ -204,7 +199,7 @@ esp_err_t room_scenario_validate_structural(const room_scenario_t *scenario)
         }
         if (branch->type == ROOM_SCENARIO_BRANCH_REACTIVE) {
             const room_scenario_step_t *first_step = NULL;
-            if (!room_scenario_branch_first_enabled_step(scenario, branch, &first_step) ||
+            if (!room_scenario_branch_first_step(scenario, branch, &first_step) ||
                 !room_scenario_step_is_reactive_trigger(first_step->type)) {
                 return ESP_ERR_INVALID_ARG;
             }
@@ -655,7 +650,7 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
                                      "REACTIVE_BRANCH_REQUIRED_IGNORED",
                                      "Reactive branch is ignored for scenario completion");
             }
-            if (!room_scenario_branch_first_enabled_step(scenario, branch, &first_step)) {
+            if (!room_scenario_branch_first_step(scenario, branch, &first_step)) {
                 validation_add_issue(out,
                                      ROOM_SCENARIO_VALIDATION_ERROR,
                                      branch->step_start_index,

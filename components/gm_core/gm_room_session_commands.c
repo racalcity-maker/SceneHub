@@ -194,9 +194,6 @@ static esp_err_t execute_system_audio_command(const room_scenario_device_command
         if (!file[0]) {
             return scenario_command_fail(error, error_size, ESP_ERR_INVALID_ARG, "audio_file_empty");
         }
-        if (stat(file, &st) != 0) {
-            return scenario_command_fail(error, error_size, ESP_ERR_NOT_FOUND, "audio_file_not_found");
-        }
         (void)scenario_params_get_int(step_command->params_json, "volume", &volume, false);
         (void)scenario_params_get_string(step_command->params_json,
                                          "channel",
@@ -211,8 +208,14 @@ static esp_err_t execute_system_audio_command(const room_scenario_device_command
                                              ESP_ERR_NOT_SUPPORTED,
                                              "audio_background_requires_wav");
             }
+            if (stat(file, &st) != 0) {
+                return scenario_command_fail(error, error_size, ESP_ERR_NOT_FOUND, "audio_file_not_found");
+            }
             err = audio_player_play_background_wav_repeat(file, volume, repeat);
         } else if (audio_channel_is_effect(channel)) {
+            if (stat(file, &st) != 0) {
+                return scenario_command_fail(error, error_size, ESP_ERR_NOT_FOUND, "audio_file_not_found");
+            }
             err = audio_player_play_effect(file, volume);
         } else {
             return scenario_command_fail(error, error_size, ESP_ERR_INVALID_ARG, "audio_channel_invalid");

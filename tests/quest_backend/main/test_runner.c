@@ -6,9 +6,24 @@
 #include <string.h>
 
 extern void register_device_control_ingest_tests(void);
+extern void register_service_status_tests(void);
+extern void register_event_bus_tests(void);
+extern void register_config_store_utils_tests(void);
+extern void register_audio_player_state_tests(void);
+extern void register_ota_manager_tests(void);
 extern void register_quest_device_tests(void);
+extern void register_room_catalog_tests(void);
 extern void register_room_scenario_tests(void);
+extern void register_gm_core_primitive_tests(void);
+extern void register_gm_api_tests(void);
 extern void register_gm_game_profile_tests(void);
+extern void register_gm_room_session_tests(void);
+extern void register_integration_quest_flow_tests(void);
+extern void register_web_ui_contract_tests(void);
+extern void register_web_ui_handler_tests(void);
+extern void register_orchestrator_registry_tests(void);
+extern void register_orchestrator_audit_tests(void);
+extern void register_orchestrator_timeline_tests(void);
 
 #define FAILED_TESTS_MAX       128
 #define FAILED_TEST_NAME_MAX   96
@@ -67,10 +82,25 @@ static void unity_runner_task(void *arg)
     (void)arg;
     s_failed_count = 0;
     UNITY_BEGIN();
+    register_service_status_tests();
+    register_event_bus_tests();
+    register_config_store_utils_tests();
+    register_audio_player_state_tests();
+    register_ota_manager_tests();
     register_device_control_ingest_tests();
     register_quest_device_tests();
+    register_room_catalog_tests();
     register_room_scenario_tests();
+    register_gm_core_primitive_tests();
+    register_gm_api_tests();
     register_gm_game_profile_tests();
+    register_gm_room_session_tests();
+    register_integration_quest_flow_tests();
+    register_web_ui_contract_tests();
+    register_web_ui_handler_tests();
+    register_orchestrator_registry_tests();
+    register_orchestrator_audit_tests();
+    register_orchestrator_timeline_tests();
     UNITY_END();
     if (s_failed_count > 0) {
         printf("\nFailed tests detail (%u):\n", (unsigned)s_failed_count);

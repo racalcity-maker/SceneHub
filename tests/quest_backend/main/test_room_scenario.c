@@ -425,6 +425,155 @@ static void test_room_scenario_allows_same_step_id_in_different_branches(void)
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(scenario));
 }
 
+static void test_room_scenario_rejects_duplicate_branch_id(void)
+{
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+    room_scenario_validation_report_t report = {0};
+
+    room_scenario_test_bootstrap();
+    memset(s_room_scenario_work, 0, sizeof(s_room_scenario_work));
+
+    init_scenario(scenario, "duplicate_branches", "room_a", "Duplicate branches");
+    fill_wait_time_step(&scenario->steps[0], "wait_a", "Wait A", 1000);
+    fill_wait_time_step(&scenario->steps[1], "wait_b", "Wait B", 1000);
+    scenario->step_count = 2;
+    scenario->branch_count = 2;
+
+    set_text(scenario->branches[0].id, sizeof(scenario->branches[0].id), "same");
+    set_text(scenario->branches[0].name, sizeof(scenario->branches[0].name), "A");
+    scenario->branches[0].enabled = true;
+    scenario->branches[0].step_start_index = 0;
+    scenario->branches[0].step_count = 1;
+
+    set_text(scenario->branches[1].id, sizeof(scenario->branches[1].id), "same");
+    set_text(scenario->branches[1].name, sizeof(scenario->branches[1].name), "B");
+    scenario->branches[1].enabled = true;
+    scenario->branches[1].step_start_index = 1;
+    scenario->branches[1].step_count = 1;
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, room_scenario_add(scenario));
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_validate(scenario, &report));
+    TEST_ASSERT_FALSE(report.valid);
+    TEST_ASSERT_TRUE(report.issue_count >= 1);
+    TEST_ASSERT_EQUAL_STRING("BRANCH_ID_DUPLICATE", report.issues[0].code);
+}
+
+static void test_room_scenario_rejects_branch_step_range_outside_steps(void)
+{
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+    room_scenario_validation_report_t report = {0};
+
+    room_scenario_test_bootstrap();
+    memset(s_room_scenario_work, 0, sizeof(s_room_scenario_work));
+
+    init_scenario(scenario, "bad_range", "room_a", "Bad range");
+    fill_wait_time_step(&scenario->steps[0], "wait", "Wait", 1000);
+    scenario->step_count = 1;
+    scenario->branch_count = 1;
+
+    set_text(scenario->branches[0].id, sizeof(scenario->branches[0].id), "main");
+    set_text(scenario->branches[0].name, sizeof(scenario->branches[0].name), "Main");
+    scenario->branches[0].enabled = true;
+    scenario->branches[0].step_start_index = 0;
+    scenario->branches[0].step_count = 2;
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE, room_scenario_add(scenario));
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_validate(scenario, &report));
+    TEST_ASSERT_FALSE(report.valid);
+    TEST_ASSERT_TRUE(report.issue_count >= 1);
+    TEST_ASSERT_EQUAL_STRING("BRANCH_STEP_RANGE_INVALID", report.issues[0].code);
+}
+
+static void test_room_scenario_rejects_reactive_branch_without_trigger_step(void)
+{
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+    room_scenario_validation_report_t report = {0};
+
+    room_scenario_test_bootstrap();
+    memset(s_room_scenario_work, 0, sizeof(s_room_scenario_work));
+
+    init_scenario(scenario, "bad_reactive", "room_a", "Bad reactive");
+    fill_wait_time_step(&scenario->steps[0], "delay", "Delay", 1000);
+    scenario->step_count = 1;
+    scenario->branch_count = 1;
+
+    set_text(scenario->branches[0].id, sizeof(scenario->branches[0].id), "react");
+    set_text(scenario->branches[0].name, sizeof(scenario->branches[0].name), "React");
+    scenario->branches[0].type = ROOM_SCENARIO_BRANCH_REACTIVE;
+    scenario->branches[0].enabled = true;
+    scenario->branches[0].run_once = true;
+    scenario->branches[0].step_start_index = 0;
+    scenario->branches[0].step_count = 1;
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, room_scenario_add(scenario));
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_validate(scenario, &report));
+    TEST_ASSERT_FALSE(report.valid);
+    TEST_ASSERT_TRUE(report.issue_count >= 1);
+    TEST_ASSERT_EQUAL_STRING("REACTIVE_BRANCH_TRIGGER_REQUIRED", report.issues[0].code);
+}
+
+static void test_room_scenario_rejects_reactive_branch_disabled_first_non_trigger_step(void)
+{
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+    room_scenario_validation_report_t report = {0};
+
+    room_scenario_test_bootstrap();
+    memset(s_room_scenario_work, 0, sizeof(s_room_scenario_work));
+
+    init_scenario(scenario, "bad_disabled_first", "room_a", "Bad disabled first");
+    fill_wait_time_step(&scenario->steps[0], "delay", "Delay", 1000);
+    scenario->steps[0].enabled = false;
+    fill_wait_device_event_step(&scenario->steps[1], "trigger", "Trigger", "relay", "opened");
+    scenario->step_count = 2;
+    scenario->branch_count = 1;
+
+    set_text(scenario->branches[0].id, sizeof(scenario->branches[0].id), "react");
+    set_text(scenario->branches[0].name, sizeof(scenario->branches[0].name), "React");
+    scenario->branches[0].type = ROOM_SCENARIO_BRANCH_REACTIVE;
+    scenario->branches[0].enabled = true;
+    scenario->branches[0].run_once = true;
+    scenario->branches[0].step_start_index = 0;
+    scenario->branches[0].step_count = 2;
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, room_scenario_add(scenario));
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_validate(scenario, &report));
+    TEST_ASSERT_FALSE(report.valid);
+    TEST_ASSERT_TRUE(report.issue_count >= 1);
+    TEST_ASSERT_EQUAL_STRING("REACTIVE_BRANCH_TRIGGER_REQUIRED", report.issues[0].code);
+}
+
+static void test_room_scenario_rejects_reactive_wait_flags_without_guard(void)
+{
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+    room_scenario_validation_report_t report = {0};
+
+    room_scenario_test_bootstrap();
+    memset(s_room_scenario_work, 0, sizeof(s_room_scenario_work));
+
+    init_scenario(scenario, "bad_reactive_flags", "room_a", "Bad reactive flags");
+    fill_wait_flags_step(&scenario->steps[0], "wait_flag", "Wait flag", "armed", true);
+    scenario->step_count = 1;
+    scenario->branch_count = 1;
+
+    set_text(scenario->branches[0].id, sizeof(scenario->branches[0].id), "react");
+    set_text(scenario->branches[0].name, sizeof(scenario->branches[0].name), "React");
+    scenario->branches[0].type = ROOM_SCENARIO_BRANCH_REACTIVE;
+    scenario->branches[0].enabled = true;
+    scenario->branches[0].step_start_index = 0;
+    scenario->branches[0].step_count = 1;
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, room_scenario_add(scenario));
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_validate(scenario, &report));
+    TEST_ASSERT_FALSE(report.valid);
+    TEST_ASSERT_TRUE(report.issue_count >= 1);
+    TEST_ASSERT_EQUAL_STRING("REACTIVE_FLAGS_NEEDS_GUARD", report.issues[0].code);
+}
+
+static void test_room_scenario_validation_code_buffer_fits_long_codes(void)
+{
+    TEST_ASSERT_TRUE(strlen("REACTIVE_BRANCH_TRIGGER_REQUIRED") < ROOM_SCENARIO_VALIDATION_CODE_MAX_LEN);
+}
+
 static void test_room_scenario_removed_raw_wait_event_type_is_rejected(void)
 {
     room_scenario_step_type_t type = ROOM_SCENARIO_STEP_WAIT_TIME;
@@ -443,7 +592,13 @@ static void test_room_scenario_single_json_round_trip(void)
     memset(s_room_scenario_work, 0, sizeof(s_room_scenario_work));
 
     init_scenario(scenario, "easy_flow", "room_1", "Easy Flow");
-    fill_device_command_step(&scenario->steps[0], "intro", "Intro", "audio", "intro");
+    fill_device_command_step(&scenario->steps[0], "intro", "Intro", "system_audio", "play");
+    set_text(scenario->steps[0].data.device_command.params_json,
+             sizeof(scenario->steps[0].data.device_command.params_json),
+             "{\"file\":\"/sdcard/music/theme.wav\","
+             "\"channel\":\"background\","
+             "\"volume\":70,"
+             "\"repeat\":true}");
     fill_wait_time_step(&scenario->steps[1], "delay", "Delay", 3000);
     scenario->step_count = 2;
 
@@ -461,7 +616,9 @@ static void test_room_scenario_single_json_round_trip(void)
     TEST_ASSERT_EQUAL_STRING("room_1", loaded->room_id);
     TEST_ASSERT_EQUAL_UINT(2, loaded->step_count);
     TEST_ASSERT_EQUAL(ROOM_SCENARIO_STEP_DEVICE_COMMAND, loaded->steps[0].type);
-    TEST_ASSERT_EQUAL_STRING("audio", loaded->steps[0].data.device_command.device_id);
+    TEST_ASSERT_EQUAL_STRING("system_audio", loaded->steps[0].data.device_command.device_id);
+    TEST_ASSERT_EQUAL_STRING("{\"file\":\"/sdcard/music/theme.wav\",\"channel\":\"background\",\"volume\":70,\"repeat\":true}",
+                             loaded->steps[0].data.device_command.params_json);
     TEST_ASSERT_EQUAL(ROOM_SCENARIO_STEP_WAIT_TIME, loaded->steps[1].type);
     TEST_ASSERT_EQUAL_UINT32(3000, loaded->steps[1].data.wait_time.duration_ms);
     cJSON_Delete(json);
@@ -844,6 +1001,12 @@ void register_room_scenario_tests(void)
     RUN_TEST(test_room_scenario_validation_rejects_invalid_steps);
     RUN_TEST(test_room_scenario_rejects_duplicate_step_id);
     RUN_TEST(test_room_scenario_allows_same_step_id_in_different_branches);
+    RUN_TEST(test_room_scenario_rejects_duplicate_branch_id);
+    RUN_TEST(test_room_scenario_rejects_branch_step_range_outside_steps);
+    RUN_TEST(test_room_scenario_rejects_reactive_branch_without_trigger_step);
+    RUN_TEST(test_room_scenario_rejects_reactive_branch_disabled_first_non_trigger_step);
+    RUN_TEST(test_room_scenario_rejects_reactive_wait_flags_without_guard);
+    RUN_TEST(test_room_scenario_validation_code_buffer_fits_long_codes);
     RUN_TEST(test_room_scenario_removed_raw_wait_event_type_is_rejected);
     RUN_TEST(test_room_scenario_single_json_round_trip);
     RUN_TEST(test_room_scenario_export_empty_store);
