@@ -25,9 +25,6 @@ idf.py build
 idf.py flash monitor
 ```
 
-Legacy `device_manager` and template runtime tests are archived under
-`legacy/tests/` and are not part of the MVP product test path.
-
 ### `tests/mqtt_core`
 
 MQTT core coverage for publish/subscribe behavior and payload handling.

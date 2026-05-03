@@ -13,7 +13,7 @@
 #include "config_store.h"
 #include "event_bus.h"
 
-#define MQTT_MAX_CLIENTS       CONFIG_BROKER_MQTT_MAX_CLIENTS
+#define MQTT_MAX_CLIENTS       CONFIG_SCENEHUB_MQTT_MAX_CLIENTS
 #define MQTT_MAX_SUBS          16
 #define MQTT_MAX_TOPIC         96
 #define MQTT_MAX_PAYLOAD       4096

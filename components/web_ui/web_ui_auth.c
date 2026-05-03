@@ -20,8 +20,8 @@
 #include "web_ui_page.h"
 #include "web_ui_utils.h"
 
-#ifndef CONFIG_BROKER_WEB_AUTH_RESET_GPIO
-#define CONFIG_BROKER_WEB_AUTH_RESET_GPIO -1
+#ifndef CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO
+#define CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO -1
 #endif
 
 #define WEB_SESSION_MAX        6
@@ -40,7 +40,7 @@ typedef struct {
 static const char *TAG = "web_ui_auth";
 static SemaphoreHandle_t s_session_mutex = NULL;
 static web_session_entry_t s_sessions[WEB_SESSION_MAX];
-#if CONFIG_BROKER_WEB_AUTH_RESET_GPIO >= 0
+#if CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO >= 0
 static TaskHandle_t s_reset_task = NULL;
 #endif
 
@@ -552,10 +552,10 @@ esp_err_t auth_password_handler(httpd_req_t *req)
     return WEB_HTTP_CHECK(httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN));
 }
 
-#if CONFIG_BROKER_WEB_AUTH_RESET_GPIO >= 0
+#if CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO >= 0
 static void web_auth_reset_task(void *param)
 {
-    const int pin = CONFIG_BROKER_WEB_AUTH_RESET_GPIO;
+    const int pin = CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO;
     int64_t low_since = 0;
     const TickType_t delay_ticks = pdMS_TO_TICKS(100);
     ESP_LOGI(TAG, "web auth reset monitor on GPIO%d", pin);
@@ -584,7 +584,7 @@ void web_auth_start_reset_monitor(void)
         return;
     }
     gpio_config_t io_conf = {
-        .pin_bit_mask = 1ULL << CONFIG_BROKER_WEB_AUTH_RESET_GPIO,
+        .pin_bit_mask = 1ULL << CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = true,
         .pull_down_en = false,

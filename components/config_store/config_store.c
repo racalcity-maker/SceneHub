@@ -13,12 +13,12 @@
 #include "mbedtls/version.h"
 #include "sdkconfig.h"
 
-#ifndef CONFIG_BROKER_WEB_AUTH_DEFAULT_USER
-#define CONFIG_BROKER_WEB_AUTH_DEFAULT_USER "admin"
+#ifndef CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER
+#define CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER "admin"
 #endif
 
-#ifndef CONFIG_BROKER_WEB_AUTH_DEFAULT_PASS
-#define CONFIG_BROKER_WEB_AUTH_DEFAULT_PASS "admin"
+#ifndef CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS
+#define CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS "admin"
 #endif
 
 static const char *TAG = "config_store";
@@ -66,17 +66,17 @@ static void apply_default_web_auth(app_web_auth_t *web)
         return;
     }
     memset(web, 0, sizeof(*web));
-    strncpy(web->username, CONFIG_BROKER_WEB_AUTH_DEFAULT_USER, sizeof(web->username) - 1);
-    config_store_hash_password(CONFIG_BROKER_WEB_AUTH_DEFAULT_PASS, web->password_hash);
+    strncpy(web->username, CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER, sizeof(web->username) - 1);
+    config_store_hash_password(CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS, web->password_hash);
 }
 
 static void load_defaults(app_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
-    // Пустой SSID => стартуем AP для конфигурации.
+    // Empty SSID starts setup AP mode.
     cfg->wifi.ssid[0] = '\0';
     cfg->wifi.password[0] = '\0';
-    strncpy(cfg->wifi.hostname, "broker", sizeof(cfg->wifi.hostname) - 1);
+    strncpy(cfg->wifi.hostname, "scenehub", sizeof(cfg->wifi.hostname) - 1);
     strncpy(cfg->mqtt.broker_id, "broker", sizeof(cfg->mqtt.broker_id) - 1);
     cfg->mqtt.port = 1883;
     cfg->mqtt.keepalive_seconds = 30;
@@ -155,7 +155,7 @@ static bool validate_config(const app_config_t *cfg)
     if (!cfg) {
         return false;
     }
-    // Wi-Fi SSID может быть пустым (тогда запускаем AP для конфигурации).
+    // Wi-Fi SSID may be empty; that starts setup AP mode.
     if (cfg->wifi.hostname[0] != '\0' && !validate_string(cfg->wifi.hostname, sizeof(cfg->wifi.hostname))) {
         return false;
     }

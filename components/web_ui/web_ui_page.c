@@ -2,7 +2,7 @@
 #include "sd_storage.h"
 
 static const char s_web_ui_index[] =
-"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Broker</title>"
+"<!DOCTYPE html><html><head><meta charset='utf-8'><title>SceneHub</title>"
         "<style>"
         "body{margin:0;padding:0;font-family:Arial,sans-serif;background:#0b0d12;color:#e6e7ea;display:flex;justify-content:center;}"
         ".page{width:100%;max-width:1400px;margin:0 auto;}"
@@ -112,7 +112,7 @@ static const char s_web_ui_index[] =
 "<div class='tab' data-tab='settings' data-icon='settings'><span class='tab-icon'></span><span class='tab-label'>Settings</span></div>"
 "<div class='tab' data-tab='update' data-icon='settings'><span class='tab-icon'></span><span class='tab-label'>Update</span></div>"
 "</div></header>"
-        "<div class='hero'><h2>Broker</h2><div id='banner' class='muted'>Loading status...</div><a class='gm-entry' href='/gm'>Open GM Panel</a></div>"
+        "<div class='hero'><h2>SceneHub</h2><div id='banner' class='muted'>Loading status...</div><a class='gm-entry' href='/gm'>Open GM Panel</a></div>"
         "<div class='pane active' id='pane-status'>"
 "<div class='card'><h3>Status<span id='status_badge' class='badge'></span></h3>"
         "<div class='status-row'><button onclick='ping()'>Ping</button><button onclick='loadStatus()'>Refresh</button><button id='status_raw_btn' onclick='toggleRaw()'>Show raw</button><span id='status_state' class='muted'>Loading...</span></div>"
@@ -233,7 +233,7 @@ static const char s_web_ui_index[] =
 "function otaPhaseHint(phase){switch(phase){case 'uploading':return 'Firmware transfer is in progress. Wait until the image is fully written.';case 'reboot_required':return 'Firmware image is installed. Review status and press Reboot now when ready.';case 'rebooting':return 'Reboot has been requested. Wait for the board to restart and reconnect.';case 'verify_wait_ready':return 'New image has booted. Waiting for the application to report healthy startup.';case 'verify_pending':return 'Rollback-capable image is awaiting confirmation. The device should confirm automatically after healthy startup.';case 'idle':default:return 'Idle. You can upload a new firmware image.';}}"
 "function renderOtaStatus(ota){const data=ota||{};const phase=data.phase||'idle';setTxt('ota_version',data.version||'n/a');setTxt('ota_running',data.running_partition||'n/a');setTxt('ota_boot',data.boot_partition||'n/a');const states=[otaPhaseLabel(phase)];if(!data.rollback_supported){states.push('No rollback');}setTxt('ota_state',states.join(' · '));setTxt('ota_phase_hint',otaPhaseHint(phase));const rebootBtn=document.getElementById('ota_reboot_btn');if(rebootBtn){rebootBtn.disabled=phase!=='reboot_required';}const uploadBtn=document.getElementById('ota_upload_btn');if(uploadBtn){uploadBtn.disabled=phase==='uploading'||phase==='rebooting';}const fileInput=document.getElementById('ota_file');if(fileInput){fileInput.disabled=phase==='uploading'||phase==='rebooting';}const details=document.getElementById('ota_last_error');if(details){const progress=phase==='uploading'&&data.total_bytes?` Upload ${formatBytes(data.bytes_written||0)} / ${formatBytes(data.total_bytes||0)}.`:'';const message=(data.last_error&&data.last_error.length)?data.last_error:'No OTA errors.';details.textContent=message+progress;details.style.color=(data.last_error&&data.last_error.length)?'#fca5a5':'#94a3b8';}}"
 "function serviceBadge(name,svc){if(!svc||!svc.init_attempted)return `${name}:n/a`;if(!svc.init_ok)return `${name}:init-fail`;if(svc.start_attempted&&!svc.start_ok)return `${name}:start-fail`;if(svc.start_attempted&&svc.start_ok)return `${name}:ok`;return `${name}:init-only`;}"
-"function renderStatus(j){window.__BROKER_STATUS=j||{};setTxt('status_raw',JSON.stringify(j,null,2));setTxt('status_ssid',j.wifi.ssid||'n/a');setTxt('status_ip',j.wifi.sta_ip||'none');const sd=j.sd||{};if(sd.ok){setTxt('status_sd_size',`${humanGb(sd.total)} / free ${humanGb(sd.free)}`);}else{setTxt('status_sd_size','No card');}const mem=j.mem||{};const dram=mem.dram||{};const psram=mem.psram||{};setTxt('status_ram',dram.total_kb?`${dram.free_kb||0} / ${dram.total_kb} KB`:'n/a');setTxt('status_psram',psram.total_kb?`${psram.free_kb||0} / ${psram.total_kb} KB`:'n/a');setTxt('status_clients',j.clients?j.clients.total:0);const services=j.services||{};setTxt('status_services',[serviceBadge('net',services.network),serviceBadge('mqtt',services.mqtt),serviceBadge('audio',services.audio),serviceBadge('ui',services.web_ui)].join(' | '));const webUserInput=document.getElementById('web_user');if(webUserInput){webUserInput.value=(j.web&&j.web.username)||'';}const operatorUser=document.getElementById('op_user');if(operatorUser){operatorUser.value=(j.web&&j.web.operator&&j.web.operator.username)||'';}const diagBox=document.getElementById('diag_verbose');if(diagBox){diagBox.checked=!!(j.diag&&j.diag.verbose_logging);}renderOtaStatus(j.ota||{});}"
+"function renderStatus(j){window.__SCENEHUB_STATUS=j||{};setTxt('status_raw',JSON.stringify(j,null,2));setTxt('status_ssid',j.wifi.ssid||'n/a');setTxt('status_ip',j.wifi.sta_ip||'none');const sd=j.sd||{};if(sd.ok){setTxt('status_sd_size',`${humanGb(sd.total)} / free ${humanGb(sd.free)}`);}else{setTxt('status_sd_size','No card');}const mem=j.mem||{};const dram=mem.dram||{};const psram=mem.psram||{};setTxt('status_ram',dram.total_kb?`${dram.free_kb||0} / ${dram.total_kb} KB`:'n/a');setTxt('status_psram',psram.total_kb?`${psram.free_kb||0} / ${psram.total_kb} KB`:'n/a');setTxt('status_clients',j.clients?j.clients.total:0);const services=j.services||{};setTxt('status_services',[serviceBadge('net',services.network),serviceBadge('mqtt',services.mqtt),serviceBadge('audio',services.audio),serviceBadge('ui',services.web_ui)].join(' | '));const webUserInput=document.getElementById('web_user');if(webUserInput){webUserInput.value=(j.web&&j.web.username)||'';}const operatorUser=document.getElementById('op_user');if(operatorUser){operatorUser.value=(j.web&&j.web.operator&&j.web.operator.username)||'';}const diagBox=document.getElementById('diag_verbose');if(diagBox){diagBox.checked=!!(j.diag&&j.diag.verbose_logging);}renderOtaStatus(j.ota||{});}"
 "function renderMqttUsers(list){mqttUsers=Array.isArray(list)?list.map(u=>({client_id:u&&u.client_id?u.client_id:'',username:u&&u.username?u.username:'',password:u&&u.password?u.password:''})):[];const wrap=document.getElementById('mqtt_users_list');if(!wrap)return;if(!mqttUsers.length){wrap.innerHTML=\"<div class='muted small'>No users configured.</div>\";return;}wrap.innerHTML=mqttUsers.map((user,idx)=>`<div class=\"mqtt-user-row\"><input placeholder=\"Client ID\" value=\"${escapeHtml(user.client_id)}\" oninput=\"updateMqttUser(${idx},'client_id',this.value)\"><input placeholder=\"Username\" value=\"${escapeHtml(user.username)}\" oninput=\"updateMqttUser(${idx},'username',this.value)\"><input placeholder=\"Password\" value=\"${escapeHtml(user.password)}\" oninput=\"updateMqttUser(${idx},'password',this.value)\"><button type=\"button\" onclick=\"removeMqttUser(${idx})\">Remove</button></div>`).join('');}"
 "function addMqttUser(){mqttUsers.push({client_id:'',username:'',password:''});renderMqttUsers(mqttUsers);}"
 "function updateMqttUser(idx,field,value){if(!mqttUsers[idx])return;mqttUsers[idx][field]=value;}"
@@ -322,7 +322,7 @@ static const char s_web_ui_index[] =
         "</body></html>";
 
 static const char s_web_ui_login[] =
-"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Broker Login</title>"
+"<!DOCTYPE html><html><head><meta charset='utf-8'><title>SceneHub Login</title>"
 "<style>"
 "body{margin:0;padding:0;font-family:Arial,sans-serif;background:#05070b;color:#f1f5f9;display:flex;align-items:center;justify-content:center;height:100vh;}"
 ".card{background:#0b0f17;border:1px solid #1f2430;border-radius:16px;padding:30px;width:90%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.45);}"
@@ -334,7 +334,7 @@ static const char s_web_ui_login[] =
 ".muted{color:#94a3b8;font-size:13px;margin-top:12px;text-align:center;}"
 ".error{color:#f97316;font-size:13px;margin-top:8px;text-align:center;min-height:18px;}"
 "</style></head><body>"
-"<div class='card'><h2>Broker Login</h2>"
+"<div class='card'><h2>SceneHub Login</h2>"
 "<form id='login_form'>"
 "<label for='login_user'>Username</label><input id='login_user' autocomplete='username' required>"
 "<label for='login_pass'>Password</label><input id='login_pass' type='password' autocomplete='current-password' required>"
@@ -345,7 +345,7 @@ static const char s_web_ui_login[] =
 "</form></div>"
 "<script>"
 "const form=document.getElementById('login_form');"
-"form.addEventListener('submit',async ev=>{ev.preventDefault();const username=document.getElementById('login_user').value.trim();const password=document.getElementById('login_pass').value;const status=document.getElementById('login_status');status.textContent='';try{const res=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});if(res.ok){let data=null;const contentType=res.headers.get('content-type')||'';if(contentType.includes('application/json')){data=await res.json().catch(()=>null);}const next=new URLSearchParams(window.location.search).get('next');if(next){window.location=next;return;}window.location=(data&&data.role==='user')?'/gm':'/';return;}let message='Login failed.';const contentType=res.headers.get('content-type')||'';if(contentType.includes('application/json')){const data=await res.json().catch(()=>null);if(data&&typeof data.message==='string'&&data.message){message=data.message;}}else{const text=await res.text().catch(()=>''),clean=(text||'').trim();if(clean){message=clean;}}status.textContent=message;}catch(err){status.textContent='Connection to broker lost. The device may be offline or restarting.';}});"
+"form.addEventListener('submit',async ev=>{ev.preventDefault();const username=document.getElementById('login_user').value.trim();const password=document.getElementById('login_pass').value;const status=document.getElementById('login_status');status.textContent='';try{const res=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});if(res.ok){let data=null;const contentType=res.headers.get('content-type')||'';if(contentType.includes('application/json')){data=await res.json().catch(()=>null);}const next=new URLSearchParams(window.location.search).get('next');if(next){window.location=next;return;}window.location=(data&&data.role==='user')?'/gm':'/';return;}let message='Login failed.';const contentType=res.headers.get('content-type')||'';if(contentType.includes('application/json')){const data=await res.json().catch(()=>null);if(data&&typeof data.message==='string'&&data.message){message=data.message;}}else{const text=await res.text().catch(()=>''),clean=(text||'').trim();if(clean){message=clean;}}status.textContent=message;}catch(err){status.textContent='Connection to SceneHub lost. The device may be offline or restarting.';}});"
 "</script></body></html>";
 
 const char *web_ui_get_index_html(void)
@@ -355,7 +355,7 @@ const char *web_ui_get_index_html(void)
 
 static const char s_web_ui_gm[] =
 "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-"<title>Broker GM</title>"
+"<title>SceneHub GM</title>"
 "<link rel='stylesheet' href='/ui/gm_panel.css?v=22'></head><body>"
 "<div class='app'><aside class='sidebar'><div class='brand'><h1>GM Panel</h1><p>Quest control</p></div><nav class='nav' id='gm_nav'>"
 "<button class='nav-btn active' data-view='dashboard'><span class='nav-dot'></span>Dashboard</button>"

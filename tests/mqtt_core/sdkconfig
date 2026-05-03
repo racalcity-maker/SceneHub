@@ -542,12 +542,12 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
-# Broker Configuration
+# SceneHub Configuration
 #
-CONFIG_BROKER_WEB_AUTH_DEFAULT_USER="admin"
-CONFIG_BROKER_WEB_AUTH_DEFAULT_PASS="admin"
-CONFIG_BROKER_WEB_AUTH_RESET_GPIO=-1
-# end of Broker Configuration
+CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER="admin"
+CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS="admin"
+CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO=-1
+# end of SceneHub Configuration
 
 #
 # Compiler options

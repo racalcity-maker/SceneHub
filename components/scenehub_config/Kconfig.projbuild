@@ -1,49 +1,49 @@
-menu "Broker Configuration"
+menu "SceneHub Configuration"
 
-config BROKER_I2S_BCK_PIN
+config SCENEHUB_I2S_BCK_PIN
     int "I2S BCLK GPIO"
     default 4
     help
         GPIO used for the I2S bit clock (BCK) line that feeds the DAC/amplifier.
         Set to the pin wired to your audio codec.
 
-config BROKER_I2S_WS_PIN
+config SCENEHUB_I2S_WS_PIN
     int "I2S LRCK/WSEL GPIO"
     default 5
     help
         GPIO for the I2S word select / LRCLK line.
 
-config BROKER_I2S_DATA_PIN
+config SCENEHUB_I2S_DATA_PIN
     int "I2S DATA GPIO"
     default 6
     help
         GPIO used for the I2S data output towards the DAC.
 
-config BROKER_SD_MISO_PIN
+config SCENEHUB_SD_MISO_PIN
     int "SD card MISO GPIO"
     default 13
     help
         GPIO connected to the SD card MISO line (SPI mode).
 
-config BROKER_SD_MOSI_PIN
+config SCENEHUB_SD_MOSI_PIN
     int "SD card MOSI GPIO"
     default 11
     help
         GPIO connected to the SD card MOSI line (SPI mode).
 
-config BROKER_SD_CLK_PIN
+config SCENEHUB_SD_CLK_PIN
     int "SD card CLK GPIO"
     default 12
     help
         GPIO connected to the SD card CLK line (SPI mode).
 
-config BROKER_SD_CS_PIN
+config SCENEHUB_SD_CS_PIN
     int "SD card CS GPIO"
     default 10
     help
         GPIO used for SD card chip select (SPI mode).
 
-config BROKER_MQTT_MAX_CLIENTS
+config SCENEHUB_MQTT_MAX_CLIENTS
     int "Maximum simultaneous MQTT clients"
     default 20
     range 1 64
@@ -51,21 +51,21 @@ config BROKER_MQTT_MAX_CLIENTS
         Number of concurrent MQTT sessions the embedded broker accepts.
         Higher values increase PSRAM usage.
 
-config BROKER_WEB_AUTH_DEFAULT_USER
+config SCENEHUB_WEB_AUTH_DEFAULT_USER
     string "Default Web UI username"
     default "admin"
     help
         Username used for initial login to the Web UI. Change it
         after flashing or via the Settings tab.
 
-config BROKER_WEB_AUTH_DEFAULT_PASS
+config SCENEHUB_WEB_AUTH_DEFAULT_PASS
     string "Default Web UI password"
     default "admin"
     help
         Password used for initial login to the Web UI. After the
         device boots, change it from the Settings tab.
 
-config BROKER_WEB_AUTH_RESET_GPIO
+config SCENEHUB_WEB_AUTH_RESET_GPIO
     int "Web auth reset GPIO"
     default -1
     help

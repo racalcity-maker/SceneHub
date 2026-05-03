@@ -120,7 +120,7 @@ static bool s_mdns_services_registered = false;
 
 static void sanitize_hostname(const char *input, char *out, size_t out_len)
 {
-    static const char *fallback = "broker";
+    static const char *fallback = "scenehub";
     if (!out || out_len == 0) {
         return;
     }
@@ -148,8 +148,8 @@ static void sanitize_hostname(const char *input, char *out, size_t out_len)
     } else {
         out[di] = '\0';
     }
-    if (strcmp(out, "brocker") == 0) {
-        strncpy(out, "broker", out_len - 1);
+    if (strcmp(out, "broker") == 0) {
+        strncpy(out, fallback, out_len - 1);
         out[out_len - 1] = '\0';
     }
 }
@@ -191,7 +191,7 @@ static void start_mdns(const char *hostname)
     register_mdns_netif(s_netif);
     register_mdns_netif(s_ap_netif);
     mdns_hostname_set(host_clean);
-    mdns_instance_name_set("ESP32S3 Broker");
+    mdns_instance_name_set("SceneHub");
     if (s_mdns_services_registered) {
         esp_err_t err = mdns_service_remove("_http", "_tcp");
         if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
@@ -202,7 +202,7 @@ static void start_mdns(const char *hostname)
             ESP_LOGW(TAG, "mDNS mqtt remove failed: %s", esp_err_to_name(err));
         }
     }
-    esp_err_t err = mdns_service_add("Broker UI", "_http", "_tcp", 80, NULL, 0);
+    esp_err_t err = mdns_service_add("SceneHub UI", "_http", "_tcp", 80, NULL, 0);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "mDNS http service add failed: %s", esp_err_to_name(err));
     }
@@ -289,7 +289,7 @@ static void start_ap_mode(const char *hostname)
     wifi_config_t ap_cfg = {0};
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
-    snprintf((char *)ap_cfg.ap.ssid, sizeof(ap_cfg.ap.ssid), "brocker-setup-%02X%02X", mac[4], mac[5]);
+    snprintf((char *)ap_cfg.ap.ssid, sizeof(ap_cfg.ap.ssid), "scenehub-setup-%02X%02X", mac[4], mac[5]);
     strncpy((char *)ap_cfg.ap.password, "12345678", sizeof(ap_cfg.ap.password) - 1);
     ap_cfg.ap.ssid_len = strlen((char *)ap_cfg.ap.ssid);
     ap_cfg.ap.channel = 1;

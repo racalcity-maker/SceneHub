@@ -374,7 +374,7 @@ void app_main(void)
 #else
     ESP_LOGW(TAG, "stats task disabled (configUSE_TRACE_FACILITY not enabled)");
 #endif
-    ESP_LOGI(TAG, "Broker skeleton started");
+    ESP_LOGI(TAG, "SceneHub started");
     ESP_LOGI(TAG, "create deferred fatal bootstrap task");
     (void)app_create_task_checked(product_bootstrap_task, "product_boot", 8192, NULL, 3, true);
     vTaskDelete(NULL);

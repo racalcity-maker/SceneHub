@@ -402,4 +402,3 @@ Recommended order:
 
 - API contract: `docs/gm_api_contract.md`
 - Architecture overview: `docs/ARCHITECTURE.md`
-- Quest runtime transition checklist: `docs/quest_runtime_transition_plan.md`

@@ -434,7 +434,6 @@ main/
 - `docs/ARCHITECTURE.md` - module boundaries and layered design
 - `docs/gm_api_contract.md` - GM/orchestrator HTTP contracts and JSON formats
 - `docs/gm_panel_ui_plan.md` - operator/admin GM panel direction
-- `docs/quest_runtime_transition_plan.md` - cleanup checklist for the current quest runtime model
 - `docs/device_control_contract_v1.md` - MQTT control contract and interface discovery
 - `docs/QUEST_DEVICE_SETUP_RUS.md` - Quest Device setup guide
 - `docs/ROOM_SCENARIO_SETUP_RUS.md` - Room Scenario and Game Mode setup guide

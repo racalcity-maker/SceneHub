@@ -8,7 +8,7 @@ mqtt_stress_test.py  —  stress / chaos тест для embedded MQTT брок�
 Параметры:
     --host          IP адрес ESP32 (обязательно)
     --port          MQTT порт (default 1883)
-    --max-clients   значение BROKER_MQTT_MAX_CLIENTS из sdkconfig (default 16)
+    --max-clients   значение SCENEHUB_MQTT_MAX_CLIENTS из sdkconfig (default 16)
     --rounds        сколько раз гонять churn-тест (default 5)
     --keepalive     keepalive в секундах (default 10)
     --verbose       подробный лог каждого события
@@ -906,7 +906,7 @@ def main():
     parser.add_argument("--host",        required=True,       help="IP адрес ESP32")
     parser.add_argument("--port",        type=int, default=1883)
     parser.add_argument("--max-clients", type=int, default=16, dest="max_clients",
-                        help="BROKER_MQTT_MAX_CLIENTS из sdkconfig")
+                        help="SCENEHUB_MQTT_MAX_CLIENTS из sdkconfig")
     parser.add_argument("--rounds",      type=int, default=5,
                         help="Кол-во раундов churn-теста")
     parser.add_argument("--skip-lwt",   action="store_true", dest="skip_lwt",

@@ -101,7 +101,7 @@ pip install paho-mqtt
 
 ## Run
 
-From `v.1.03` root:
+From the SceneHub repository root:
 
 ```bash
 python tools/device_control_client/client.py --config tools/device_control_client/config_example.json

@@ -171,13 +171,13 @@ static void test_room_catalog_json_round_trip_and_alias_id(void)
     TEST_ASSERT_NOT_NULL(rooms);
     room = cJSON_CreateObject();
     TEST_ASSERT_NOT_NULL(room);
-    cJSON_AddStringToObject(room, "id", "legacy_room");
+    cJSON_AddStringToObject(room, "id", "imported_room");
     cJSON_AddItemToArray(rooms, room);
 
     TEST_ASSERT_EQUAL(ESP_OK, room_catalog_import_json(root));
     TEST_ASSERT_EQUAL_UINT(1, room_catalog_count());
-    TEST_ASSERT_EQUAL(ESP_OK, room_catalog_find("legacy_room", &loaded));
-    TEST_ASSERT_EQUAL_STRING("legacy_room", loaded.name);
+    TEST_ASSERT_EQUAL(ESP_OK, room_catalog_find("imported_room", &loaded));
+    TEST_ASSERT_EQUAL_STRING("imported_room", loaded.name);
     cJSON_Delete(root);
 }
 
