@@ -39,6 +39,8 @@ idf.py flash monitor
 
 ## GM Panel Checks
 
+![GM Panel timeline](Pics/timeline.jpg)
+
 After UI changes:
 
 ```powershell

@@ -22,6 +22,8 @@ Room Scenario     -> использует commands/events
 
 ## Создание устройства
 
+![Quest Device setup](Pics/devices_setup.jpg)
+
 1. Откройте `/gm`.
 2. Войдите как admin.
 3. Перейдите в `Device Setup`.

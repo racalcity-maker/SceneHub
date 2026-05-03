@@ -175,6 +175,28 @@ The `/gm` panel is the primary quest console:
 - device setup and scenario/profile editing are admin-only
 - the main admin web surface should stay a lightweight system entry point and utility area
 
+### Screenshots
+
+#### Dashboard
+
+![SceneHub dashboard](docs/Pics/dashboard.jpg)
+
+#### Room Control
+
+![GM Panel room control](docs/Pics/room.jpg)
+
+#### Device Setup
+
+![Quest Device setup](docs/Pics/devices_setup.jpg)
+
+#### Scenario Setup
+
+![Room Scenario setup](docs/Pics/scenario_setup.jpg)
+
+#### Timeline
+
+![GM Panel timeline](docs/Pics/timeline.jpg)
+
 Authentication:
 
 - cookie-based session auth

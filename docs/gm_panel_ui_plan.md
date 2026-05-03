@@ -8,6 +8,28 @@ The GM panel should be one role-aware quest console.
 
 Operators use it to run and monitor quests. Admins use the same panel with additional build/edit tools for devices, room scenarios and game profiles.
 
+## Screenshots
+
+### Dashboard
+
+![SceneHub dashboard](Pics/dashboard.jpg)
+
+### Room Control
+
+![GM Panel room control](Pics/room.jpg)
+
+### Device Setup
+
+![Quest Device setup](Pics/devices_setup.jpg)
+
+### Scenario Setup
+
+![Room Scenario setup](Pics/scenario_setup.jpg)
+
+### Timeline
+
+![GM Panel timeline](Pics/timeline.jpg)
+
 ## Main Principle
 
 Do not split runtime control and configuration into unrelated products.

@@ -7,6 +7,8 @@ Game Mode выбирает сценарий и длительность игры
 
 ## Общий порядок настройки
 
+![Room control](Pics/room.jpg)
+
 1. Создать комнаты в `Rooms`.
 2. Добавить Quest Devices в `Device Setup`.
 3. Создать Room Scenario в `Scenarios`.
@@ -15,6 +17,8 @@ Game Mode выбирает сценарий и длительность игры
 6. Запустить игру из Room Control.
 
 ## Сценарий
+
+![Room Scenario setup](Pics/scenario_setup.jpg)
 
 Сценарий принадлежит комнате-владельцу, но шаги могут обращаться к устройствам
 из любой комнаты.
