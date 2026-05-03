@@ -1,6 +1,8 @@
-# Quest Orchestrator Firmware
+# SceneHub
 
-Firmware for the `Quest Orchestrator`: an ESP32-S3 based quest control hub with:
+SceneHub is an ESP32-S3 based local orchestration hub for quest rooms, interactive exhibits and show-control installations.
+
+The firmware includes:
 
 - local MQTT broker module
 - Web UI with authentication
@@ -115,8 +117,9 @@ idf.py -p COMx flash monitor
 
 The project has automated tests at multiple levels:
 
+- `tests/quest_backend` - backend/domain tests for rooms, devices, scenarios, GM sessions, orchestration and Web UI contracts
 - `tests/mqtt_core` - local broker unit/regression tests
-- `tests/stress_chaos_tests` - external protocol/stress scripts against a running Quest Orchestrator
+- `tests/stress_chaos_tests` - external protocol/stress scripts against a running SceneHub device
 
 Key documented coverage includes:
 
@@ -203,6 +206,7 @@ Authentication:
 - admin account
 - operator/user account with GM-first routing
 - credential reset supported by hardware reset flow
+- setup AP password is configurable with `CONFIG_SCENEHUB_SETUP_AP_PASSWORD`
 
 GM/orchestrator API highlights:
 

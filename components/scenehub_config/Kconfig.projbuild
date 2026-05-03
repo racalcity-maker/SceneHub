@@ -51,6 +51,14 @@ config SCENEHUB_MQTT_MAX_CLIENTS
         Number of concurrent MQTT sessions the embedded broker accepts.
         Higher values increase PSRAM usage.
 
+config SCENEHUB_SETUP_AP_PASSWORD
+    string "Setup AP password"
+    default "12345678"
+    help
+        Password used by the temporary scenehub-setup access point.
+        WPA/WPA2 SoftAP requires at least 8 characters. Set this to an
+        empty string only if you intentionally want an open setup AP.
+
 config SCENEHUB_WEB_AUTH_DEFAULT_USER
     string "Default Web UI username"
     default "admin"

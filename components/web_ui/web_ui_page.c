@@ -164,7 +164,7 @@ static const char s_web_ui_index[] =
 "<button type='button' onclick='saveWifi()'>Save Wi-Fi</button>"
 "<button type='button' onclick='scanWifi()'>Scan</button>"
         "<div id='wifi_list' class='list'></div>"
-        "<div class='muted'>If AP is up: password 12345678.</div>"
+        "<div class='muted'>If AP is up, use the setup AP password configured in firmware.</div>"
         "</div>"
 "<div class='card'><h3>MQTT</h3>"
 "<div class='row'><input id='mqtt_id' placeholder='Broker ID'><input id='mqtt_port' placeholder='Port' style='max-width:140px'><input id='mqtt_keep' placeholder='Keepalive s' style='max-width:160px'></div>"

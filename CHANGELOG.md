@@ -11,6 +11,7 @@ All notable project changes are documented in this file.
 - Updated setup AP, mDNS, Web UI titles, default hostname, and tooling documentation to use SceneHub naming.
 - Removed archived project cleanup references and old transition-plan documentation from the active project tree.
 - Kept MQTT broker terminology for `mqtt_core` and kept the Helix third-party MP3 decoder as active audio functionality.
+- Made the setup AP password configurable through `CONFIG_SCENEHUB_SETUP_AP_PASSWORD`.
 
 ## 2026-05-03
 

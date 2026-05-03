@@ -13,9 +13,14 @@
 #include "esp_wifi.h"
 #include "mdns.h"
 #include "lwip/apps/sntp.h"
+#include "sdkconfig.h"
 
 #include "config_store.h"
 #include "error_monitor.h"
+
+#ifndef CONFIG_SCENEHUB_SETUP_AP_PASSWORD
+#define CONFIG_SCENEHUB_SETUP_AP_PASSWORD "12345678"
+#endif
 
 #define HOSTNAME_MAX_LEN (sizeof(((app_wifi_config_t *)0)->hostname))
 
@@ -290,7 +295,7 @@ static void start_ap_mode(const char *hostname)
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
     snprintf((char *)ap_cfg.ap.ssid, sizeof(ap_cfg.ap.ssid), "scenehub-setup-%02X%02X", mac[4], mac[5]);
-    strncpy((char *)ap_cfg.ap.password, "12345678", sizeof(ap_cfg.ap.password) - 1);
+    strncpy((char *)ap_cfg.ap.password, CONFIG_SCENEHUB_SETUP_AP_PASSWORD, sizeof(ap_cfg.ap.password) - 1);
     ap_cfg.ap.ssid_len = strlen((char *)ap_cfg.ap.ssid);
     ap_cfg.ap.channel = 1;
     ap_cfg.ap.max_connection = 4;
