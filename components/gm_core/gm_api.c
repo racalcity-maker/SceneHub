@@ -2,10 +2,15 @@
 
 #include <string.h>
 
+#include "audio_player.h"
+#include "cJSON.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "gm_game_profile.h"
 #include "quest_common_utils.h"
+#include "quest_device.h"
 #include "room_catalog.h"
+#include "room_scenario.h"
 
 static void *gm_api_alloc(size_t size)
 {
@@ -33,6 +38,80 @@ static esp_err_t gm_api_require_room(const char *room_id)
         return ESP_ERR_NOT_FOUND;
     }
     return ESP_OK;
+}
+
+static void gm_api_prepare_audio_args_json(const char *args_json)
+{
+    cJSON *root = NULL;
+    cJSON *file = NULL;
+    if (!args_json || !args_json[0]) {
+        return;
+    }
+    root = cJSON_Parse(args_json);
+    if (!root) {
+        return;
+    }
+    file = cJSON_GetObjectItem(root, "file");
+    if (cJSON_IsString(file) && file->valuestring && file->valuestring[0]) {
+        (void)audio_player_prepare_path(file->valuestring, NULL);
+    }
+    cJSON_Delete(root);
+}
+
+static void gm_api_prepare_audio_command(const char *device_id,
+                                         const char *command_id,
+                                         const char *params_json)
+{
+    quest_device_command_t command = {0};
+    if (!device_id || !command_id || strcmp(device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) != 0) {
+        return;
+    }
+    if (quest_device_get_command(device_id, command_id, &command) != ESP_OK) {
+        return;
+    }
+    if (strcmp(command.command, "audio.play") != 0) {
+        return;
+    }
+    gm_api_prepare_audio_args_json(command.default_args_json);
+    gm_api_prepare_audio_args_json(params_json);
+}
+
+static void gm_api_prepare_profile_assets(const char *profile_id)
+{
+    gm_game_profile_t profile = {0};
+    room_scenario_t *scenario = NULL;
+    if (!profile_id || !profile_id[0]) {
+        return;
+    }
+    if (gm_game_profile_get(profile_id, &profile) != ESP_OK || !profile.scenario_id[0]) {
+        return;
+    }
+    scenario = gm_api_alloc(sizeof(*scenario));
+    if (!scenario) {
+        return;
+    }
+    if (room_scenario_get(profile.scenario_id, scenario) != ESP_OK) {
+        heap_caps_free(scenario);
+        return;
+    }
+    for (size_t i = 0; i < scenario->step_count; ++i) {
+        const room_scenario_step_t *step = &scenario->steps[i];
+        if (!step->enabled) {
+            continue;
+        }
+        if (step->type == ROOM_SCENARIO_STEP_DEVICE_COMMAND) {
+            gm_api_prepare_audio_command(step->data.device_command.device_id,
+                                         step->data.device_command.command_id,
+                                         step->data.device_command.params_json);
+        } else if (step->type == ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP) {
+            for (uint8_t j = 0; j < step->data.device_command_group.command_count; ++j) {
+                gm_api_prepare_audio_command(step->data.device_command_group.commands[j].device_id,
+                                             step->data.device_command_group.commands[j].command_id,
+                                             NULL);
+            }
+        }
+    }
+    heap_caps_free(scenario);
 }
 
 esp_err_t gm_api_get_room_state(const char *room_id, gm_room_state_view_t *out)
@@ -241,7 +320,11 @@ esp_err_t gm_api_select_profile(const char *room_id, const char *profile_id)
     if (err != ESP_OK) {
         return err;
     }
-    return gm_room_session_select_profile(room_id, profile_id);
+    err = gm_room_session_select_profile(room_id, profile_id);
+    if (err == ESP_OK) {
+        gm_api_prepare_profile_assets(profile_id);
+    }
+    return err;
 }
 
 esp_err_t gm_api_select_scenario(const char *room_id, const char *scenario_id)
@@ -338,5 +421,13 @@ esp_err_t gm_api_device_command_run(const char *device_id,
                                     const char *command_id,
                                     const char *params_json)
 {
+    quest_device_command_t command = {0};
+    esp_err_t err = quest_device_get_command(device_id, command_id, &command);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!command.manual_allowed) {
+        return ESP_ERR_INVALID_STATE;
+    }
     return gm_room_session_execute_device_command(device_id, command_id, params_json);
 }

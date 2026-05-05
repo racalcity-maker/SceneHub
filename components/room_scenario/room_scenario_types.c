@@ -63,6 +63,48 @@ const char *room_scenario_branch_type_to_str(room_scenario_branch_type_t type)
     }
 }
 
+const char *room_scenario_reentry_mode_to_str(room_scenario_reentry_mode_t mode)
+{
+    switch (mode) {
+    case ROOM_SCENARIO_REENTRY_QUEUE_ONE:
+        return "queue_one";
+    case ROOM_SCENARIO_REENTRY_RESTART:
+        return "restart";
+    case ROOM_SCENARIO_REENTRY_PARALLEL:
+        return "parallel";
+    case ROOM_SCENARIO_REENTRY_IGNORE:
+    default:
+        return "ignore";
+    }
+}
+
+esp_err_t room_scenario_reentry_mode_from_str(const char *s,
+                                              room_scenario_reentry_mode_t *out)
+{
+    if (!s || !s[0] || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strcasecmp(s, "ignore") == 0) {
+        *out = ROOM_SCENARIO_REENTRY_IGNORE;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "queue_one") == 0 ||
+        strcasecmp(s, "queue-one") == 0 ||
+        strcasecmp(s, "queueOne") == 0) {
+        *out = ROOM_SCENARIO_REENTRY_QUEUE_ONE;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "restart") == 0) {
+        *out = ROOM_SCENARIO_REENTRY_RESTART;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "parallel") == 0) {
+        *out = ROOM_SCENARIO_REENTRY_PARALLEL;
+        return ESP_OK;
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
 esp_err_t room_scenario_branch_type_from_str(const char *s,
                                              room_scenario_branch_type_t *out)
 {

@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "unity_internals.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdio.h>
@@ -10,6 +11,7 @@ extern void register_service_status_tests(void);
 extern void register_event_bus_tests(void);
 extern void register_config_store_utils_tests(void);
 extern void register_audio_player_state_tests(void);
+extern void register_command_executor_tests(void);
 extern void register_ota_manager_tests(void);
 extern void register_quest_device_tests(void);
 extern void register_room_catalog_tests(void);
@@ -36,7 +38,7 @@ typedef struct {
     UNITY_LINE_TYPE line;
 } failed_test_detail_t;
 
-static failed_test_detail_t s_failed_tests[FAILED_TESTS_MAX];
+EXT_RAM_BSS_ATTR static failed_test_detail_t s_failed_tests[FAILED_TESTS_MAX];
 static size_t s_failed_count = 0;
 
 static void runner_str_copy(char *dst, size_t dst_len, const char *src)
@@ -86,6 +88,7 @@ static void unity_runner_task(void *arg)
     register_event_bus_tests();
     register_config_store_utils_tests();
     register_audio_player_state_tests();
+    register_command_executor_tests();
     register_ota_manager_tests();
     register_device_control_ingest_tests();
     register_quest_device_tests();

@@ -37,6 +37,7 @@ const scenarioSave=e.target.closest('button[data-scenario-save]');
 const scenarioValidate=e.target.closest('button[data-scenario-validate]');
 const scenarioBranchAction=e.target.closest('button[data-scenario-branch-action]');
 const scenarioStepAction=e.target.closest('button[data-scenario-step-action]');
+const reactiveV2Action=e.target.closest('button[data-reactive-v2-action]');
 const scenarioStepHelp=e.target.closest('button[data-scenario-step-help]');
 const audioFilesRefresh=e.target.closest('button[data-audio-files-refresh]');
 const storageAction=e.target.closest('button[data-storage-action]');
@@ -147,6 +148,8 @@ scenarioEditor.open=true;
 scenarioEditor.expanded_step=-1;
 scenarioEditor.active_branch=0;
 clearScenarioDirty();
+const original=roomScenarios(scenarioEditor.room_id).find(s=>s.id===scenarioEditor.scenario_id)||null;
+scenarioEditor.original_scenario=original?scenarioEditableJson(original,scenarioEditor.room_id):null;
 render();
 return;
 }
@@ -205,7 +208,16 @@ const index=Number(scenarioBranchAction.dataset.branchIndex);
 applyScenarioBranchAction(scenarioBranchAction.dataset.scenarioBranchAction||'',Number.isFinite(index)?index:0);
 return;
 }
+if(reactiveV2Action&&!reactiveV2Action.disabled){
+applyReactiveV2Action(reactiveV2Action.dataset.reactiveV2Action||'',reactiveV2Action.dataset.variantIndex,reactiveV2Action.dataset.actionIndex||reactiveV2Action.dataset.guardIndex,reactiveV2Action.dataset.actionType||'');
+return;
+}
 if(scenarioStepAction&&!scenarioStepAction.disabled){
+const v2ActionEl=scenarioStepAction.closest('[data-v2-action]');
+if(v2ActionEl){
+applyReactiveV2Action(scenarioStepAction.dataset.scenarioStepAction||'',v2ActionEl.dataset.variantIndex,v2ActionEl.dataset.v2Action,scenarioStepAction.dataset.commandIndex||'');
+return;
+}
 const stepEl=scenarioStepAction.closest('[data-scenario-step]');
 const fallbackIndex=Number(stepEl&&stepEl.dataset.scenarioStep);
 const index=Number.isFinite(Number(scenarioStepAction.dataset.stepIndex))?Number(scenarioStepAction.dataset.stepIndex):fallbackIndex;
@@ -305,7 +317,7 @@ gmRightSidebar.onclick=async e=>{
 const btn=e.target.closest('button[data-manual-device][data-manual-command]');
 if(!btn||btn.disabled)return;
 try{
-if(btn.dataset.dangerous==='1'&&!confirm('Run this manual command?'))return;
+if(btn.dataset.confirmRequired==='1'&&!confirm('Run this manual command?'))return;
 await runManualDeviceCommand(btn.dataset.manualDevice||'',btn.dataset.manualCommand||'');
 }
 catch(err){
@@ -334,7 +346,7 @@ if(key)gmOpenDetails[key]=detail.open;
 document.getElementById('gm_content').oninput=e=>{
 markControlDirty(e.target);
 const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field]');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
 const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
 if(profileField)markProfileDirty();
 if(scenarioField)markScenarioDirty();
@@ -356,12 +368,13 @@ const groupDevice=e.target.closest('select[data-group-command-field="device_id"]
 const groupCommand=e.target.closest('select[data-group-command-field="command_id"]');
 const eventGroupDevice=e.target.closest('select[data-event-group-field="device_id"]');
 const eventGroupEvent=e.target.closest('select[data-event-group-field="event_id"]');
-const flagSuggest=e.target.closest('select[data-scenario-flag-suggest]');
 const branchType=e.target.closest('select[data-scenario-branch-field="type"]');
+const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const reactiveV2ActionField=e.target.closest('[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field]');
 const profile=e.target.closest('select[data-room-profile-room]');
 const scenario=e.target.closest('select[data-room-scenario-room]');
 const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field]');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
 const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
 try{
 markControlDirty(e.target);
@@ -407,25 +420,32 @@ clearTransientFieldDirty();
 render();
 return;
 }
-if(flagSuggest){
-const wrapper=flagSuggest.closest('.flag-picker');
-const input=wrapper&&wrapper.querySelector('[data-step-field="flag_name"],[data-flag-list-field="flag_name"]');
-if(input&&flagSuggest.value){
-input.value=flagSuggest.value;
-markControlDirty(input);
-refreshScenarioStepLabel(input.closest('[data-scenario-step]'));
-}
-markScenarioDirty();
-return;
-}
 if(branchType){
 const draft=collectScenarioEditor();
 const branch=scenarioActiveBranch(draft);
 if(branch){
 branch.type=scenarioBranchTypeValue({type:branchType.value});
 branch.required_for_completion=branch.type==='normal'&&branch.required_for_completion!==false;
-if(branch.type==='reactive')branch.required_for_completion=false;
+if(branch.type==='reactive'){branch.required_for_completion=false;ensureReactiveV2Branch(branch);}
 }
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
+skipNextScenarioDomSync();
+render();
+return;
+}
+if(reactiveV2Field){
+const draft=collectScenarioEditor();
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
+skipNextScenarioDomSync();
+render();
+return;
+}
+if(reactiveV2ActionField){
+const draft=collectScenarioEditor();
 scenarioEditor.draft=draft;
 scenarioEditor.dirty=true;
 scenarioEditor.validation_report=null;
@@ -620,3 +640,4 @@ window.__sessionRolePromise=loadGMSession();
 window.__sessionRolePromise.then(()=>loadGM());
 
 setInterval(()=>loadGM(true),3000);
+setInterval(updateVisibleRoomClocks,250);

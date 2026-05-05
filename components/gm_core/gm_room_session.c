@@ -3,13 +3,14 @@
 
 #include <string.h>
 
-#include "audio_player.h"
+#include "command_executor.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "quest_common_utils.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "room_scenario.h"
@@ -51,7 +52,12 @@ static esp_err_t gm_room_session_ensure_event_worker(void)
         return ESP_OK;
     }
     if (!s_event_queue) {
-        s_event_queue = xQueueCreate(GM_ROOM_SESSION_EVENT_QUEUE_LEN, sizeof(event_bus_message_t));
+        s_event_queue = xQueueCreateWithCaps(GM_ROOM_SESSION_EVENT_QUEUE_LEN,
+                                             sizeof(event_bus_message_t),
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_event_queue) {
+            s_event_queue = xQueueCreate(GM_ROOM_SESSION_EVENT_QUEUE_LEN, sizeof(event_bus_message_t));
+        }
         if (!s_event_queue) {
             return ESP_ERR_NO_MEM;
         }
@@ -100,6 +106,10 @@ void gm_room_session_scenario_clear_wait_locked(gm_room_session_t *session)
     if (!session) {
         return;
     }
+    if (session->wait_type == GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT &&
+        session->wait_event_type[0]) {
+        command_executor_cancel_request(session->wait_event_type);
+    }
     session->wait_type = GM_ROOM_SCENARIO_WAIT_NONE;
     session->wait_until_ms = 0;
     session->wait_started_at_ms = 0;
@@ -121,6 +131,10 @@ static void scenario_branch_clear_wait(gm_room_scenario_branch_runtime_t *branch
     if (!branch) {
         return;
     }
+    if (branch->wait_type == GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT &&
+        branch->wait_event_type[0]) {
+        command_executor_cancel_request(branch->wait_event_type);
+    }
     branch->wait_type = GM_ROOM_SCENARIO_WAIT_NONE;
     branch->wait_until_ms = 0;
     branch->wait_started_at_ms = 0;
@@ -141,6 +155,10 @@ void scenario_clear_branch_runtimes_locked(gm_room_session_t *session)
 {
     if (!session) {
         return;
+    }
+    for (uint8_t i = 0; i < session->branch_runtime_count &&
+                        i < ROOM_SCENARIO_MAX_BRANCHES; ++i) {
+        scenario_branch_clear_wait(&session->branch_runtimes[i]);
     }
     memset(session->branch_runtimes, 0, sizeof(session->branch_runtimes));
     session->branch_runtime_count = 0;
@@ -254,6 +272,9 @@ void gm_room_session_scenario_update_summary_from_branches_locked(gm_room_sessio
     if (!session || session->branch_runtime_count == 0) {
         return;
     }
+    if (session->scenario_state == GM_ROOM_SCENARIO_ERROR) {
+        return;
+    }
     for (uint8_t i = 0; i < session->branch_runtime_count && i < ROOM_SCENARIO_MAX_BRANCHES; ++i) {
         gm_room_scenario_branch_runtime_t *branch = &session->branch_runtimes[i];
         if (!branch->active) {
@@ -331,15 +352,32 @@ esp_err_t scenario_init_branch_runtimes_locked(gm_room_session_t *session)
             dst->type = src->type;
             dst->required_for_completion = src->type == ROOM_SCENARIO_BRANCH_NORMAL &&
                                            src->required_for_completion;
+            dst->priority = src->priority;
             dst->cooldown_ms = src->cooldown_ms;
             dst->cooldown_until_ms = 0;
+            dst->max_fire_count = src->run_once ? 1 : src->max_fire_count;
+            dst->fire_count = 0;
             dst->run_once = src->run_once;
             dst->fired_once = false;
+            dst->reentry_mode = src->reentry_mode;
+            dst->pending_trigger = false;
+            dst->policy_cursor = 0;
+            dst->policy_stage = 0;
+            dst->last_variant_index = UINT8_MAX;
+            dst->reactive_action_start_index = 0;
+            dst->reactive_action_count = 0;
+            dst->reactive_current_action = 0;
             dst->branch_index = (uint16_t)i;
             dst->step_start_index = src->step_start_index;
             dst->step_count = src->step_count;
             dst->current_step_index = src->step_start_index;
-            dst->scenario_state = src->enabled ? GM_ROOM_SCENARIO_RUNNING : GM_ROOM_SCENARIO_STOPPED;
+            dst->scenario_state = src->enabled
+                                      ? (src->type == ROOM_SCENARIO_BRANCH_REACTIVE &&
+                                                 (src->variant_count > 0 ||
+                                                  src->trigger.kind != ROOM_SCENARIO_REACTIVE_TRIGGER_NONE)
+                                             ? GM_ROOM_SCENARIO_WAITING
+                                             : GM_ROOM_SCENARIO_RUNNING)
+                                      : GM_ROOM_SCENARIO_STOPPED;
             scenario_branch_clear_wait(dst);
         }
         return ESP_OK;
@@ -379,13 +417,17 @@ esp_err_t scenario_set_flag_locked(gm_room_session_t *session,
                                           const char *name,
                                           bool value)
 {
+    event_bus_message_t message = {0};
     if (!session || !name || !name[0]) {
         return ESP_ERR_INVALID_ARG;
     }
     for (uint8_t i = 0; i < session->scenario_flag_count; ++i) {
         if (strcmp(session->scenario_flags[i].name, name) == 0) {
+            if (session->scenario_flags[i].value == value) {
+                return ESP_OK;
+            }
             session->scenario_flags[i].value = value;
-            return ESP_OK;
+            goto post_changed;
         }
     }
     if (session->scenario_flag_count >= GM_ROOM_SCENARIO_MAX_FLAGS) {
@@ -396,6 +438,21 @@ esp_err_t scenario_set_flag_locked(gm_room_session_t *session,
                 name);
     session->scenario_flags[session->scenario_flag_count].value = value;
     session->scenario_flag_count++;
+post_changed:
+    message.type = EVENT_FLAG_CHANGED;
+    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
+    quest_str_copy(message.topic, sizeof(message.topic), name);
+    quest_str_copy(message.payload, sizeof(message.payload), name);
+    quest_str_copy(message.data.device_control.device_id,
+                   sizeof(message.data.device_control.device_id),
+                   session->room_id);
+    quest_str_copy(message.data.device_control.action_id,
+                   sizeof(message.data.device_control.action_id),
+                   name);
+    quest_str_copy(message.data.device_control.source,
+                   sizeof(message.data.device_control.source),
+                   value ? "true" : "false");
+    (void)event_bus_post_priority(&message, EVENT_BUS_PRIORITY_HIGH, 0);
     return ESP_OK;
 }
 
@@ -589,6 +646,7 @@ esp_err_t gm_room_session_init(void)
 
 void gm_room_session_reset_all(void)
 {
+    command_executor_reset_pending();
     if (gm_room_session_sessions_lock() == ESP_OK) {
         memset(g_gm_room_sessions, 0, sizeof(g_gm_room_sessions));
         s_generation++;
@@ -730,7 +788,7 @@ esp_err_t gm_room_session_finish(const char *room_id, uint64_t now_ms)
     }
     gm_room_session_sessions_unlock();
     if (err == ESP_OK) {
-        audio_player_stop();
+        gm_room_session_stop_audio();
     }
     return err;
 }

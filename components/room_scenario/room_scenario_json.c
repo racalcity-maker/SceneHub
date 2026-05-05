@@ -2,8 +2,13 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "cJSON.h"
+
+esp_err_t room_scenario_import_reactive_branch_v2_json(const cJSON *branch_obj,
+                                                          room_scenario_t *scenario,
+                                                          room_scenario_branch_t *branch);
 
 static esp_err_t json_copy_string_required(const cJSON *obj,
                                            const char *name,
@@ -109,38 +114,31 @@ static esp_err_t json_copy_object_string_optional(const cJSON *obj,
     return ESP_OK;
 }
 
-static esp_err_t json_add_object_string_optional(cJSON *obj,
-                                                 const char *name,
-                                                 const char *json)
+static esp_err_t reactive_policy_mode_from_str(const char *s,
+                                               room_scenario_reactive_policy_mode_t *out)
 {
-    cJSON *params = NULL;
-    if (!obj || !name) {
+    if (!s || !s[0] || !out) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!json || !json[0]) {
+    if (strcasecmp(s, "single") == 0) {
+        *out = ROOM_SCENARIO_REACTIVE_POLICY_SINGLE;
         return ESP_OK;
     }
-    params = cJSON_Parse(json);
-    if (!cJSON_IsObject(params)) {
-        cJSON_Delete(params);
-        return ESP_ERR_INVALID_ARG;
+    if (strcasecmp(s, "rotate") == 0) {
+        *out = ROOM_SCENARIO_REACTIVE_POLICY_ROTATE;
+        return ESP_OK;
     }
-    cJSON_AddItemToObject(obj, name, params);
-    return ESP_OK;
+    if (strcasecmp(s, "random") == 0) {
+        *out = ROOM_SCENARIO_REACTIVE_POLICY_RANDOM;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "escalate") == 0) {
+        *out = ROOM_SCENARIO_REACTIVE_POLICY_ESCALATE;
+        return ESP_OK;
+    }
+    return ESP_ERR_NOT_FOUND;
 }
 
-static esp_err_t room_scenario_export_command_json(const room_scenario_device_command_t *command,
-                                                   cJSON *obj)
-{
-    esp_err_t err = ESP_OK;
-    if (!command || !cJSON_IsObject(obj)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    cJSON_AddStringToObject(obj, "device_id", command->device_id);
-    cJSON_AddStringToObject(obj, "command_id", command->command_id);
-    err = json_add_object_string_optional(obj, "params", command->params_json);
-    return err;
-}
 
 static esp_err_t room_scenario_import_command_json(const cJSON *obj,
                                                    room_scenario_device_command_t *command)
@@ -168,268 +166,6 @@ static esp_err_t room_scenario_import_command_json(const cJSON *obj,
                                             "params",
                                             command->params_json,
                                             sizeof(command->params_json));
-}
-
-static esp_err_t room_scenario_export_step_json(const room_scenario_step_t *step,
-                                                cJSON *steps)
-{
-    cJSON *obj = cJSON_CreateObject();
-    esp_err_t err = ESP_OK;
-    if (!obj) {
-        return ESP_ERR_NO_MEM;
-    }
-    cJSON_AddStringToObject(obj, "id", step->id);
-    cJSON_AddStringToObject(obj, "label", step->label);
-    cJSON_AddBoolToObject(obj, "enabled", step->enabled);
-    cJSON_AddStringToObject(obj, "type", room_scenario_step_type_to_str(step->type));
-    if (step->allow_operator_skip) {
-        cJSON_AddBoolToObject(obj, "allow_operator_skip", true);
-    }
-    if (step->operator_skip_label[0]) {
-        cJSON_AddStringToObject(obj, "operator_skip_label", step->operator_skip_label);
-    }
-    switch (step->type) {
-    case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
-        err = room_scenario_export_command_json(&step->data.device_command, obj);
-        if (err != ESP_OK) {
-            cJSON_Delete(obj);
-            return err;
-        }
-        break;
-    case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP: {
-        cJSON *commands = cJSON_AddArrayToObject(obj, "commands");
-        if (!commands) {
-            cJSON_Delete(obj);
-            return ESP_ERR_NO_MEM;
-        }
-        for (uint8_t i = 0; i < step->data.device_command_group.command_count; ++i) {
-            cJSON *command = cJSON_CreateObject();
-            if (!command) {
-                cJSON_Delete(obj);
-                return ESP_ERR_NO_MEM;
-            }
-            cJSON_AddStringToObject(command,
-                                    "device_id",
-                                    step->data.device_command_group.commands[i].device_id);
-            cJSON_AddStringToObject(command,
-                                    "command_id",
-                                    step->data.device_command_group.commands[i].command_id);
-            if (!cJSON_AddItemToArray(commands, command)) {
-                cJSON_Delete(command);
-                cJSON_Delete(obj);
-                return ESP_ERR_NO_MEM;
-            }
-        }
-        break;
-    }
-    case ROOM_SCENARIO_STEP_WAIT_TIME:
-        cJSON_AddNumberToObject(obj, "duration_ms", step->data.wait_time.duration_ms);
-        break;
-    case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT:
-        cJSON_AddStringToObject(obj, "device_id", step->data.wait_device_event.device_id);
-        cJSON_AddStringToObject(obj, "event_id", step->data.wait_device_event.event_id);
-        if (step->data.wait_device_event.timeout_ms > 0) {
-            cJSON_AddNumberToObject(obj, "timeout_ms", step->data.wait_device_event.timeout_ms);
-        }
-        if (step->data.wait_device_event.timeout_message[0]) {
-            cJSON_AddStringToObject(obj,
-                                    "timeout_message",
-                                    step->data.wait_device_event.timeout_message);
-        }
-        break;
-    case ROOM_SCENARIO_STEP_OPERATOR_APPROVAL:
-        cJSON_AddStringToObject(obj, "prompt", step->data.operator_approval.prompt);
-        cJSON_AddStringToObject(obj, "approve_label", step->data.operator_approval.approve_label);
-        break;
-    case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
-        cJSON_AddStringToObject(obj, "message", step->data.operator_message.message);
-        break;
-    case ROOM_SCENARIO_STEP_SET_FLAG:
-        cJSON_AddStringToObject(obj, "flag_name", step->data.set_flag.name);
-        cJSON_AddBoolToObject(obj, "value", step->data.set_flag.value);
-        break;
-    case ROOM_SCENARIO_STEP_WAIT_FLAGS: {
-        cJSON *flags = cJSON_AddArrayToObject(obj, "flags");
-        if (!flags) {
-            cJSON_Delete(obj);
-            return ESP_ERR_NO_MEM;
-        }
-        for (uint8_t i = 0; i < step->data.wait_flags.flag_count; ++i) {
-            cJSON *flag = cJSON_CreateObject();
-            if (!flag) {
-                cJSON_Delete(obj);
-                return ESP_ERR_NO_MEM;
-            }
-            cJSON_AddStringToObject(flag, "flag_name", step->data.wait_flags.flags[i].name);
-            cJSON_AddBoolToObject(flag, "value", step->data.wait_flags.flags[i].value);
-            if (!cJSON_AddItemToArray(flags, flag)) {
-                cJSON_Delete(flag);
-                cJSON_Delete(obj);
-                return ESP_ERR_NO_MEM;
-            }
-        }
-        if (step->data.wait_flags.timeout_ms > 0) {
-            cJSON_AddNumberToObject(obj, "timeout_ms", step->data.wait_flags.timeout_ms);
-        }
-        if (step->data.wait_flags.timeout_message[0]) {
-            cJSON_AddStringToObject(obj,
-                                    "timeout_message",
-                                    step->data.wait_flags.timeout_message);
-        }
-        break;
-    }
-    case ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT: {
-        cJSON *events = cJSON_AddArrayToObject(obj, "events");
-        if (!events) {
-            cJSON_Delete(obj);
-            return ESP_ERR_NO_MEM;
-        }
-        for (uint8_t i = 0; i < step->data.wait_any_device_event.event_count; ++i) {
-            cJSON *event = cJSON_CreateObject();
-            if (!event) {
-                cJSON_Delete(obj);
-                return ESP_ERR_NO_MEM;
-            }
-            cJSON_AddStringToObject(event,
-                                    "device_id",
-                                    step->data.wait_any_device_event.events[i].device_id);
-            cJSON_AddStringToObject(event,
-                                    "event_id",
-                                    step->data.wait_any_device_event.events[i].event_id);
-            if (!cJSON_AddItemToArray(events, event)) {
-                cJSON_Delete(event);
-                cJSON_Delete(obj);
-                return ESP_ERR_NO_MEM;
-            }
-        }
-        break;
-    }
-    case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS: {
-        cJSON *events = cJSON_AddArrayToObject(obj, "events");
-        if (!events) {
-            cJSON_Delete(obj);
-            return ESP_ERR_NO_MEM;
-        }
-        for (uint8_t i = 0; i < step->data.wait_all_device_events.event_count; ++i) {
-            cJSON *event = cJSON_CreateObject();
-            if (!event) {
-                cJSON_Delete(obj);
-                return ESP_ERR_NO_MEM;
-            }
-            cJSON_AddStringToObject(event,
-                                    "device_id",
-                                    step->data.wait_all_device_events.events[i].device_id);
-            cJSON_AddStringToObject(event,
-                                    "event_id",
-                                    step->data.wait_all_device_events.events[i].event_id);
-            if (!cJSON_AddItemToArray(events, event)) {
-                cJSON_Delete(event);
-                cJSON_Delete(obj);
-                return ESP_ERR_NO_MEM;
-            }
-        }
-        break;
-    }
-    case ROOM_SCENARIO_STEP_END_GAME:
-        break;
-    default:
-        cJSON_Delete(obj);
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!cJSON_AddItemToArray(steps, obj)) {
-        cJSON_Delete(obj);
-        return ESP_ERR_NO_MEM;
-    }
-    return ESP_OK;
-}
-
-static esp_err_t room_scenario_export_branch_json(const room_scenario_t *s,
-                                                  const room_scenario_branch_t *branch,
-                                                  cJSON *branches)
-{
-    cJSON *obj = cJSON_CreateObject();
-    cJSON *steps = NULL;
-    uint32_t end_index = 0;
-    esp_err_t err = ESP_OK;
-    if (!obj) {
-        return ESP_ERR_NO_MEM;
-    }
-    cJSON_AddStringToObject(obj, "id", branch->id);
-    cJSON_AddStringToObject(obj, "name", branch->name);
-    cJSON_AddStringToObject(obj, "type", room_scenario_branch_type_to_str(branch->type));
-    cJSON_AddBoolToObject(obj, "enabled", branch->enabled);
-    cJSON_AddBoolToObject(obj, "required_for_completion", branch->required_for_completion);
-    if (branch->type == ROOM_SCENARIO_BRANCH_REACTIVE) {
-        if (branch->cooldown_ms > 0) {
-            cJSON_AddNumberToObject(obj, "cooldown_ms", branch->cooldown_ms);
-        }
-        if (branch->run_once) {
-            cJSON_AddBoolToObject(obj, "run_once", true);
-        }
-    }
-    steps = cJSON_AddArrayToObject(obj, "steps");
-    if (!steps) {
-        cJSON_Delete(obj);
-        return ESP_ERR_NO_MEM;
-    }
-    end_index = (uint32_t)branch->step_start_index + branch->step_count;
-    if (end_index > s->step_count) {
-        cJSON_Delete(obj);
-        return ESP_ERR_INVALID_ARG;
-    }
-    for (uint32_t i = branch->step_start_index; i < end_index; ++i) {
-        err = room_scenario_export_step_json(&s->steps[i], steps);
-        if (err != ESP_OK) {
-            cJSON_Delete(obj);
-            return err;
-        }
-    }
-    if (!cJSON_AddItemToArray(branches, obj)) {
-        cJSON_Delete(obj);
-        return ESP_ERR_NO_MEM;
-    }
-    return ESP_OK;
-}
-
-esp_err_t room_scenario_to_json(const room_scenario_t *s, cJSON *out)
-{
-    cJSON *steps = NULL;
-    cJSON *branches = NULL;
-    esp_err_t err = ESP_OK;
-    if (!s || !cJSON_IsObject(out)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    err = room_scenario_validate_structural(s);
-    if (err != ESP_OK) {
-        return err;
-    }
-    cJSON_AddStringToObject(out, "id", s->id);
-    cJSON_AddStringToObject(out, "name", s->name);
-    cJSON_AddStringToObject(out, "room_id", s->room_id);
-    if (s->branch_count > 0) {
-        branches = cJSON_AddArrayToObject(out, "branches");
-        if (!branches) {
-            return ESP_ERR_NO_MEM;
-        }
-        for (size_t i = 0; i < s->branch_count; ++i) {
-            err = room_scenario_export_branch_json(s, &s->branches[i], branches);
-            if (err != ESP_OK) {
-                return err;
-            }
-        }
-        return ESP_OK;
-    }
-    steps = cJSON_AddArrayToObject(out, "steps");
-    if (!steps) {
-        return ESP_ERR_NO_MEM;
-    }
-    for (size_t i = 0; i < s->step_count; ++i) {
-        err = room_scenario_export_step_json(&s->steps[i], steps);
-        if (err != ESP_OK) {
-            return err;
-        }
-    }
-    return ESP_OK;
 }
 
 static esp_err_t room_scenario_import_step_json(const cJSON *obj,
@@ -503,6 +239,12 @@ static esp_err_t room_scenario_import_step_json(const cJSON *obj,
                                                 "command_id",
                                                 step->data.device_command_group.commands[i].command_id,
                                                 sizeof(step->data.device_command_group.commands[i].command_id));
+            }
+            if (err == ESP_OK) {
+                err = json_copy_object_string_optional(command,
+                                                       "params",
+                                                       step->data.device_command_group.commands[i].params_json,
+                                                       sizeof(step->data.device_command_group.commands[i].params_json));
             }
             if (err != ESP_OK) {
                 return err;
@@ -685,6 +427,7 @@ static esp_err_t room_scenario_import_steps_array(const cJSON *steps,
     return ESP_OK;
 }
 
+
 static esp_err_t room_scenario_import_branches_json(const cJSON *branches,
                                                     room_scenario_t *scenario)
 {
@@ -706,6 +449,9 @@ static esp_err_t room_scenario_import_branches_json(const cJSON *branches,
         const cJSON *required = NULL;
         const cJSON *type = NULL;
         const cJSON *run_once = NULL;
+        const cJSON *policy = NULL;
+        const cJSON *reentry = NULL;
+        uint32_t priority = 0;
         room_scenario_branch_t *branch = &scenario->branches[i];
         if (!cJSON_IsObject(branch_obj)) {
             return ESP_ERR_INVALID_ARG;
@@ -733,6 +479,11 @@ static esp_err_t room_scenario_import_branches_json(const cJSON *branches,
         } else {
             return ESP_ERR_INVALID_ARG;
         }
+        err = json_get_uint32_optional(branch_obj, "priority", &priority);
+        if (err != ESP_OK || priority > UINT16_MAX) {
+            return err != ESP_OK ? err : ESP_ERR_INVALID_ARG;
+        }
+        branch->priority = (uint16_t)priority;
         required = cJSON_GetObjectItemCaseSensitive(branch_obj, "required_for_completion");
         if (!required) {
             branch->required_for_completion = branch->type == ROOM_SCENARIO_BRANCH_NORMAL;
@@ -745,6 +496,32 @@ static esp_err_t room_scenario_import_branches_json(const cJSON *branches,
         if (err != ESP_OK) {
             return err;
         }
+        err = json_get_uint32_optional(branch_obj, "max_fire_count", &branch->max_fire_count);
+        if (err != ESP_OK) {
+            return err;
+        }
+        policy = cJSON_GetObjectItemCaseSensitive(branch_obj, "policy");
+        branch->policy_mode = ROOM_SCENARIO_REACTIVE_POLICY_SINGLE;
+        if (policy) {
+            const cJSON *mode = NULL;
+            if (!cJSON_IsObject(policy)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            mode = cJSON_GetObjectItemCaseSensitive(policy, "mode");
+            if (mode && (!cJSON_IsString(mode) || !mode->valuestring ||
+                         reactive_policy_mode_from_str(mode->valuestring,
+                                                       &branch->policy_mode) != ESP_OK)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = json_get_uint32_optional(policy, "cooldown_ms", &branch->cooldown_ms);
+            if (err != ESP_OK) {
+                return err;
+            }
+            err = json_get_uint32_optional(policy, "max_fire_count", &branch->max_fire_count);
+            if (err != ESP_OK) {
+                return err;
+            }
+        }
         run_once = cJSON_GetObjectItemCaseSensitive(branch_obj, "run_once");
         if (run_once) {
             if (!cJSON_IsBool(run_once)) {
@@ -752,11 +529,36 @@ static esp_err_t room_scenario_import_branches_json(const cJSON *branches,
             }
             branch->run_once = cJSON_IsTrue(run_once);
         }
+        branch->reentry_mode = ROOM_SCENARIO_REENTRY_IGNORE;
+        reentry = cJSON_GetObjectItemCaseSensitive(branch_obj, "reentry");
+        if (reentry) {
+            const cJSON *mode = NULL;
+            if (!cJSON_IsObject(reentry)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            mode = cJSON_GetObjectItemCaseSensitive(reentry, "mode");
+            if (mode) {
+                if (!cJSON_IsString(mode) || !mode->valuestring ||
+                    room_scenario_reentry_mode_from_str(mode->valuestring,
+                                                        &branch->reentry_mode) != ESP_OK) {
+                    return ESP_ERR_INVALID_ARG;
+                }
+            }
+        }
         branch->step_start_index = (uint16_t)step_index;
-        steps = cJSON_GetObjectItemCaseSensitive(branch_obj, "steps");
-        err = room_scenario_import_steps_array(steps, scenario, &step_index, &branch->step_count);
-        if (err != ESP_OK) {
-            return err;
+        if (branch->type == ROOM_SCENARIO_BRANCH_REACTIVE &&
+            cJSON_GetObjectItemCaseSensitive(branch_obj, "variants")) {
+            err = room_scenario_import_reactive_branch_v2_json(branch_obj, scenario, branch);
+            if (err != ESP_OK) {
+                return err;
+            }
+            branch->step_count = 0;
+        } else {
+            steps = cJSON_GetObjectItemCaseSensitive(branch_obj, "steps");
+            err = room_scenario_import_steps_array(steps, scenario, &step_index, &branch->step_count);
+            if (err != ESP_OK) {
+                return err;
+            }
         }
     }
     return ESP_OK;

@@ -243,7 +243,7 @@ static void handler_add_room(const char *room_id)
     TEST_ASSERT_EQUAL(ESP_OK, room_catalog_upsert(&room));
 }
 
-static void test_web_ui_handler_timer_start_validates_query_and_returns_state_json(void)
+static void test_web_ui_handler_timer_start_validates_query_and_returns_accepted_json(void)
 {
     cJSON *root = NULL;
 
@@ -259,11 +259,30 @@ static void test_web_ui_handler_timer_start_validates_query_and_returns_state_js
     TEST_ASSERT_EQUAL(ESP_OK, gm_timer_start_handler(&s_http_req));
     TEST_ASSERT_EQUAL_STRING("application/json", s_http_type);
     root = http_test_parse_response();
-    TEST_ASSERT_EQUAL_STRING("started", cJSON_GetObjectItem(root, "status")->valuestring);
+    TEST_ASSERT_TRUE(cJSON_IsTrue(cJSON_GetObjectItem(root, "ok")));
+    TEST_ASSERT_TRUE(cJSON_IsTrue(cJSON_GetObjectItem(root, "accepted")));
+    cJSON_Delete(root);
+}
+
+static void test_web_ui_handler_room_runtime_returns_timer_state_json(void)
+{
+    cJSON *root = NULL;
+
+    handler_bootstrap();
+    handler_add_room("room_a");
+
+    http_test_reset_request("room_id=room_a&duration_ms=60000", NULL);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_timer_start_handler(&s_http_req));
+
+    http_test_reset_request("room_id=room_a", NULL);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_runtime_state_handler(&s_http_req));
+    TEST_ASSERT_EQUAL_STRING("application/json", s_http_type);
+    root = http_test_parse_response();
     TEST_ASSERT_EQUAL_STRING("room_a", cJSON_GetObjectItem(root, "room_id")->valuestring);
     TEST_ASSERT_EQUAL_STRING("running", cJSON_GetObjectItem(root, "session_state")->valuestring);
     TEST_ASSERT_EQUAL_STRING("running", cJSON_GetObjectItem(root, "timer_state")->valuestring);
     TEST_ASSERT_EQUAL(60000, cJSON_GetObjectItem(root, "timer_duration_ms")->valueint);
+    TEST_ASSERT_EQUAL_STRING("none", cJSON_GetObjectItem(root, "asset_prepare_state")->valuestring);
     cJSON_Delete(root);
 }
 
@@ -395,7 +414,8 @@ static void test_web_ui_device_handlers_reject_bad_body_before_persistence(void)
 
 void register_web_ui_handler_tests(void)
 {
-    RUN_TEST(test_web_ui_handler_timer_start_validates_query_and_returns_state_json);
+    RUN_TEST(test_web_ui_handler_timer_start_validates_query_and_returns_accepted_json);
+    RUN_TEST(test_web_ui_handler_room_runtime_returns_timer_state_json);
     RUN_TEST(test_web_ui_handler_gm_state_returns_stable_json_shape);
     RUN_TEST(test_web_ui_handler_scenario_validate_rejects_bad_body_and_reports_valid_json);
     RUN_TEST(test_web_ui_handler_game_action_maps_missing_room_to_json_error);

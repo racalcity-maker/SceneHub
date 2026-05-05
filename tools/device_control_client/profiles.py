@@ -6,8 +6,8 @@ from copy import deepcopy
 from typing import Any, Dict
 
 
-MANDATORY_CAPABILITIES = ["heartbeat", "status", "diag", "refresh_status"]
-OPTIONAL_CAPABILITIES = ["reboot", "reset_runtime", "apply_preset"]
+MANDATORY_CAPABILITIES = ["heartbeat", "status", "diag", "node.identify", "node.get_status"]
+OPTIONAL_CAPABILITIES = ["node.reboot", "node.reset_runtime", "node.apply_preset"]
 
 
 PROFILE_TEMPLATES: Dict[str, Dict[str, Any]] = {
@@ -27,7 +27,7 @@ PROFILE_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "state": "watching",
         "health": "ok",
         "runtime_active": True,
-        "capabilities": MANDATORY_CAPABILITIES + ["reboot", "reset_runtime"],
+        "capabilities": MANDATORY_CAPABILITIES + ["node.reboot", "node.reset_runtime"],
         "presets": {
             "armed": {"mode": "armed", "state": "watching", "health": "ok"},
             "service": {"mode": "service", "state": "idle", "health": "degraded"},

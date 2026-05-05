@@ -5,10 +5,30 @@
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_timer.h"
 
 #include "gm_api.h"
 #include "orchestrator_registry.h"
 #include "web_ui_utils.h"
+
+static const char *TAG = "web_ui_gm_hint";
+
+static int64_t gm_hint_perf_start(void)
+{
+    return esp_timer_get_time();
+}
+
+static void gm_hint_perf_log(const char *label, int64_t start_us, const char *room_id)
+{
+    int64_t dt_ms = (esp_timer_get_time() - start_us) / 1000;
+    ESP_LOGW(TAG, "PERF %s room=%s took %lld ms", label ? label : "hint", room_id ? room_id : "", dt_ms);
+}
+
+static esp_err_t gm_send_hint_accepted(httpd_req_t *req)
+{
+    return web_ui_send_ok(req, "application/json", "{\"ok\":true,\"accepted\":true}");
+}
 
 static void *gm_hint_body_alloc(size_t size)
 {
@@ -17,36 +37,6 @@ static void *gm_hint_body_alloc(size_t size)
         ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
     return ptr;
-}
-
-static esp_err_t gm_send_hint_state(httpd_req_t *req, const char *room_id, const char *status)
-{
-    gm_room_session_t *session = NULL;
-    cJSON *root = NULL;
-    if (!req || !room_id || !status) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "invalid state");
-    }
-    session = gm_hint_body_alloc(sizeof(*session));
-    if (!session) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
-    }
-    if (gm_api_room_session_get(room_id, session) != ESP_OK) {
-        heap_caps_free(session);
-        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "room session not found");
-    }
-    root = cJSON_CreateObject();
-    if (!root) {
-        heap_caps_free(session);
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
-    }
-    cJSON_AddStringToObject(root, "status", status);
-    cJSON_AddStringToObject(root, "room_id", session->room_id);
-    cJSON_AddBoolToObject(root, "hint_active", session->hint.active);
-    cJSON_AddNumberToObject(root, "hint_sent_count", session->hint.sent_count);
-    cJSON_AddStringToObject(root, "hint_message", session->hint.message);
-    cJSON_AddNumberToObject(root, "hint_last_changed_ms", (double)session->hint.last_changed_ms);
-    heap_caps_free(session);
-    return web_ui_send_json(req, root);
 }
 
 static esp_err_t gm_send_hint_error(httpd_req_t *req, esp_err_t err, const char *internal_message)
@@ -72,6 +62,7 @@ esp_err_t gm_hint_send_handler(httpd_req_t *req)
     const cJSON *message_item = NULL;
     const char *room_id = NULL;
     const char *message = NULL;
+    int64_t t0 = gm_hint_perf_start();
     esp_err_t err;
 
     if (!req || req->content_len <= 0 || req->content_len > 512) {
@@ -116,12 +107,14 @@ esp_err_t gm_hint_send_handler(httpd_req_t *req)
         return gm_send_hint_error(req, err, "hint send failed");
     }
     orchestrator_registry_invalidate();
-    return gm_send_hint_state(req, room_id, "sent");
+    gm_hint_perf_log("POST hint send", t0, room_id);
+    return gm_send_hint_accepted(req);
 }
 
 esp_err_t gm_hint_clear_handler(httpd_req_t *req)
 {
     char room_id[QUEST_ROOM_ID_MAX_LEN] = {0};
+    int64_t t0 = gm_hint_perf_start();
     esp_err_t err;
     char query[256] = {0};
 
@@ -139,5 +132,6 @@ esp_err_t gm_hint_clear_handler(httpd_req_t *req)
         return gm_send_hint_error(req, err, "hint clear failed");
     }
     orchestrator_registry_invalidate();
-    return gm_send_hint_state(req, room_id, "cleared");
+    gm_hint_perf_log("POST hint clear", t0, room_id);
+    return gm_send_hint_accepted(req);
 }

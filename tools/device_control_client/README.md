@@ -17,22 +17,21 @@ For each configured device:
   - `cp/v1/dev/{device_id}/result`
 - subscribes:
   - `cp/v1/dev/{device_id}/control/command`
-  - `cp/v1/dev/{device_id}/cmd` (alias for tests)
   - `cp/v1/dev/all/control/command`
-  - `cp/v1/dev/all/cmd`
-  - quest command topics listed in `quest_interface.commands`
 
 Supported commands:
 
-- `refresh_status`
-- `reboot` (fake reboot)
-- `reset_runtime`
-- `apply_preset` (uses local profile preset map; returns `not_supported` if preset missing)
-- `describe_interface` when `quest_interface` is configured for the device
+- `node.get_status`
+- `node.identify`
+- `node.reboot` (fake reboot)
+- `node.reset_runtime`
+- `node.apply_preset` (uses local profile preset map; returns `not_supported` if preset missing)
+- `describe_interface` when `device_description` is configured for the device
+- commands listed in `device_description.commands`
 
-## Quest Interface Discovery
+## Device Description Discovery
 
-Each configured device may include a `quest_interface` block. This is used by GM Panel Device Setup to import quest device capabilities.
+Each configured device may include a `device_description` block. This is used by GM Panel Device Setup to import device capabilities.
 
 When the broker sends:
 
@@ -52,11 +51,11 @@ the client returns:
   "ts_ms": 1713900000100,
   "request_id": "req-1002",
   "command": "describe_interface",
-  "status": "ok",
+  "status": "done",
   "error_code": "",
   "message": "",
   "data": {
-    "quest_interface": {
+    "device_description": {
       "version": 1,
       "commands": [],
       "events": []
@@ -65,7 +64,14 @@ the client returns:
 }
 ```
 
-The client also subscribes to every `commands[].topic`. If a command has `emit_event_id`, the client publishes the matching event after optional `emit_delay_ms`.
+If a configured command has `emit_event_id`, the client publishes the matching native event to `cp/v1/dev/{device_id}/event` after optional `emit_delay_ms`.
+
+Command results use the current terminal statuses:
+
+- `done`
+- `failed`
+- `rejected`
+- `accepted` followed by terminal `done` for long-running commands such as `node.reboot`
 
 ## Internal Runtime State
 
@@ -86,7 +92,7 @@ Per device (config):
 - `simulate_degraded` - forces `health=degraded`
 - `response_delay_ms` - artificial delay before command handling
 - `silent_mode` - suppresses all outbound MQTT telemetry
-- `fake_reboot_ms` - reboot downtime for `reboot` command
+- `fake_reboot_ms` - reboot downtime for `node.reboot`
 
 ## Requirements
 
@@ -143,7 +149,7 @@ Commands:
 ```json
 {
   "request_id": "req-1001",
-  "command": "apply_preset",
+  "command": "node.apply_preset",
   "args": {
     "preset_id": "maintenance"
   },

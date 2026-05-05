@@ -22,7 +22,7 @@ The firmware is designed for stand-alone escape room and interactive exhibit set
 - Role-aware GM panel for operator workflow and admin setup
 - Quest Devices capability model with imported or manually entered commands/events
 - Built-in System Devices such as `system_audio`, exposed through the same command/event model
-- Schema-driven Room Scenario runtime with validation, device commands, device-event waits, wait-time and operator gates
+- Schema-driven Room Scenario runtime with validation, normal flow branches, Reactive Branch v2 reactions, device commands, device-event waits, wait-time and operator gates
 - Game Modes that select room scenario, duration and future content packs
 - Room-level and device-level action facades with in-memory audit trail
 - Device control contract ingest (`heartbeat/status/diag/result`)
@@ -196,6 +196,10 @@ The `/gm` panel is the primary quest console:
 
 ![Room Scenario setup](docs/Pics/scenario_setup.jpg)
 
+#### Reactive Branches
+
+![Reactive Branch v2 setup](docs/Pics/reactive_branch.jpg)
+
 #### Timeline
 
 ![GM Panel timeline](docs/Pics/timeline.jpg)
@@ -265,7 +269,7 @@ The current product model is intentionally simple:
 - Built-in orchestrator services, starting with audio, are exposed as System Devices.
 - Gameplay runs through Quest Devices, Room Scenarios, Game Modes and GM Sessions.
 
-`MQTT Interface` is now a capability-import workflow for locally smart/custom devices such as an altar, UID gate, relay controller or timer module. The admin selects an observed client, presses `Get config`, and the Quest Orchestrator sends `describe_interface`. Returned commands become device command capabilities/manual buttons; returned events become presets for room scenario waits.
+`MQTT Interface` is now a capability-import workflow for locally smart/custom devices such as an altar, UID gate, relay controller or timer module. The admin selects an observed client, presses `Get config`, and SceneHub sends `describe_interface`. Returned commands become device command capabilities/manual buttons; returned events become presets for room scenario waits.
 
 ## Room Scenarios
 
@@ -291,12 +295,18 @@ Room scenario branches have two product roles:
 
 - `normal` branches are the quest flow. They can be required for completion and
   can synchronize with each other through flags.
-- `reactive` branches are planned for reactions. A reactive branch listens for
-  one trigger, runs a short action chain such as playing a sound or sending a
-  command, then returns to listening. Reactive branches are shown separately
-  from the main flow and do not count toward game completion. They share the
-  same runtime flags as normal branches, so a reaction can `SET_FLAG` and a
-  normal branch can continue from `WAIT_FLAGS`.
+- `reactive` branches are Reactive Branch v2 reactions. A reaction listens for
+  a trigger event, checks optional guard flags, selects an action variant by
+  policy (`single`, `rotate`, `random`, or `escalate`), runs sequential actions,
+  then returns to listening or cooldown. Reactions are shown separately from
+  the main flow and do not count toward game completion. They share the same
+  runtime flags as normal branches, so a reaction can `SET_FLAG` and a normal
+  branch can continue from `WAIT_FLAGS`.
+
+Reactive Branch v2 actions currently support device commands, command groups,
+wait-time, set-flag and operator messages. Result-required commands go through
+the command executor: `accepted` keeps the action pending, `done` advances it,
+and `failed`/`rejected`/`timeout` follow the reaction result policy.
 
 ### Game Profiles
 
@@ -372,7 +382,7 @@ Control-contract devices publish:
 - `cp/v1/dev/{client_id}/diag`
 - `cp/v1/dev/{client_id}/result`
 
-The Quest Orchestrator sends control commands to:
+SceneHub sends control commands to:
 
 - `cp/v1/dev/{client_id}/control/command`
 

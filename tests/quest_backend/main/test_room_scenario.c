@@ -706,6 +706,10 @@ static void test_room_scenario_export_all_step_types(void)
                                                               "type")->valuestring);
     TEST_ASSERT_TRUE(cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(steps, 4),
                                                                     "commands")));
+    TEST_ASSERT_NULL(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(
+                         cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(steps, 4), "commands"),
+                         0),
+                     "params"));
     TEST_ASSERT_EQUAL_STRING("SHOW_OPERATOR_MESSAGE",
                              cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(steps, 5),
                                                               "type")->valuestring);
@@ -736,6 +740,45 @@ static void test_room_scenario_export_all_step_types(void)
     TEST_ASSERT_TRUE(cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(steps, 9),
                                                                     "events")));
     cJSON_Delete(root);
+}
+
+static void test_room_scenario_command_group_json_preserves_params(void)
+{
+    const char *json =
+        "{\"id\":\"group_params\",\"name\":\"Group params\",\"room_id\":\"room_1\",\"steps\":["
+        "{\"id\":\"group\",\"label\":\"Group\",\"enabled\":true,\"type\":\"DEVICE_COMMAND_GROUP\","
+        "\"commands\":[{\"device_id\":\"relay\",\"command_id\":\"pulse\","
+        "\"params\":{\"channel\":2,\"duration_ms\":750}}]}]}";
+    cJSON *root = NULL;
+    cJSON *out = NULL;
+    cJSON *steps = NULL;
+    cJSON *commands = NULL;
+    cJSON *params = NULL;
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+
+    room_scenario_test_bootstrap();
+    memset(scenario, 0, sizeof(*scenario));
+
+    root = cJSON_Parse(json);
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_from_json(root, scenario));
+    cJSON_Delete(root);
+
+    TEST_ASSERT_EQUAL_UINT(1, scenario->step_count);
+    TEST_ASSERT_EQUAL(ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP, scenario->steps[0].type);
+    TEST_ASSERT_EQUAL_STRING("{\"channel\":2,\"duration_ms\":750}",
+                             scenario->steps[0].data.device_command_group.commands[0].params_json);
+
+    out = cJSON_CreateObject();
+    TEST_ASSERT_NOT_NULL(out);
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_to_json(scenario, out));
+    steps = cJSON_GetObjectItemCaseSensitive(out, "steps");
+    commands = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(steps, 0), "commands");
+    params = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(commands, 0), "params");
+    TEST_ASSERT_TRUE(cJSON_IsObject(params));
+    TEST_ASSERT_EQUAL_INT(2, cJSON_GetObjectItemCaseSensitive(params, "channel")->valueint);
+    TEST_ASSERT_EQUAL_INT(750, cJSON_GetObjectItemCaseSensitive(params, "duration_ms")->valueint);
+    cJSON_Delete(out);
 }
 
 static void test_room_scenario_import_valid_json_restores_scenarios(void)
@@ -927,6 +970,170 @@ static void test_room_scenario_branch_json_round_trip(void)
     cJSON_Delete(out);
 }
 
+static void test_room_scenario_reactive_policy_json_round_trip(void)
+{
+    const char *json =
+        "{\"id\":\"reactive_policy\",\"name\":\"Reactive policy\",\"room_id\":\"room_1\",\"branches\":["
+        "{\"id\":\"rx_motion\",\"name\":\"Motion reaction\",\"type\":\"reactive\",\"enabled\":true,"
+        "\"required_for_completion\":false,\"priority\":20,"
+        "\"policy\":{\"mode\":\"single\",\"cooldown_ms\":1500,\"max_fire_count\":3},"
+        "\"reentry\":{\"mode\":\"queue_one\"},"
+        "\"steps\":["
+        "{\"id\":\"trigger\",\"label\":\"Trigger\",\"enabled\":true,\"type\":\"WAIT_DEVICE_EVENT\","
+        "\"device_id\":\"motion\",\"event_id\":\"motion.detected\"},"
+        "{\"id\":\"message\",\"label\":\"Message\",\"enabled\":true,\"type\":\"SHOW_OPERATOR_MESSAGE\","
+        "\"message\":\"Motion detected\"}"
+        "]}]}";
+    cJSON *root = NULL;
+    cJSON *out = NULL;
+    cJSON *branches = NULL;
+    cJSON *branch = NULL;
+    cJSON *policy = NULL;
+    cJSON *reentry = NULL;
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+
+    memset(scenario, 0, sizeof(*scenario));
+
+    root = cJSON_Parse(json);
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_from_json(root, scenario));
+    cJSON_Delete(root);
+
+    TEST_ASSERT_EQUAL_UINT(1, scenario->branch_count);
+    TEST_ASSERT_EQUAL(ROOM_SCENARIO_BRANCH_REACTIVE, scenario->branches[0].type);
+    TEST_ASSERT_EQUAL_UINT16(20, scenario->branches[0].priority);
+    TEST_ASSERT_EQUAL_UINT32(1500, scenario->branches[0].cooldown_ms);
+    TEST_ASSERT_EQUAL_UINT32(3, scenario->branches[0].max_fire_count);
+    TEST_ASSERT_EQUAL(ROOM_SCENARIO_REENTRY_QUEUE_ONE, scenario->branches[0].reentry_mode);
+
+    out = cJSON_CreateObject();
+    TEST_ASSERT_NOT_NULL(out);
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_to_json(scenario, out));
+    branches = cJSON_GetObjectItemCaseSensitive(out, "branches");
+    branch = cJSON_GetArrayItem(branches, 0);
+    policy = cJSON_GetObjectItemCaseSensitive(branch, "policy");
+    reentry = cJSON_GetObjectItemCaseSensitive(branch, "reentry");
+    TEST_ASSERT_TRUE(cJSON_IsObject(policy));
+    TEST_ASSERT_EQUAL_INT(1500, cJSON_GetObjectItemCaseSensitive(policy, "cooldown_ms")->valueint);
+    TEST_ASSERT_EQUAL_INT(3, cJSON_GetObjectItemCaseSensitive(policy, "max_fire_count")->valueint);
+    TEST_ASSERT_TRUE(cJSON_IsObject(reentry));
+    TEST_ASSERT_EQUAL_STRING("queue_one",
+                             cJSON_GetObjectItemCaseSensitive(reentry, "mode")->valuestring);
+    cJSON_Delete(out);
+}
+
+static void test_room_scenario_reactive_v2_json_round_trip(void)
+{
+    const char *json =
+        "{\"id\":\"reactive_v2\",\"name\":\"Reactive v2\",\"room_id\":\"room_1\",\"branches\":["
+        "{\"id\":\"rx_freeze\",\"name\":\"Freeze reaction\",\"type\":\"reactive\",\"enabled\":true,"
+        "\"priority\":10,"
+        "\"trigger\":{\"kind\":\"device_event\",\"device_id\":\"motion\",\"event_id\":\"motion.detected\"},"
+        "\"guard_flags\":[{\"flag\":\"freeze.active\",\"value\":true}],"
+        "\"policy\":{\"mode\":\"escalate\",\"cooldown_ms\":2000,\"max_fire_count\":3},"
+        "\"reentry\":{\"mode\":\"queue_one\"},"
+        "\"variants\":[{\"id\":\"soft\",\"label\":\"Soft\",\"actions\":["
+        "{\"type\":\"DEVICE_COMMAND\",\"device_id\":\"audio\",\"command_id\":\"effect.play\","
+        "\"params\":{\"file\":\"/sfx/whisper.mp3\"}},"
+        "{\"type\":\"SET_FLAG\",\"flag\":\"rx.soft\",\"value\":true}"
+        "]}],"
+        "\"result_policy\":{\"on_done\":\"continue\",\"on_fail\":\"fail_reaction\","
+        "\"on_timeout\":\"set_flag\",\"timeout_flag\":\"rx.timeout\"},"
+        "\"on_complete\":[{\"type\":\"SET_FLAG\",\"flag\":\"rx.done\",\"value\":true}]"
+        "}]}";
+    cJSON *root = NULL;
+    cJSON *out = NULL;
+    cJSON *branches = NULL;
+    cJSON *branch = NULL;
+    cJSON *variants = NULL;
+    cJSON *actions = NULL;
+    cJSON *complete = NULL;
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+
+    memset(scenario, 0, sizeof(*scenario));
+
+    root = cJSON_Parse(json);
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_from_json(root, scenario));
+    cJSON_Delete(root);
+
+    TEST_ASSERT_EQUAL_UINT(1, scenario->branch_count);
+    TEST_ASSERT_EQUAL_UINT(0, scenario->step_count);
+    TEST_ASSERT_EQUAL_UINT(1, scenario->reactive_variant_count);
+    TEST_ASSERT_EQUAL_UINT(3, scenario->reactive_action_count);
+    TEST_ASSERT_EQUAL(ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT, scenario->branches[0].trigger.kind);
+    TEST_ASSERT_EQUAL_STRING("motion", scenario->branches[0].trigger.device_id);
+    TEST_ASSERT_EQUAL_STRING("motion.detected", scenario->branches[0].trigger.event_id);
+    TEST_ASSERT_EQUAL_UINT8(1, scenario->branches[0].guard_flag_count);
+    TEST_ASSERT_EQUAL_STRING("freeze.active", scenario->branches[0].guard_flags[0].name);
+    TEST_ASSERT_EQUAL(ROOM_SCENARIO_REACTIVE_POLICY_ESCALATE, scenario->branches[0].policy_mode);
+    TEST_ASSERT_EQUAL_UINT32(2000, scenario->branches[0].cooldown_ms);
+    TEST_ASSERT_EQUAL_UINT32(3, scenario->branches[0].max_fire_count);
+    TEST_ASSERT_EQUAL(ROOM_SCENARIO_REENTRY_QUEUE_ONE, scenario->branches[0].reentry_mode);
+    TEST_ASSERT_EQUAL(ROOM_SCENARIO_REACTIVE_RESULT_SET_FLAG, scenario->branches[0].result_on_timeout);
+    TEST_ASSERT_EQUAL_STRING("rx.timeout", scenario->branches[0].result_flag);
+    TEST_ASSERT_EQUAL_UINT8(1, scenario->branches[0].on_complete_action_count);
+
+    out = cJSON_CreateObject();
+    TEST_ASSERT_NOT_NULL(out);
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_to_json(scenario, out));
+    branches = cJSON_GetObjectItemCaseSensitive(out, "branches");
+    branch = cJSON_GetArrayItem(branches, 0);
+    TEST_ASSERT_TRUE(cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(branch, "trigger")));
+    TEST_ASSERT_NULL(cJSON_GetObjectItemCaseSensitive(branch, "steps"));
+    variants = cJSON_GetObjectItemCaseSensitive(branch, "variants");
+    TEST_ASSERT_TRUE(cJSON_IsArray(variants));
+    actions = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(variants, 0), "actions");
+    TEST_ASSERT_EQUAL_INT(2, cJSON_GetArraySize(actions));
+    complete = cJSON_GetObjectItemCaseSensitive(branch, "on_complete");
+    TEST_ASSERT_TRUE(cJSON_IsArray(complete));
+    TEST_ASSERT_EQUAL_STRING("rx.done",
+                             cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(complete, 0),
+                                                              "flag")->valuestring);
+    cJSON_Delete(out);
+}
+
+static void test_room_scenario_reactive_v2_requires_variant_actions(void)
+{
+    const char *json =
+        "{\"id\":\"reactive_v2_bad\",\"name\":\"Reactive v2 bad\",\"room_id\":\"room_1\",\"branches\":["
+        "{\"id\":\"rx_bad\",\"name\":\"Bad reaction\",\"type\":\"reactive\",\"enabled\":true,"
+        "\"trigger\":{\"kind\":\"device_event\",\"device_id\":\"motion\",\"event_id\":\"motion.detected\"},"
+        "\"variants\":[{\"id\":\"empty\",\"actions\":[]}]"
+        "}]}";
+    cJSON *root = NULL;
+
+    root = cJSON_Parse(json);
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, room_scenario_from_json(root, &s_room_scenario_work[0]));
+    cJSON_Delete(root);
+}
+
+static void test_room_scenario_reactive_v2_allows_empty_on_complete(void)
+{
+    const char *json =
+        "{\"id\":\"reactive_v2_empty_complete\",\"name\":\"Reactive v2 empty complete\","
+        "\"room_id\":\"room_1\",\"branches\":["
+        "{\"id\":\"rx_empty_complete\",\"name\":\"Empty complete reaction\","
+        "\"type\":\"reactive\",\"enabled\":true,"
+        "\"trigger\":{\"kind\":\"device_event\",\"device_id\":\"motion\","
+        "\"event_id\":\"motion.detected\"},"
+        "\"variants\":[{\"id\":\"one\",\"actions\":["
+        "{\"type\":\"SET_FLAG\",\"flag\":\"rx.done\",\"value\":true}"
+        "]}],"
+        "\"on_complete\":[]"
+        "}]}";
+    cJSON *root = NULL;
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+
+    memset(scenario, 0, sizeof(*scenario));
+    root = cJSON_Parse(json);
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_from_json(root, scenario));
+    TEST_ASSERT_EQUAL_UINT8(0, scenario->branches[0].on_complete_action_count);
+    cJSON_Delete(root);
+}
+
 static void test_room_scenario_generation_increments_on_import_and_clear(void)
 {
     const char *json =
@@ -1016,7 +1223,12 @@ void register_room_scenario_tests(void)
     RUN_TEST(test_room_scenario_import_over_limit_fails_safely);
     RUN_TEST(test_room_scenario_import_unknown_step_type_fails);
     RUN_TEST(test_room_scenario_import_fractional_duration_fails);
+    RUN_TEST(test_room_scenario_command_group_json_preserves_params);
     RUN_TEST(test_room_scenario_branch_json_round_trip);
+    RUN_TEST(test_room_scenario_reactive_policy_json_round_trip);
+    RUN_TEST(test_room_scenario_reactive_v2_json_round_trip);
+    RUN_TEST(test_room_scenario_reactive_v2_requires_variant_actions);
+    RUN_TEST(test_room_scenario_reactive_v2_allows_empty_on_complete);
     RUN_TEST(test_room_scenario_generation_increments_on_import_and_clear);
     RUN_TEST(test_room_scenario_load_missing_file_keeps_existing_store);
     RUN_TEST(test_room_scenario_capacity_and_small_list_buffer);

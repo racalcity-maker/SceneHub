@@ -8,6 +8,7 @@
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #define ROOM_SCENARIO_JSON_VERSION 1
 
@@ -327,7 +328,12 @@ esp_err_t room_scenario_clear(void)
     if (err != ESP_OK) {
         return err;
     }
-    memset(s_scenarios, 0, sizeof(s_scenarios));
+    for (size_t i = 0; i < ROOM_SCENARIO_MAX_SCENARIOS; ++i) {
+        memset(&s_scenarios[i], 0, sizeof(s_scenarios[i]));
+        if ((i % 4U) == 3U) {
+            vTaskDelay(1);
+        }
+    }
     s_generation++;
     room_scenario_unlock();
     return ESP_OK;

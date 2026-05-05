@@ -200,14 +200,24 @@ static size_t convert_pcm_to_output(const int16_t *in, size_t frames_in, const a
     return out_frames;
 }
 
-static void apply_output_fade_in(int16_t *out, size_t frames, size_t fade_frames)
+static void apply_output_fade_in_at(int16_t *out,
+                                    size_t frames,
+                                    size_t fade_frames,
+                                    size_t start_frame)
 {
     if (!out || frames == 0 || fade_frames == 0) {
         return;
     }
-    size_t count = frames < fade_frames ? frames : fade_frames;
-    for (size_t frame = 0; frame < count; ++frame) {
-        int32_t gain = (int32_t)(frame + 1);
+
+    for (size_t frame = 0; frame < frames; ++frame) {
+        size_t absolute_frame = start_frame + frame;
+
+        if (absolute_frame >= fade_frames) {
+            break;
+        }
+
+        int32_t gain = (int32_t)(absolute_frame + 1);
+
         for (size_t ch = 0; ch < AUDIO_CHANNELS; ++ch) {
             size_t sample = frame * AUDIO_CHANNELS + ch;
             out[sample] = (int16_t)(((int32_t)out[sample] * gain) / (int32_t)fade_frames);
@@ -215,20 +225,53 @@ static void apply_output_fade_in(int16_t *out, size_t frames, size_t fade_frames
     }
 }
 
-static void apply_output_fade_out(int16_t *out, size_t frames, size_t fade_frames)
+static void apply_output_fade_out_at(int16_t *out,
+                                     size_t frames,
+                                     size_t fade_frames,
+                                     size_t start_frame,
+                                     size_t total_frames)
 {
-    if (!out || frames == 0 || fade_frames == 0) {
+    if (!out || frames == 0 || fade_frames == 0 || total_frames == 0) {
         return;
     }
-    size_t count = frames < fade_frames ? frames : fade_frames;
-    size_t start = frames - count;
-    for (size_t i = 0; i < count; ++i) {
-        int32_t gain = (int32_t)(count - i - 1);
+
+    size_t fade_start = total_frames > fade_frames ? total_frames - fade_frames : 0;
+
+    for (size_t frame = 0; frame < frames; ++frame) {
+        size_t absolute_frame = start_frame + frame;
+
+        if (absolute_frame < fade_start) {
+            continue;
+        }
+
+        if (absolute_frame >= total_frames) {
+            for (size_t ch = 0; ch < AUDIO_CHANNELS; ++ch) {
+                out[frame * AUDIO_CHANNELS + ch] = 0;
+            }
+            continue;
+        }
+
+        size_t frames_left = total_frames - absolute_frame - 1;
+        int32_t gain = (int32_t)(frames_left > fade_frames ? fade_frames : frames_left);
+
         for (size_t ch = 0; ch < AUDIO_CHANNELS; ++ch) {
-            size_t sample = (start + i) * AUDIO_CHANNELS + ch;
-            out[sample] = (int16_t)(((int32_t)out[sample] * gain) / (int32_t)count);
+            size_t sample = frame * AUDIO_CHANNELS + ch;
+            out[sample] = (int16_t)(((int32_t)out[sample] * gain) / (int32_t)fade_frames);
         }
     }
+}
+
+static size_t estimate_output_frames(size_t input_frames, const audio_info_t *info)
+{
+    if (!info || info->sample_rate == 0) {
+        return input_frames;
+    }
+
+    if (info->sample_rate == AUDIO_SAMPLE_RATE) {
+        return input_frames;
+    }
+
+    return (input_frames * AUDIO_SAMPLE_RATE) / info->sample_rate;
 }
 
 static bool wav_edge_fade_enabled(const audio_reader_ctx_t *ctx)
@@ -262,6 +305,10 @@ static bool decode_wav_to_output(FILE *f,
     size_t bytes_done = initial_bytes_done;
     size_t output_frames_done = 0;
     const uint32_t byte_rate = info->sample_rate * info->channels * (info->bits_per_sample / 8);
+    const size_t block_align = (size_t)info->channels * ((size_t)info->bits_per_sample / 8U);
+    const size_t remaining_data_bytes = data_size > initial_bytes_done ? data_size - initial_bytes_done : data_size;
+    const size_t total_input_frames = block_align > 0 ? remaining_data_bytes / block_align : 0;
+    const size_t total_output_frames = estimate_output_frames(total_input_frames, info);
     while ((bytes_read = fread(in_buf, 1, in_buf_frames * info->channels * sizeof(int16_t), f)) > 0) {
         if (audio_player_reader_stop_requested(ctx)) {
             break;
@@ -272,14 +319,26 @@ static bool decode_wav_to_output(FILE *f,
 
         size_t frames = bytes_read / (info->channels * sizeof(int16_t));
         size_t out_frames = convert_pcm_to_output(in_buf, frames, info, out_buf, gain);
-        bool final_chunk = bytes_done + bytes_read >= data_size;
         bool edge_fade = wav_edge_fade_enabled(ctx);
-        if (edge_fade && initial_bytes_done == 0 && output_frames_done < AUDIO_WAV_EDGE_FADE_FRAMES) {
-            size_t remaining_fade = AUDIO_WAV_EDGE_FADE_FRAMES - output_frames_done;
-            apply_output_fade_in(out_buf, out_frames, remaining_fade);
+        size_t chunk_start_frame = output_frames_done;
+
+        if (edge_fade && initial_bytes_done == 0) {
+            apply_output_fade_in_at(
+                out_buf,
+                out_frames,
+                AUDIO_WAV_EDGE_FADE_FRAMES,
+                chunk_start_frame
+            );
         }
-        if (edge_fade && final_chunk) {
-            apply_output_fade_out(out_buf, out_frames, AUDIO_WAV_EDGE_FADE_FRAMES);
+
+        if (edge_fade) {
+            apply_output_fade_out_at(
+                out_buf,
+                out_frames,
+                AUDIO_WAV_EDGE_FADE_FRAMES,
+                chunk_start_frame,
+                total_output_frames
+            );
         }
         size_t out_bytes = out_frames * AUDIO_CHANNELS * sizeof(int16_t);
         audio_mixer_channel_t mixer_ch = ctx->cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ?

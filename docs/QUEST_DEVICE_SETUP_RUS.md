@@ -1,157 +1,114 @@
-# Настройка Quest Devices
+# Quest Device setup
 
-Quest Device - это сохраненное описание возможностей физического MQTT-клиента
-или встроенного сервиса. Устройство сообщает состояние по единому control
-contract, а Quest Device хранит команды и события, которые потом используются в
-сценариях комнаты.
+Quest Device is the saved SceneHub-side description of one physical client or
+one built-in system service. It stores commands and events that Room Scenarios
+can use through `DEVICE_COMMAND` and `WAIT_DEVICE_EVENT`.
 
-## Базовая идея
+## Model
 
-```text
-физический клиент -> heartbeat/status/diag/result
-Quest Device      -> commands/events
-Room Scenario     -> использует commands/events
-```
+Physical clients talk through the Device Control Contract:
 
-В устройстве не нужно собирать сценарий квеста. Устройство может иметь локальную
-логику, но для панели оно должно показать:
+- telemetry: `heartbeat`, `status`, `diag`;
+- command result: `result`;
+- runtime event: `event`;
+- command receive topic: `cp/v1/dev/{client_id}/control/command`.
 
-- какие команды можно отправить;
-- какие события оно может прислать;
-- какой физический `client_id` с ним связан.
+Quest Device stores only SceneHub-native command/event capabilities. It does not
+store arbitrary `topic + payload` commands.
 
-## Создание устройства
+## Command
 
-![Quest Device setup](Pics/devices_setup.jpg)
-
-1. Откройте `/gm`.
-2. Войдите как admin.
-3. Перейдите в `Device Setup`.
-4. Нажмите `Add device`.
-5. Заполните:
-   - `Device name` - понятное имя для оператора;
-   - `Physical client ID` - MQTT client id из `Observed`;
-   - `Enabled` - включено ли устройство.
-6. Добавьте команды и события вручную или через discovery.
-7. Нажмите `Save device`.
-
-## Discovery через Get Config
-
-Если физический клиент поддерживает `describe_interface`:
-
-1. Выберите физический клиент.
-2. Нажмите `Get config`.
-3. Панель отправит команду `describe_interface`.
-4. Клиент должен ответить в `result.data.quest_interface`.
-5. Проверьте импортируемые команды/события.
-6. Подтвердите импорт.
-7. Сохраните Quest Device.
-
-Discovery не выполняется автоматически в каждом heartbeat/status. Это сделано
-специально, чтобы не гонять большие payload-ы постоянно.
-
-## Команды
-
-Минимальная команда:
+Minimal command:
 
 ```json
 {
-  "id": "open_door",
-  "label": "Open door",
-  "kind": "mqtt_publish",
-  "topic": "quest/relay_room_2/cmd/open_door",
-  "payload": "1",
-  "button_enabled": true,
-  "dangerous": false
+  "id": "relay_1_pulse",
+  "label": "Relay 1 pulse",
+  "capability": "relay",
+  "command": "relay.pulse",
+  "default_args": {
+    "channel": 1,
+    "duration_ms": 1000
+  },
+  "policy": {
+    "manual_allowed": true,
+    "scenario_allowed": true,
+    "requires_confirmation": false,
+    "result_required": true,
+    "timeout_ms": 3000,
+    "danger_level": "normal"
+  },
+  "args_schema": [
+    {
+      "key": "channel",
+      "label": "Channel",
+      "type": "number",
+      "optional": false
+    }
+  ]
 }
 ```
 
-Поля:
+Fields:
 
-- `id` - стабильный id команды внутри устройства;
-- `label` - имя в интерфейсе;
-- `kind` - сейчас обычно `mqtt_publish`;
-- `topic` - куда публиковать;
-- `payload` - что публиковать;
-- `button_enabled` - показывать ли команду справа как ручную кнопку;
-- `dangerous` - выделить команду как опасную.
+- `id`: stable command id inside this Quest Device.
+- `label`: operator-facing label.
+- `capability`: UI/grouping capability, for example `relay`.
+- `command`: command name sent in the command envelope, for example
+  `relay.pulse`.
+- `default_args`: optional default args object merged with scenario params.
+- `policy.manual_allowed`: show this command as a manual GM button.
+- `policy.scenario_allowed`: allow this command from Room Scenarios.
+- `policy.requires_confirmation`: require confirmation in UI.
+- `policy.result_required`: command should produce a terminal `result`.
+- `policy.timeout_ms`: expected result timeout.
+- `policy.danger_level`: operator risk marker, usually `normal`.
+- `args_schema`: editable argument definitions for UI and scenarios.
 
-## События
+## Event
 
-Минимальное событие:
+Minimal event:
 
 ```json
 {
-  "id": "drawer_1_opened",
-  "label": "Drawer 1 opened",
-  "topic": "quest/relay_room_2/event/drawer_1",
-  "payload": "opened",
-  "event_type": "drawer_1_opened"
+  "id": "input_1_pressed",
+  "label": "Input 1 pressed",
+  "capability": "input",
+  "event": "input.pressed",
+  "match": {
+    "channel": 1
+  }
 }
 ```
 
-Поля:
+Fields:
 
-- `id` - стабильный id события внутри устройства;
-- `label` - имя в интерфейсе;
-- `topic` - MQTT topic, который слушает брокер;
-- `payload` - ожидаемый payload; пустое значение означает любой payload;
-- `event_type` - тип события для runtime.
+- `id`: stable event id inside this Quest Device.
+- `label`: operator-facing label.
+- `capability`: UI/grouping capability, for example `input`.
+- `event`: event name received from the device.
+- `match`: optional argument filter reserved by the contract.
 
-## Ручные кнопки
+At runtime, `WAIT_DEVICE_EVENT` currently waits on the event name and the
+Quest Device `client_id`. Argument-level `match` is stored for the contract and
+UI, and should be used by later matching logic when needed.
 
-Команды с `button_enabled=true` появляются в правом сайдбаре GM panel.
+## System Audio
 
-Это нужно для одиночных действий:
+`system_audio` is a built-in Quest Device. It uses the same command/event model:
 
-- открыть замок;
-- сбросить локальную головоломку;
-- остановить звук;
-- вручную включить экран.
+- commands: `audio.play`, `audio.stop`, `audio.pause`, `audio.resume`,
+  `audio.set_volume`;
+- events: `audio_finished`, `playback_failed`.
 
-Ручные кнопки не заменяют сценарий. Они нужны для оператора и сервисных действий.
+## Storage
 
-## Health
-
-Статус берется не из Quest Device, а из физического клиента:
-
-- `heartbeat` - жив ли клиент;
-- `status.health` - `ok`, `degraded`, `fault`;
-- `diag` - диагностические ошибки;
-- `result` - ответы на control-команды.
-
-Если сохраненный Quest Device ссылается на `client_id`, но свежей телеметрии нет,
-устройство считается offline, а комната получает критическую ошибку.
-
-## Сохранение
-
-Quest Devices сохраняются в:
+Quest Devices are stored at:
 
 ```text
 /sdcard/quest/quest_devices.json
 ```
 
-Через UI доступны:
-
-- save/load на SD;
-- export/import JSON;
-- CRUD устройства.
-
-## Практический пример
-
-Реле второй комнаты:
-
-- имя: `Room 2 relay`;
-- physical client: `relay_room_2`;
-- команды:
-  - `open_door`;
-  - `close_door`;
-  - `open_drawer_1`;
-  - `open_drawer_2`;
-  - `tv_on`;
-- события:
-  - `door_opened`;
-  - `drawer_1_opened`;
-  - `drawer_2_opened`.
-
-После сохранения эти команды и события доступны в Scenario Builder.
+Import rejects old command/event shapes that contain `kind`, `topic`, `payload`,
+`action`, `button_enabled`, `dangerous`, `result_required`, `timeout_ms`,
+`params_schema`, or `event_type`.

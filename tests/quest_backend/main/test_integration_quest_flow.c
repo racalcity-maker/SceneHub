@@ -72,15 +72,13 @@ static void flow_add_relay_device(void)
     device.event_count = 2;
     flow_copy(device.events[0].id, sizeof(device.events[0].id), "door_opened");
     flow_copy(device.events[0].label, sizeof(device.events[0].label), "Door opened");
-    flow_copy(device.events[0].topic, sizeof(device.events[0].topic), "quest/relay/event");
-    flow_copy(device.events[0].payload, sizeof(device.events[0].payload), "door_opened");
-    flow_copy(device.events[0].event_type, sizeof(device.events[0].event_type), "door_opened");
+    flow_copy(device.events[0].capability, sizeof(device.events[0].capability), "input");
+    flow_copy(device.events[0].event, sizeof(device.events[0].event), "door_opened");
 
     flow_copy(device.events[1].id, sizeof(device.events[1].id), "drawer_opened");
     flow_copy(device.events[1].label, sizeof(device.events[1].label), "Drawer opened");
-    flow_copy(device.events[1].topic, sizeof(device.events[1].topic), "quest/relay/event");
-    flow_copy(device.events[1].payload, sizeof(device.events[1].payload), "drawer_opened");
-    flow_copy(device.events[1].event_type, sizeof(device.events[1].event_type), "drawer_opened");
+    flow_copy(device.events[1].capability, sizeof(device.events[1].capability), "input");
+    flow_copy(device.events[1].event, sizeof(device.events[1].event), "drawer_opened");
 
     TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&device));
 }
@@ -222,20 +220,36 @@ static void flow_add_pack(void)
 static void flow_post_text_event(const char *payload)
 {
     event_bus_message_t message = {0};
-    message.type = EVENT_MQTT_MESSAGE;
-    message.payload_type = EVENT_BUS_PAYLOAD_TEXT;
-    flow_copy(message.topic, sizeof(message.topic), "quest/relay/event");
+    message.type = EVENT_DEVICE_CONTROL;
+    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
     flow_copy(message.payload, sizeof(message.payload), payload);
+    flow_copy(message.data.device_control.device_id,
+              sizeof(message.data.device_control.device_id),
+              "relay_client");
+    flow_copy(message.data.device_control.action_id,
+              sizeof(message.data.device_control.action_id),
+              payload);
+    flow_copy(message.data.device_control.source,
+              sizeof(message.data.device_control.source),
+              "event");
     TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_scenario_on_event(&message));
 }
 
 static esp_err_t flow_post_text_event_expect_err(const char *payload)
 {
     event_bus_message_t message = {0};
-    message.type = EVENT_MQTT_MESSAGE;
-    message.payload_type = EVENT_BUS_PAYLOAD_TEXT;
-    flow_copy(message.topic, sizeof(message.topic), "quest/relay/event");
+    message.type = EVENT_DEVICE_CONTROL;
+    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
     flow_copy(message.payload, sizeof(message.payload), payload);
+    flow_copy(message.data.device_control.device_id,
+              sizeof(message.data.device_control.device_id),
+              "relay_client");
+    flow_copy(message.data.device_control.action_id,
+              sizeof(message.data.device_control.action_id),
+              payload);
+    flow_copy(message.data.device_control.source,
+              sizeof(message.data.device_control.source),
+              "event");
     return gm_room_session_scenario_on_event(&message);
 }
 

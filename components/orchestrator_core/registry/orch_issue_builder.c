@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "scenehub_command_result.h"
 
 static void *orch_issue_alloc(size_t size)
 {
@@ -121,7 +122,8 @@ void orch_issue_builder_collect_devices(orch_registry_snapshot_t *snapshot)
                                              "Device diagnostics",
                                              ingest->diag_message[0] ? ingest->diag_message : "Device reported diagnostics event.");
             }
-            if (ingest->has_result && strcmp(ingest->result_status, "error") == 0) {
+            if (ingest->has_result &&
+                scenehub_command_result_is_failure(ingest->result_status)) {
                 orch_issue_builder_add_issue(snapshot,
                                              ORCH_ISSUE_SCOPE_DEVICE,
                                              ORCH_ISSUE_SEVERITY_WARNING,

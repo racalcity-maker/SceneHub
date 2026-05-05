@@ -112,15 +112,18 @@ class EmulatedDevice:
         else:
             self.capabilities = [str(item) for item in profile.get("capabilities", [])]
 
-        self.quest_interface = self._normalize_quest_interface(
-            cfg.get("quest_interface") or profile.get("quest_interface") or {}
+        self.device_description = self._normalize_device_description(
+            cfg.get("device_description") or profile.get("device_description") or {}
         )
-        if self.quest_interface and "describe_interface" not in self.capabilities:
+        if self.device_description and "describe_interface" not in self.capabilities:
             self.capabilities.append("describe_interface")
-        self._quest_commands_by_topic = self._index_quest_commands(self.quest_interface)
-        self._quest_events_by_id = {
+        self._commands_by_name: Dict[str, list[Dict[str, Any]]] = {}
+        for command in self.device_description.get("commands", []):
+            if isinstance(command, dict) and command.get("command"):
+                self._commands_by_name.setdefault(str(command.get("command")), []).append(command)
+        self._events_by_id = {
             str(event.get("id")): event
-            for event in self.quest_interface.get("events", [])
+            for event in self.device_description.get("events", [])
             if isinstance(event, dict) and event.get("id")
         }
 
@@ -145,10 +148,10 @@ class EmulatedDevice:
         self._keepalive = int(broker_cfg.get("keepalive", DEFAULT_KEEPALIVE))
 
     @staticmethod
-    def _normalize_quest_interface(raw: Any) -> Dict[str, Any]:
+    def _normalize_device_description(raw: Any) -> Dict[str, Any]:
         if not isinstance(raw, dict):
             return {}
-        def normalize_params_schema(value: Any) -> list[Dict[str, Any]]:
+        def normalize_args_schema(value: Any) -> list[Dict[str, Any]]:
             params: list[Dict[str, Any]] = []
             if not isinstance(value, list):
                 return params
@@ -173,19 +176,26 @@ class EmulatedDevice:
             if not isinstance(item, dict):
                 continue
             command_id = str(item.get("id") or "").strip()
-            command_topic = str(item.get("topic") or "").strip()
-            if not command_id or not command_topic:
+            command_name = str(item.get("command") or "").strip()
+            if not command_id or not command_name:
                 continue
+            policy = item.get("policy") if isinstance(item.get("policy"), dict) else {}
             commands.append(
                 {
                     "id": command_id,
                     "label": str(item.get("label") or command_id),
-                    "kind": str(item.get("kind") or "mqtt_publish"),
-                    "topic": command_topic,
-                    "payload": str(item.get("payload") or ""),
-                    "button_enabled": bool(item.get("button_enabled", True)),
-                    "dangerous": bool(item.get("dangerous", False)),
-                    "params_schema": normalize_params_schema(item.get("params_schema")),
+                    "capability": str(item.get("capability") or command_name.split(".", 1)[0] or "node"),
+                    "command": command_name,
+                    "default_args": item.get("default_args") if isinstance(item.get("default_args"), dict) else {},
+                    "policy": {
+                        "manual_allowed": bool(policy.get("manual_allowed", True)),
+                        "scenario_allowed": bool(policy.get("scenario_allowed", True)),
+                        "requires_confirmation": bool(policy.get("requires_confirmation", False)),
+                        "result_required": bool(policy.get("result_required", True)),
+                        "timeout_ms": int(policy.get("timeout_ms") or 3000),
+                        "danger_level": str(policy.get("danger_level") or "normal"),
+                    },
+                    "args_schema": normalize_args_schema(item.get("args_schema")),
                     "emit_event_id": str(item.get("emit_event_id") or "").strip(),
                     "emit_delay_ms": int(item.get("emit_delay_ms") or 0),
                 }
@@ -196,34 +206,23 @@ class EmulatedDevice:
             if not isinstance(item, dict):
                 continue
             event_id = str(item.get("id") or "").strip()
-            event_topic = str(item.get("topic") or "").strip()
-            if not event_id or not event_topic:
+            event_name = str(item.get("event") or "").strip()
+            if not event_id or not event_name:
                 continue
+            match = item.get("match") if isinstance(item.get("match"), dict) else {}
             events.append(
                 {
                     "id": event_id,
                     "label": str(item.get("label") or event_id),
-                    "topic": event_topic,
-                    "payload": str(item.get("payload") or ""),
-                    "event_type": str(item.get("event_type") or event_id),
+                    "capability": str(item.get("capability") or event_name.split(".", 1)[0] or "event"),
+                    "event": event_name,
+                    "match": match,
                 }
             )
 
         if not commands and not events:
             return {}
         return {"version": int(raw.get("version") or 1), "commands": commands, "events": events}
-
-    @staticmethod
-    def _index_quest_commands(quest_interface: Dict[str, Any]) -> Dict[str, list[Dict[str, Any]]]:
-        indexed: Dict[str, list[Dict[str, Any]]] = {}
-        for command in quest_interface.get("commands", []):
-            if not isinstance(command, dict):
-                continue
-            command_topic = str(command.get("topic") or "").strip()
-            if not command_topic:
-                continue
-            indexed.setdefault(command_topic, []).append(command)
-        return indexed
 
     def start(self) -> None:
         LOG.info("[%s] connecting to %s:%s", self.device_id, self._host, self._port)
@@ -244,14 +243,9 @@ class EmulatedDevice:
     def _subscribe_topics(self) -> None:
         for t in (
             topic(self.device_id, "control/command"),
-            topic(self.device_id, "cmd"),
             topic("all", "control/command"),
-            topic("all", "cmd"),
         ):
             self._mqtt.subscribe(t, qos=0)
-        for t in self._quest_commands_by_topic:
-            self._mqtt.subscribe(t, qos=0)
-            LOG.info("[%s] subscribed quest command topic %s", self.device_id, t)
 
     def _on_connect(self, client: mqtt.Client, _userdata: Any, _flags: Dict[str, Any], rc: int) -> None:
         if rc != 0:
@@ -279,17 +273,13 @@ class EmulatedDevice:
             LOG.warning("[%s] invalid command payload encoding", self.device_id)
             return
 
-        if message.topic in self._quest_commands_by_topic:
-            self._handle_quest_command_message(message.topic, payload_raw)
-            return
-
         try:
             payload = json.loads(payload_raw)
         except json.JSONDecodeError:
             self.publish_result(
                 request_id=f"invalid-{now_ms()}",
                 command="unknown",
-                status="error",
+                status="rejected",
                 error_code="invalid_request",
                 message="Command payload is not valid JSON.",
             )
@@ -299,7 +289,7 @@ class EmulatedDevice:
             self.publish_result(
                 request_id=f"invalid-{now_ms()}",
                 command="unknown",
-                status="error",
+                status="rejected",
                 error_code="invalid_request",
                 message="Command payload must be a JSON object.",
             )
@@ -384,9 +374,37 @@ class EmulatedDevice:
             "error_code": error_code,
             "message": message,
         }
+        if error_code:
+            payload["error"] = {"code": error_code, "message": message}
         if data is not None:
             payload["data"] = data
         self._publish("result", payload)
+
+    @staticmethod
+    def _merge_args(default_args: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        if isinstance(default_args, dict):
+            merged.update(default_args)
+        merged.update(args)
+        return merged
+
+    @staticmethod
+    def _default_args_match(default_args: Any, args: Dict[str, Any]) -> bool:
+        if not isinstance(default_args, dict) or not default_args:
+            return False
+        for key, value in default_args.items():
+            if key in args and args[key] != value:
+                return False
+        return True
+
+    def _match_configured_command(self, command_name: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        candidates = self._commands_by_name.get(command_name, [])
+        if not candidates:
+            return None
+        for candidate in candidates:
+            if self._default_args_match(candidate.get("default_args"), args):
+                return candidate
+        return candidates[0]
 
     def _handle_command(self, payload: Dict[str, Any]) -> None:
         request_id = str(payload.get("request_id") or f"req-{now_ms()}")
@@ -399,17 +417,18 @@ class EmulatedDevice:
         if self.response_delay_ms > 0:
             time.sleep(self.response_delay_ms / 1000.0)
 
-        if command == "refresh_status":
+        if command == "node.get_status":
             self.publish_status()
-            self.publish_result(request_id, command, "ok")
+            self.publish_result(request_id, command, "done")
             return
 
-        if command == "reboot":
+        if command == "node.reboot":
             self.publish_result(request_id, command, "accepted")
             self._fake_reboot()
+            self.publish_result(request_id, command, "done")
             return
 
-        if command == "reset_runtime":
+        if command == "node.reset_runtime":
             with self._state_lock:
                 self.runtime.runtime_active = False
                 self.runtime.state = "idle"
@@ -417,17 +436,22 @@ class EmulatedDevice:
                 self.force_fault = False
                 self.force_degraded = False
             self.publish_status()
-            self.publish_result(request_id, command, "ok")
+            self.publish_result(request_id, command, "done")
             return
 
-        if command == "apply_preset":
+        if command == "node.identify":
+            LOG.info("[%s] identify requested args=%s", self.device_id, args)
+            self.publish_result(request_id, command, "done")
+            return
+
+        if command == "node.apply_preset":
             preset_id = str(args.get("preset_id") or "").strip()
             if not preset_id:
-                self.publish_result(request_id, command, "error", "invalid_request", "preset_id is required")
+                self.publish_result(request_id, command, "rejected", "invalid_args", "preset_id is required")
                 return
             preset = self.presets.get(preset_id)
             if not preset:
-                self.publish_result(request_id, command, "error", "not_supported", f"Preset '{preset_id}' not found")
+                self.publish_result(request_id, command, "rejected", "not_supported", f"Preset '{preset_id}' not found")
                 return
             with self._state_lock:
                 self.runtime.preset = preset_id
@@ -436,47 +460,44 @@ class EmulatedDevice:
                 self.runtime.health = str(preset.get("health", self.runtime.health))
                 self.runtime.runtime_active = bool(preset.get("runtime_active", self.runtime.runtime_active))
             self.publish_status()
-            self.publish_result(request_id, command, "ok")
+            self.publish_result(request_id, command, "done")
             return
 
         if command == "describe_interface":
-            if not self.quest_interface:
-                LOG.warning("[%s] describe_interface requested but no quest_interface configured", self.device_id)
-                self.publish_result(request_id, command, "error", "not_supported", "No quest interface configured")
+            if not self.device_description:
+                LOG.warning("[%s] describe_interface requested but no device_description configured", self.device_id)
+                self.publish_result(request_id, command, "rejected", "not_supported", "No device description configured")
                 return
             LOG.info(
                 "[%s] describe_interface returning %d command(s), %d event(s)",
                 self.device_id,
-                len(self.quest_interface.get("commands", [])),
-                len(self.quest_interface.get("events", [])),
+                len(self.device_description.get("commands", [])),
+                len(self.device_description.get("events", [])),
             )
             self.publish_result(
                 request_id,
                 command,
-                "ok",
-                data={"quest_interface": self.quest_interface},
+                "done",
+                data={"device_description": self.device_description},
             )
             return
 
-        self.publish_result(request_id, command or "unknown", "error", "not_supported", "Unsupported command")
-
-    def _handle_quest_command_message(self, command_topic: str, payload_raw: str) -> None:
-        commands = self._quest_commands_by_topic.get(command_topic, [])
-        matched = None
-        for command in commands:
-            expected_payload = str(command.get("payload") or "")
-            if not expected_payload or expected_payload == payload_raw:
-                matched = command
-                break
+        matched = self._match_configured_command(command, args)
         if not matched:
-            LOG.info("[%s] ignored quest command topic=%s payload=%s", self.device_id, command_topic, payload_raw)
+            self.publish_result(request_id, command or "unknown", "rejected", "not_supported", "Unsupported command")
             return
 
-        command_id = str(matched.get("id") or command_topic)
-        LOG.info("[%s] quest command %s topic=%s payload=%s", self.device_id, command_id, command_topic, payload_raw)
+        policy = matched.get("policy") if isinstance(matched.get("policy"), dict) else {}
+        if policy.get("scenario_allowed", True) is False:
+            self.publish_result(request_id, command, "rejected", "not_allowed", "Command is disabled for scenario control")
+            return
+
+        command_id = str(matched.get("id") or command)
+        effective_args = self._merge_args(matched.get("default_args"), args)
+        LOG.info("[%s] device command %s args=%s", self.device_id, command, effective_args)
         with self._state_lock:
             self.runtime.runtime_active = True
-            self.runtime.state = f"quest:{command_id}"
+            self.runtime.state = f"command:{command_id}"
         self.publish_status()
 
         emit_event_id = str(matched.get("emit_event_id") or "").strip()
@@ -484,24 +505,36 @@ class EmulatedDevice:
             delay_ms = int(matched.get("emit_delay_ms") or 0)
             if delay_ms > 0:
                 time.sleep(delay_ms / 1000.0)
-            self.publish_quest_event(emit_event_id)
+            self.publish_device_event(emit_event_id)
+        self.publish_result(request_id, command, "done")
 
-    def publish_quest_event(self, event_id: str, payload_override: Optional[str] = None) -> bool:
-        event = self._quest_events_by_id.get(event_id)
+    def publish_device_event(self, event_id: str, payload_override: Optional[str] = None) -> bool:
+        event = self._events_by_id.get(event_id)
         if not event:
             return False
-        payload = str(event.get("payload") or "") if payload_override is None else str(payload_override)
-        event_topic = str(event.get("topic") or "")
-        if not event_topic:
-            return False
+        args = dict(event.get("match") or {})
+        if payload_override is not None:
+            try:
+                parsed = json.loads(payload_override)
+                if isinstance(parsed, dict):
+                    args.update(parsed)
+                else:
+                    args["value"] = parsed
+            except json.JSONDecodeError:
+                args["value"] = payload_override
         if self.silent_mode or not self.runtime.online or not self._connected:
             return False
-        self._mqtt.publish(event_topic, payload, qos=0, retain=False)
+        payload = {
+            "ts_ms": now_ms(),
+            "event": str(event.get("event") or event_id),
+            "args": args,
+        }
+        self._mqtt.publish(topic(self.device_id, "event"), json.dumps(payload, ensure_ascii=False, separators=(",", ":")), qos=0, retain=False)
         with self._state_lock:
             self.runtime.runtime_active = False
             self.runtime.state = f"event:{event_id}"
         self.publish_status()
-        LOG.info("[%s] quest event %s topic=%s payload=%s", self.device_id, event_id, event_topic, payload)
+        LOG.info("[%s] device event %s payload=%s", self.device_id, event_id, payload)
         return True
 
     def _fake_reboot(self) -> None:
@@ -561,8 +594,8 @@ class EmulatedDevice:
                 "preset": self.runtime.preset,
                 "boot_id": self.runtime.boot_id,
                 "uptime_ms": self._runtime_uptime_ms(),
-                "quest_commands": len(self.quest_interface.get("commands", [])),
-                "quest_events": len(self.quest_interface.get("events", [])),
+                "commands": len(self.device_description.get("commands", [])),
+                "events": len(self.device_description.get("events", [])),
             }
 
     def set_fault(self, enabled: bool) -> None:
@@ -790,11 +823,11 @@ def _run_console(devices: list[EmulatedDevice]) -> None:
                 continue
             payload_override = parts[3] if len(parts) >= 4 else None
             for dev in targets:
-                ok = dev.publish_quest_event(parts[2], payload_override)
+                ok = dev.publish_device_event(parts[2], payload_override)
                 if ok:
-                    print(f"{dev.device_id}: quest event {parts[2]} published")
+                    print(f"{dev.device_id}: device event {parts[2]} published")
                 else:
-                    print(f"{dev.device_id}: quest event '{parts[2]}' not found or not published")
+                    print(f"{dev.device_id}: device event '{parts[2]}' not found or not published")
             continue
 
         print("unknown command; type 'help'")

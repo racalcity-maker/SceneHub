@@ -122,10 +122,15 @@ typedef struct {
     bool active;
     room_scenario_branch_type_t type;
     bool required_for_completion;
+    uint16_t priority;
     uint32_t cooldown_ms;
     uint32_t cooldown_until_ms;
+    uint32_t max_fire_count;
+    uint32_t fire_count;
     bool run_once;
     bool fired_once;
+    room_scenario_reentry_mode_t reentry_mode;
+    bool pending_trigger;
     uint16_t step_start_index;
     uint16_t step_count;
     uint16_t current_step_index;

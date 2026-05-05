@@ -14,13 +14,13 @@
 #define AUDIO_MIXER_FRAME_BYTES (AUDIO_MIXER_CHANNELS * sizeof(int16_t))
 #define AUDIO_MIXER_CHUNK_FRAMES 256
 #define AUDIO_MIXER_CHUNK_BYTES (AUDIO_MIXER_CHUNK_FRAMES * AUDIO_MIXER_FRAME_BYTES)
-#define AUDIO_MIXER_STREAM_BYTES (32 * 1024)
+#define AUDIO_MIXER_STREAM_BYTES (128 * 1024)
 #define AUDIO_MIXER_TRIGGER_BYTES AUDIO_MIXER_FRAME_BYTES
 #define AUDIO_MIXER_WRITE_TIMEOUT_MS 100
 #define AUDIO_MIXER_IDLE_WAIT_MS 5
 #define AUDIO_MIXER_FADE_IN_MS 12
 #define AUDIO_MIXER_FADE_IN_FRAMES ((AUDIO_MIXER_SAMPLE_RATE * AUDIO_MIXER_FADE_IN_MS) / 1000)
-#define AUDIO_MIXER_PREROLL_FRAMES 1024
+#define AUDIO_MIXER_PREROLL_FRAMES 4096
 #define AUDIO_MIXER_PREROLL_BYTES (AUDIO_MIXER_PREROLL_FRAMES * AUDIO_MIXER_FRAME_BYTES)
 #define AUDIO_MIXER_IDLE_SILENCE_MS 35
 
@@ -39,6 +39,9 @@ static TaskHandle_t s_task = NULL;
 static bool s_active[AUDIO_MIXER_CHANNEL_COUNT];
 static bool s_primed[AUDIO_MIXER_CHANNEL_COUNT];
 static uint16_t s_fade_in_remaining[AUDIO_MIXER_CHANNEL_COUNT];
+static uint32_t s_fade_out_remaining[AUDIO_MIXER_CHANNEL_COUNT];
+static uint32_t s_fade_out_total[AUDIO_MIXER_CHANNEL_COUNT];
+static bool s_fade_out_muted[AUDIO_MIXER_CHANNEL_COUNT];
 static bool s_output_dirty = false;
 
 static bool mixer_lock(void)
@@ -101,15 +104,21 @@ static int16_t clamp_i16(int32_t value)
 static size_t receive_pcm(audio_mixer_channel_t channel, int16_t *out, size_t bytes)
 {
     StreamBufferHandle_t stream = mixer_stream(channel);
+
     if (!stream || !out || bytes == 0) {
         return 0;
     }
+
+    memset(out, 0, bytes);
+
     size_t got = xStreamBufferReceive(stream, out, bytes, 0);
     got -= got % AUDIO_MIXER_FRAME_BYTES;
-    if (got < bytes) {
-        memset(((uint8_t *)out) + got, 0, bytes - got);
+
+    if (got == 0) {
+        return 0;
     }
-    return got;
+
+    return bytes;
 }
 
 static bool channel_should_read(audio_mixer_channel_t channel)
@@ -160,6 +169,54 @@ static void apply_fade_in(audio_mixer_channel_t channel, int16_t *pcm, size_t by
     s_fade_in_remaining[channel] = remaining;
 }
 
+static bool apply_fade_out(audio_mixer_channel_t channel, int16_t *pcm, size_t bytes)
+{
+    if (channel < 0 || channel >= AUDIO_MIXER_CHANNEL_COUNT || !pcm || bytes == 0) {
+        return false;
+    }
+
+    if (s_fade_out_muted[channel]) {
+        memset(pcm, 0, bytes);
+        return false;
+    }
+
+    uint32_t remaining = s_fade_out_remaining[channel];
+    uint32_t total = s_fade_out_total[channel];
+
+    if (remaining == 0 || total == 0) {
+        return false;
+    }
+
+    size_t frames = bytes / AUDIO_MIXER_FRAME_BYTES;
+    size_t frame = 0;
+
+    for (; frame < frames && remaining > 0; ++frame) {
+        for (size_t ch = 0; ch < AUDIO_MIXER_CHANNELS; ++ch) {
+            size_t sample_index = frame * AUDIO_MIXER_CHANNELS + ch;
+            int32_t scaled = ((int32_t)pcm[sample_index] * (int32_t)remaining) / (int32_t)total;
+            pcm[sample_index] = (int16_t)scaled;
+        }
+
+        --remaining;
+    }
+
+    s_fade_out_remaining[channel] = remaining;
+
+    if (remaining == 0) {
+        s_fade_out_muted[channel] = true;
+
+        if (frame < frames) {
+            memset(
+                &pcm[frame * AUDIO_MIXER_CHANNELS],
+                0,
+                bytes - frame * AUDIO_MIXER_FRAME_BYTES
+            );
+        }
+    }
+
+    return false;
+}
+
 static void audio_mixer_task(void *param)
 {
     (void)param;
@@ -184,11 +241,35 @@ static void audio_mixer_task(void *param)
         if (fx_bytes == 0) {
             memset(s_fx_pcm, 0, sizeof(s_fx_pcm));
         }
+        size_t bg_process_bytes = bg_bytes;
+        if (audio_player_mixer_fade_out_active(AUDIO_MIXER_CHANNEL_BACKGROUND) &&
+            bg_process_bytes == 0) {
+            bg_process_bytes = sizeof(s_bg_pcm);
+            memset(s_bg_pcm, 0, sizeof(s_bg_pcm));
+        }
+
         apply_fade_in(AUDIO_MIXER_CHANNEL_BACKGROUND, s_bg_pcm, bg_bytes);
+        apply_fade_out(AUDIO_MIXER_CHANNEL_BACKGROUND, s_bg_pcm, bg_process_bytes);
+
         apply_fade_in(AUDIO_MIXER_CHANNEL_EFFECT, s_fx_pcm, fx_bytes);
-        size_t out_bytes = bg_bytes > fx_bytes ? bg_bytes : fx_bytes;
+
+        size_t out_bytes = bg_process_bytes > fx_bytes ? bg_process_bytes : fx_bytes;
+
         if (out_bytes == 0) {
-            vTaskDelay(ticks_at_least_one(AUDIO_MIXER_IDLE_WAIT_MS));
+            memset(s_mixed_pcm, 0, sizeof(s_mixed_pcm));
+
+            size_t written = 0;
+            esp_err_t err = audio_player_output_write(s_mixed_pcm,
+                                                    sizeof(s_mixed_pcm),
+                                                    &written,
+                                                    pdMS_TO_TICKS(100));
+
+            if (err == ESP_OK && written > 0) {
+                s_output_dirty = true;
+            } else {
+                vTaskDelay(ticks_at_least_one(AUDIO_MIXER_IDLE_WAIT_MS));
+            }
+
             continue;
         }
 
@@ -199,13 +280,20 @@ static void audio_mixer_task(void *param)
 
         size_t written = 0;
         esp_err_t err = audio_player_output_write(s_mixed_pcm,
-                                                  out_bytes,
-                                                  &written,
-                                                  pdMS_TO_TICKS(1000));
+                                                out_bytes,
+                                                &written,
+                                                pdMS_TO_TICKS(1000));
+
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "i2s write failed: %s", esp_err_to_name(err));
+            audio_player_output_reset();
             vTaskDelay(ticks_at_least_one(AUDIO_MIXER_IDLE_WAIT_MS));
-        } else if (written == 0) {
+        } else if (written != out_bytes) {
+            ESP_LOGW(TAG,
+                    "i2s partial write: written=%u expected=%u",
+                    (unsigned)written,
+                    (unsigned)out_bytes);
+            audio_player_output_reset();
             vTaskDelay(ticks_at_least_one(AUDIO_MIXER_IDLE_WAIT_MS));
         } else {
             s_output_dirty = true;
@@ -270,6 +358,9 @@ void audio_player_mixer_start_stream(audio_mixer_channel_t channel)
         s_active[channel] = true;
         s_primed[channel] = false;
         s_fade_in_remaining[channel] = AUDIO_MIXER_FADE_IN_FRAMES;
+        s_fade_out_total[channel] = 0;
+        s_fade_out_remaining[channel] = 0;
+        s_fade_out_muted[channel] = false;
         mixer_unlock();
     }
 }
@@ -287,6 +378,52 @@ void audio_player_mixer_finish_stream(audio_mixer_channel_t channel)
     }
 }
 
+void audio_player_mixer_fade_out_stream(audio_mixer_channel_t channel, int duration_ms)
+{
+    StreamBufferHandle_t stream = mixer_stream(channel);
+
+    if (!stream) {
+        return;
+    }
+
+    if (duration_ms <= 0) {
+        audio_player_mixer_stop_stream(channel);
+        return;
+    }
+
+    uint32_t frames = ((uint32_t)AUDIO_MIXER_SAMPLE_RATE * (uint32_t)duration_ms) / 1000;
+
+    if (frames == 0) {
+        frames = 1;
+    }
+
+    if (mixer_lock()) {
+        if (s_active[channel] || xStreamBufferBytesAvailable(stream) > 0) {
+            s_fade_out_total[channel] = frames;
+            s_fade_out_remaining[channel] = frames;
+            s_fade_out_muted[channel] = false;
+        }
+
+        mixer_unlock();
+    }
+}
+
+bool audio_player_mixer_fade_out_active(audio_mixer_channel_t channel)
+{
+    bool active = false;
+
+    if (channel < 0 || channel >= AUDIO_MIXER_CHANNEL_COUNT) {
+        return false;
+    }
+
+    if (mixer_lock()) {
+        active = s_fade_out_remaining[channel] > 0;
+        mixer_unlock();
+    }
+
+    return active;
+}
+
 void audio_player_mixer_stop_stream(audio_mixer_channel_t channel)
 {
     StreamBufferHandle_t stream = mixer_stream(channel);
@@ -297,6 +434,9 @@ void audio_player_mixer_stop_stream(audio_mixer_channel_t channel)
         s_active[channel] = false;
         s_primed[channel] = false;
         s_fade_in_remaining[channel] = 0;
+        s_fade_out_total[channel] = 0;
+        s_fade_out_remaining[channel] = 0;
+        s_fade_out_muted[channel] = false;
         xStreamBufferReset(stream);
         mixer_unlock();
     }
@@ -311,6 +451,9 @@ void audio_player_mixer_stop_all(void)
         s_active[i] = false;
         s_primed[i] = false;
         s_fade_in_remaining[i] = 0;
+        s_fade_out_total[i] = 0;
+        s_fade_out_remaining[i] = 0;
+        s_fade_out_muted[i] = false;
         if (s_streams[i]) {
             xStreamBufferReset(s_streams[i]);
         }

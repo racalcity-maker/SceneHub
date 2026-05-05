@@ -2,6 +2,7 @@
 
 #include "unity.h"
 
+#include "cJSON.h"
 #include "quest_device.h"
 
 static void qd_test_set(char *dst, size_t dst_len, const char *src)
@@ -31,25 +32,30 @@ static void qd_test_fill_device(quest_device_t *device,
 
 static void qd_test_fill_command(quest_device_command_t *command,
                                  const char *id,
-                                 const char *topic)
+                                 const char *command_name)
 {
     memset(command, 0, sizeof(*command));
     qd_test_set(command->id, sizeof(command->id), id);
     qd_test_set(command->label, sizeof(command->label), id);
-    qd_test_set(command->kind, sizeof(command->kind), "mqtt_publish");
-    qd_test_set(command->topic, sizeof(command->topic), topic);
-    command->button_enabled = true;
+    qd_test_set(command->capability, sizeof(command->capability), "relay");
+    qd_test_set(command->command, sizeof(command->command), command_name);
+    command->manual_allowed = true;
+    command->scenario_allowed = true;
+    command->requires_confirmation = false;
+    command->result_required = true;
+    command->timeout_ms = QUEST_DEVICE_COMMAND_TIMEOUT_DEFAULT_MS;
+    qd_test_set(command->danger_level, sizeof(command->danger_level), "normal");
 }
 
 static void qd_test_fill_event(quest_device_event_t *event,
                                const char *id,
-                               const char *topic)
+                               const char *event_name)
 {
     memset(event, 0, sizeof(*event));
     qd_test_set(event->id, sizeof(event->id), id);
     qd_test_set(event->label, sizeof(event->label), id);
-    qd_test_set(event->topic, sizeof(event->topic), topic);
-    qd_test_set(event->event_type, sizeof(event->event_type), id);
+    qd_test_set(event->capability, sizeof(event->capability), "input");
+    qd_test_set(event->event, sizeof(event->event), event_name);
 }
 
 static void test_quest_device_rejects_duplicate_client_id(void)
@@ -108,7 +114,8 @@ static void test_system_audio_play_command_exposes_background_repeat_params(void
     qd_test_bootstrap();
 
     TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_AUDIO_ID, "play", &command));
-    TEST_ASSERT_EQUAL_STRING("internal_audio_play", command.kind);
+    TEST_ASSERT_EQUAL_STRING("audio", command.capability);
+    TEST_ASSERT_EQUAL_STRING("audio.play", command.command);
     TEST_ASSERT_EQUAL_UINT8(4, command.param_count);
     TEST_ASSERT_EQUAL_STRING("file", command.params[0].key);
     TEST_ASSERT_EQUAL(QUEST_DEVICE_COMMAND_PARAM_AUDIO_FILE_SELECT, command.params[0].type);
@@ -121,10 +128,49 @@ static void test_system_audio_play_command_exposes_background_repeat_params(void
     TEST_ASSERT_TRUE(command.params[3].optional);
 }
 
+static void test_quest_device_json_rejects_legacy_topic_payload_command(void)
+{
+    cJSON *root = cJSON_Parse("{\"id\":\"relay\",\"client_id\":\"node_1\",\"name\":\"Relay\","
+                              "\"commands\":[{\"id\":\"open\",\"label\":\"Open\","
+                              "\"topic\":\"quest/relay/cmd\",\"payload\":\"open\"}],"
+                              "\"events\":[]}");
+    quest_device_t device = {0};
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, quest_device_from_json(root, &device));
+    cJSON_Delete(root);
+}
+
+static void test_quest_device_json_accepts_command_event_contract(void)
+{
+    cJSON *root = cJSON_Parse("{\"id\":\"relay\",\"client_id\":\"node_1\",\"name\":\"Relay\","
+                              "\"commands\":[{\"id\":\"pulse\",\"label\":\"Pulse\","
+                              "\"capability\":\"relay\",\"command\":\"relay.pulse\",\"default_args\":{\"channel\":1},"
+                              "\"policy\":{\"manual_allowed\":true,\"scenario_allowed\":true,"
+                              "\"requires_confirmation\":false,\"result_required\":true,"
+                              "\"timeout_ms\":3000,\"danger_level\":\"normal\"},"
+                              "\"args_schema\":[{\"key\":\"channel\",\"label\":\"Channel\",\"type\":\"number\"}]}],"
+                              "\"events\":[{\"id\":\"pressed\",\"label\":\"Pressed\","
+                              "\"capability\":\"input\",\"event\":\"input.pressed\",\"match\":{\"channel\":1}}]}");
+    quest_device_t device = {0};
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_from_json(root, &device));
+    TEST_ASSERT_EQUAL_STRING("relay", device.commands[0].capability);
+    TEST_ASSERT_EQUAL_STRING("relay.pulse", device.commands[0].command);
+    TEST_ASSERT_TRUE(device.commands[0].manual_allowed);
+    TEST_ASSERT_TRUE(device.commands[0].scenario_allowed);
+    TEST_ASSERT_EQUAL_STRING("{\"channel\":1}", device.commands[0].default_args_json);
+    TEST_ASSERT_EQUAL_STRING("input", device.events[0].capability);
+    TEST_ASSERT_EQUAL_STRING("input.pressed", device.events[0].event);
+    TEST_ASSERT_EQUAL_STRING("{\"channel\":1}", device.events[0].match_json);
+    cJSON_Delete(root);
+}
+
 void register_quest_device_tests(void)
 {
     RUN_TEST(test_quest_device_rejects_duplicate_client_id);
     RUN_TEST(test_quest_device_rejects_duplicate_command_id);
     RUN_TEST(test_quest_device_rejects_duplicate_event_id);
     RUN_TEST(test_system_audio_play_command_exposes_background_repeat_params);
+    RUN_TEST(test_quest_device_json_rejects_legacy_topic_payload_command);
+    RUN_TEST(test_quest_device_json_accepts_command_event_contract);
 }

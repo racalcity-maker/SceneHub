@@ -34,6 +34,7 @@ typedef enum {
     DEVICE_CONTROL_TOPIC_STATUS,
     DEVICE_CONTROL_TOPIC_DIAG,
     DEVICE_CONTROL_TOPIC_RESULT,
+    DEVICE_CONTROL_TOPIC_EVENT,
 } device_control_topic_t;
 
 typedef struct {

@@ -3,6 +3,8 @@ set(GM_PANEL_PARTS
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_02_room_rendering.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_03_main_views.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_04_profiles_view.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05a_scenario_model.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05b_scenario_payloads.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05_scenario_builder.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_06_storage_and_render.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_07_loaders_and_runtime_actions.js
@@ -43,7 +45,12 @@ idf_component_register(
         "web_ui_gm_profile.c"
         "web_ui_gm_quest_device.c"
         "web_ui_gm_scenario.c"
+        "web_ui_gm_scenario_catalog.c"
+        "web_ui_gm_scenario_store.c"
         "orchestrator_api_view.c"
+        "orchestrator_api_view_activity.c"
+        "orchestrator_api_view_control_devices.c"
+        "orchestrator_api_view_room_scenarios.c"
         "web_ui_orchestrator.c"
         "web_ui_gm_timer.c"
         "web_ui_gm_hint.c"

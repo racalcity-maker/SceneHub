@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 
 #include "quest_common_utils.h"
+#include "scenehub_command_result.h"
 #include "event_bus.h"
 
 typedef struct {
@@ -98,6 +99,10 @@ static bool dci_parse_topic(const char *topic,
         *out_kind = DEVICE_CONTROL_TOPIC_RESULT;
         return true;
     }
+    if (dci_streq(tail, "event")) {
+        *out_kind = DEVICE_CONTROL_TOPIC_EVENT;
+        return true;
+    }
 
     return false;
 }
@@ -173,7 +178,7 @@ static void dci_post_control_event(const device_control_ingest_device_t *state)
                 state->result_request_id[0] ? state->result_request_id : state->result_command);
     quest_str_copy(msg.data.device_control.source,
                 sizeof(msg.data.device_control.source),
-                "result");
+                strcmp(state->result_status, "event") == 0 ? "event" : "result");
     msg.data.device_control.timestamp_ms = state->last_seen_ms;
     (void)event_bus_post_priority(&msg, EVENT_BUS_PRIORITY_HIGH, 0);
 }
@@ -227,6 +232,33 @@ static void dci_json_copy(const cJSON *obj, const char *key, char *dst, size_t d
         return;
     }
     quest_str_copy(dst, dst_size, item->valuestring);
+}
+
+static void dci_json_copy_result_error(const cJSON *root,
+                                       char *code,
+                                       size_t code_size,
+                                       char *message,
+                                       size_t message_size)
+{
+    const cJSON *error = NULL;
+    if (!root) {
+        return;
+    }
+    dci_json_copy(root, "error_code", code, code_size);
+    dci_json_copy(root, "message", message, message_size);
+    if (code && code[0] && message && message[0]) {
+        return;
+    }
+    error = cJSON_GetObjectItemCaseSensitive(root, "error");
+    if (!cJSON_IsObject(error)) {
+        return;
+    }
+    if (code && !code[0]) {
+        dci_json_copy(error, "code", code, code_size);
+    }
+    if (message && !message[0]) {
+        dci_json_copy(error, "message", message, message_size);
+    }
 }
 
 static dci_slot_t *dci_find_slot_locked(const char *device_id)
@@ -346,6 +378,7 @@ static esp_err_t dci_apply_diag_locked(dci_slot_t *slot, const cJSON *root, uint
 
 static esp_err_t dci_apply_result_locked(dci_slot_t *slot, const cJSON *root, uint64_t rx_ms)
 {
+    char status[DEVICE_CONTROL_INGEST_RESULT_STATUS_MAX_LEN] = {0};
     if (!slot || !root) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -360,19 +393,53 @@ static esp_err_t dci_apply_result_locked(dci_slot_t *slot, const cJSON *root, ui
                   "command",
                   slot->state.result_command,
                   sizeof(slot->state.result_command));
-    dci_json_copy(root, "status", slot->state.result_status, sizeof(slot->state.result_status));
-    dci_json_copy(root,
-                  "error_code",
-                  slot->state.result_error_code,
-                  sizeof(slot->state.result_error_code));
-    dci_json_copy(root,
-                  "message",
-                  slot->state.result_message,
-                  sizeof(slot->state.result_message));
+    dci_json_copy(root, "status", status, sizeof(status));
+    quest_str_copy(slot->state.result_status,
+                   sizeof(slot->state.result_status),
+                   scenehub_command_result_normalize(status));
+    dci_json_copy_result_error(root,
+                               slot->state.result_error_code,
+                               sizeof(slot->state.result_error_code),
+                               slot->state.result_message,
+                               sizeof(slot->state.result_message));
     slot->state.result_data_json[0] = '\0';
     const cJSON *data = cJSON_GetObjectItem(root, "data");
     if (data) {
         char *printed = cJSON_PrintUnformatted(data);
+        if (printed) {
+            quest_str_copy(slot->state.result_data_json,
+                        sizeof(slot->state.result_data_json),
+                        printed);
+            cJSON_free(printed);
+        }
+    }
+    slot->state.result_count++;
+    return ESP_OK;
+}
+
+static esp_err_t dci_apply_event_locked(dci_slot_t *slot, const cJSON *root, uint64_t rx_ms)
+{
+    if (!slot || !root) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    slot->state.has_result = true;
+    slot->state.result_ts_ms = dci_json_u64(root, "ts_ms", slot->state.result_ts_ms);
+    slot->state.result_rx_ms = rx_ms;
+    dci_json_copy(root,
+                  "event",
+                  slot->state.result_command,
+                  sizeof(slot->state.result_command));
+    if (!slot->state.result_command[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    slot->state.result_request_id[0] = '\0';
+    quest_str_copy(slot->state.result_status, sizeof(slot->state.result_status), "event");
+    slot->state.result_error_code[0] = '\0';
+    slot->state.result_message[0] = '\0';
+    slot->state.result_data_json[0] = '\0';
+    const cJSON *args = cJSON_GetObjectItem(root, "args");
+    if (args) {
+        char *printed = cJSON_PrintUnformatted(args);
         if (printed) {
             quest_str_copy(slot->state.result_data_json,
                         sizeof(slot->state.result_data_json),
@@ -485,6 +552,9 @@ esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *paylo
     case DEVICE_CONTROL_TOPIC_RESULT:
         err = dci_apply_result_locked(slot, root, now_ms);
         break;
+    case DEVICE_CONTROL_TOPIC_EVENT:
+        err = dci_apply_event_locked(slot, root, now_ms);
+        break;
     case DEVICE_CONTROL_TOPIC_UNKNOWN:
     default:
         err = ESP_ERR_NOT_SUPPORTED;
@@ -504,7 +574,7 @@ esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *paylo
         if (kind == DEVICE_CONTROL_TOPIC_STATUS) {
             dci_post_runtime_event(snapshot);
         }
-        if (kind == DEVICE_CONTROL_TOPIC_RESULT) {
+        if (kind == DEVICE_CONTROL_TOPIC_RESULT || kind == DEVICE_CONTROL_TOPIC_EVENT) {
             dci_post_control_event(snapshot);
         }
     }

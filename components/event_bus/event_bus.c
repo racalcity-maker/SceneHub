@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "service_status.h"
 
@@ -257,14 +258,24 @@ esp_err_t event_bus_init(void)
     }
 
     if (!s_queue) {
-        s_queue = xQueueCreate(EVENT_BUS_QUEUE_LEN, sizeof(event_bus_message_t *));
+        s_queue = xQueueCreateWithCaps(EVENT_BUS_QUEUE_LEN,
+                                       sizeof(event_bus_message_t *),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_queue) {
+            s_queue = xQueueCreate(EVENT_BUS_QUEUE_LEN, sizeof(event_bus_message_t *));
+        }
         if (!s_queue) {
             return ESP_ERR_NO_MEM;
         }
     }
 
     if (!s_job_queue) {
-        s_job_queue = xQueueCreate(EVENT_BUS_JOB_QUEUE_LEN, sizeof(event_bus_job_t));
+        s_job_queue = xQueueCreateWithCaps(EVENT_BUS_JOB_QUEUE_LEN,
+                                           sizeof(event_bus_job_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_job_queue) {
+            s_job_queue = xQueueCreate(EVENT_BUS_JOB_QUEUE_LEN, sizeof(event_bus_job_t));
+        }
         if (!s_job_queue) {
             return ESP_ERR_NO_MEM;
         }

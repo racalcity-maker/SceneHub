@@ -6,6 +6,8 @@
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_timer.h"
 #include "gm_api.h"
 #include "orchestrator_registry.h"
 #include "orchestrator_timeline.h"
@@ -14,6 +16,24 @@
 #include "web_ui_utils.h"
 
 #define GM_QUEST_DEVICE_BODY_MAX_BYTES (160 * 1024)
+
+static const char *TAG = "web_ui_gm_quest_device";
+
+static int64_t gm_qd_perf_start(void)
+{
+    return esp_timer_get_time();
+}
+
+static void gm_qd_perf_log(const char *label, int64_t start_us, const char *device_id, const char *command_id)
+{
+    int64_t dt_ms = (esp_timer_get_time() - start_us) / 1000;
+    ESP_LOGW(TAG,
+             "PERF %s device=%s command=%s took %lld ms",
+             label ? label : "quest device",
+             device_id ? device_id : "",
+             command_id ? command_id : "",
+             dt_ms);
+}
 
 static void *gm_qd_alloc(size_t size)
 {
@@ -361,6 +381,7 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
     char params_json[ROOM_SCENARIO_COMMAND_PARAMS_JSON_MAX_LEN] = {0};
     quest_device_t *device = NULL;
     quest_device_command_t command = {0};
+    int64_t t0 = gm_qd_perf_start();
     esp_err_t err = gm_qd_read_json(req, 2048, &root);
     if (err != ESP_OK) {
         return gm_qd_send_error(req, err);
@@ -391,7 +412,7 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
     if (err == ESP_OK) {
         err = quest_device_get_command(device_id, command_id, &command);
     }
-    if (err == ESP_OK && !command.button_enabled) {
+    if (err == ESP_OK && !command.manual_allowed) {
         err = ESP_ERR_INVALID_STATE;
     }
     if (err == ESP_OK) {
@@ -405,13 +426,15 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
 
     orchestrator_registry_invalidate();
     (void)orchestrator_timeline_log(ORCH_TIMELINE_TYPE_DEVICE_ACTION,
-                                    command.dangerous ? ORCH_TIMELINE_SEVERITY_WARNING
-                                                      : ORCH_TIMELINE_SEVERITY_INFO,
+                                    (command.requires_confirmation ||
+                                     strcmp(command.danger_level, "normal") != 0) ? ORCH_TIMELINE_SEVERITY_WARNING
+                                                                                  : ORCH_TIMELINE_SEVERITY_INFO,
                                     "http",
                                     "",
                                     device_id,
                                     "Quest device command",
                                     command_id);
+    gm_qd_perf_log("POST device command", t0, device_id, command_id);
 
     out = cJSON_CreateObject();
     if (!out) {

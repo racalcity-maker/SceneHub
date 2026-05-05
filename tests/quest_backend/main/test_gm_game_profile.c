@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "unity.h"
 
 #include "cJSON.h"
@@ -9,6 +10,7 @@
 #include "room_scenario.h"
 
 static gm_game_profile_t s_profiles[4];
+EXT_RAM_BSS_ATTR static room_scenario_t s_profile_scenario;
 
 static void set_text(char *dst, size_t dst_len, const char *src)
 {
@@ -55,11 +57,11 @@ static void init_profile(gm_game_profile_t *profile,
 
 static void add_room_scenario(const char *scenario_id, const char *room_id)
 {
-    room_scenario_t scenario = {0};
-    set_text(scenario.id, sizeof(scenario.id), scenario_id);
-    set_text(scenario.name, sizeof(scenario.name), scenario_id);
-    set_text(scenario.room_id, sizeof(scenario.room_id), room_id);
-    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(&scenario));
+    memset(&s_profile_scenario, 0, sizeof(s_profile_scenario));
+    set_text(s_profile_scenario.id, sizeof(s_profile_scenario.id), scenario_id);
+    set_text(s_profile_scenario.name, sizeof(s_profile_scenario.name), scenario_id);
+    set_text(s_profile_scenario.room_id, sizeof(s_profile_scenario.room_id), room_id);
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(&s_profile_scenario));
 }
 
 static void test_gm_game_profile_add_and_get(void)

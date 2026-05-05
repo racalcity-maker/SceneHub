@@ -44,7 +44,7 @@ room_id:'',profile_id:'',dirty:false,open:false,prefill:null}
 ;
 
 let scenarioEditor={
-room_id:'',scenario_id:'',dirty:false,open:false,draft:null,validation_report:null,expanded_step:-1,active_branch:0}
+room_id:'',scenario_id:'',dirty:false,open:false,draft:null,original_scenario:null,validation_report:null,expanded_step:-1,active_branch:0,branch_count_shrink_allowed:false,branch_count_shrink_floor:0}
 ;
 
 let questDeviceEditor={
@@ -72,6 +72,8 @@ let gmSkipScenarioDomSync=false;
 let gmOpenDetails={
 }
 ;
+
+let gmFlagDatalistSeq=0;
 
 function esc(v){
 const value=(v===undefined||v===null)?'':v;
@@ -102,9 +104,18 @@ return base||`${fallback||'item'}_${Date.now().toString(16)}`;
 function stateClass(v){return v==='fault'||v==='error'||v==='offline'?'state-fault':(v==='degraded'||v==='warning'?'state-degraded':(v==='ok'||v==='online'?'state-ok':'state-unknown'));}
 function healthLabel(v){return v||'unknown';}
 function fmtClock(ms){const total=Math.max(0,Math.floor((Number(ms)||0)/1000));const h=Math.floor(total/3600);const m=Math.floor((total%3600)/60);const s=total%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`;}
+function roomTimerDisplayMs(room){
+const remaining=Math.max(0,Number(room&&room.timer_remaining_ms)||0);
+if((room&&room.timer_state)!=='running')return remaining;
+const synced=Number(room&&room._timer_synced_at_ms)||performance.now();
+return Math.max(0,remaining-(performance.now()-synced));
+}
+function roomClockAttrs(room){return `data-room-clock='${esc(room&&room.room_id||'')}' data-room-clock-state='${esc(room&&room.timer_state||'idle')}'`;}
+function roomClockHtml(room,tag,cls){const name=tag||'span';const classAttr=cls?` class='${esc(cls)}'`:'';return `<${name}${classAttr} ${roomClockAttrs(room)}>${fmtClock(roomTimerDisplayMs(room))}</${name}>`;}
 function ago(ms){if(!ms)return 'never';const age=Math.max(0,Math.floor((performance.now()-Number(ms))/1000));return age<60?`${age}s ago`:`${Math.floor(age/60)}m ago`;}
 function audioBaseName(path){if(!path)return '';const parts=String(path).split('/').filter(Boolean);return parts.length?parts[parts.length-1]:path;}
 function audioDirName(path){if(!path)return '/';const raw=String(path);const idx=raw.lastIndexOf('/');if(idx<0)return '/';return raw.slice(0,idx)||'/';}
+function compactText(value,max){const text=String(value||'');const limit=Math.max(8,Number(max)||32);return text.length>limit?`${text.slice(0,limit-1)}...`:text;}
 function roomById(id){return (gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[]).find(r=>r.room_id===id)||null;}
 function deviceById(id){return (gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).find(d=>d.device_id===id)||null;}
 function roomName(id){const r=roomById(id);return r&&(r.title||r.name||r.room_id)||id||'No room';}
@@ -131,7 +142,30 @@ function questDeviceHealth(dev){if(!dev)return 'offline';if(dev.system_device)re
 function questDeviceStatusText(dev){if(!dev)return 'missing device';if(dev.system_device)return 'system device';if(dev.enabled===false)return 'disabled';const observed=observedByClientId(dev.client_id||dev.id);if(!observed)return 'not observed';if(observed.connectivity==='offline'||observed.connectivity==='unknown')return 'offline';return observed.health||observed.state||'online';}
 function scenarioById(roomId,scenarioId){return roomScenarios(roomId).find(s=>s.id===scenarioId)||null;}
 function roomSelectedScenarioObject(room){if(!room)return null;const profiles=roomProfiles(room.room_id);const profileId=roomSelectedProfileId(room.room_id)||room.selected_profile_id||'';const profile=profiles.find(p=>p.id===profileId)||null;const preferred=room.running_scenario_id||room.selected_profile_scenario_id||(profile&&profile.scenario_id)||room.selected_scenario_id||'';return scenarioById(room.room_id,preferred)||scenarioById(room.room_id,room.selected_scenario_id)||null;}
-function scenarioFlattenedSteps(scenario){if(!scenario)return [];if(Array.isArray(scenario.branches)&&scenario.branches.length){return scenario.branches.reduce((out,branch)=>out.concat(Array.isArray(branch.steps)?branch.steps:[]),[]);}return Array.isArray(scenario.steps)?scenario.steps:[];}
+function scenarioBranchDisplaySteps(branch){
+if(!branch)return [];
+const steps=Array.isArray(branch.steps)?branch.steps:[];
+if(steps.length)return steps;
+const variants=Array.isArray(branch.variants)?branch.variants:[];
+if(!variants.length)return [];
+const mode=String(branch.policy&&branch.policy.mode||'single').toLowerCase();
+const multi=mode!=='single'&&variants.length>1;
+const out=[];
+variants.forEach((variant,variantIndex)=>{
+const actions=Array.isArray(variant&&variant.actions)?variant.actions:[];
+actions.forEach((action,actionIndex)=>{
+const copy=action?JSON.parse(JSON.stringify(action)):{type:'WAIT_TIME',duration_ms:1000};
+if(!copy.id)copy.id=`variant_${variantIndex+1}_action_${actionIndex+1}`;
+if(multi){
+const prefix=mode==='escalate'?`Level ${variantIndex+1}`:`Variant ${variantIndex+1}`;
+copy.label=copy.label?`${prefix}: ${copy.label}`:`${prefix}: ${scenarioStepText(copy)}`;
+}
+out.push(copy);
+});
+});
+return out;
+}
+function scenarioFlattenedSteps(scenario){if(!scenario)return [];if(Array.isArray(scenario.branches)&&scenario.branches.length){return scenario.branches.reduce((out,branch)=>out.concat(scenarioBranchDisplaySteps(branch)),[]);}return Array.isArray(scenario.steps)?scenario.steps:[];}
 function roomScenarioSteps(room){const scenario=roomSelectedScenarioObject(room);return scenarioFlattenedSteps(scenario);}
 function roomCurrentScenarioStep(room){const steps=roomScenarioSteps(room);const index=Math.max(0,Number(room&&room.scenario_current_step_index)||0);return steps[index]||null;}
 function roomScenarioDeviceIds(room){const ids=new Set();roomScenarioSteps(room).forEach(step=>{const type=String(step&&step.type||'').toLowerCase();if((type==='device_command'||type==='wait_device_event')&&step.device_id)ids.add(step.device_id);});return Array.from(ids);}
@@ -150,37 +184,34 @@ document.querySelectorAll('[data-view]').forEach(el=>{if(['profiles','scenarios'
 async function loadGMSession(){try{const res=await gmFetch('/api/session/info');if(res.ok){gmSession=await res.json();}}catch(err){gmSession={role:'user',username:''};}window.__WEB_SESSION=gmSession;applyGMRoleLayout();return gmSession;}
 function metric(label,value){return `<div class='card metric'><div class='label'>${esc(label)}</div><div class='value'>${esc(value)}</div></div>`;}
 function status(v){return `<span class='status ${stateClass(v)}'>${esc(healthLabel(v))}</span>`;}
-function roomCard(r){const derived=roomDerivedHealth(r);const scenarioIssues=roomQuestDeviceIssues(r).length;const issueCount=(Number(r.issue_count)||0)+scenarioIssues;return `<article class='card clickable' data-open-room='${esc(r.room_id)}'><div class='card-head'><div><div class='card-title'>${esc(r.title||r.name||r.room_id)}</div><div class='card-sub'>Room</div></div>${status(derived)}</div><div class='kvs'><div class='kv'><span class='k'>Devices</span><span class='v'>${esc(roomScenarioDeviceIds(r).length||r.device_count||0)}</span></div><div class='kv'><span class='k'>Issues</span><span class='v'>${esc(issueCount)}</span></div><div class='kv'><span class='k'>Timer</span><span class='v'>${fmtClock(r.timer_remaining_ms)}</span></div></div></article>`;}
+function roomCard(r){const derived=roomDerivedHealth(r);const scenarioIssues=roomQuestDeviceIssues(r).length;const issueCount=(Number(r.issue_count)||0)+scenarioIssues;return `<article class='card clickable' data-open-room='${esc(r.room_id)}'><div class='card-head'><div><div class='card-title'>${esc(r.title||r.name||r.room_id)}</div><div class='card-sub'>Room</div></div>${status(derived)}</div><div class='kvs'><div class='kv'><span class='k'>Devices</span><span class='v'>${esc(roomScenarioDeviceIds(r).length||r.device_count||0)}</span></div><div class='kv'><span class='k'>Issues</span><span class='v'>${esc(issueCount)}</span></div><div class='kv'><span class='k'>Timer</span>${roomClockHtml(r,'span','v')}</div></div></article>`;}
 function questDeviceMonitorRow(dev){const observed=observedByClientId(dev.client_id||dev.id);const health=questDeviceHealth(dev);const meta=[`${(dev.commands||[]).length} commands`,`${(dev.events||[]).length} events`,dev.enabled===false?'disabled':'enabled'].join(' / ');const setup=isAdmin()?`<button data-open-device-setup='${esc(dev.id||'1')}'>Device Setup</button>`:'';const debug=isAdmin()?`<details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(dev.id||'')}</div><div class='row-meta'>Client: ${esc(dev.client_id||'none')}</div></details>`:'';return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(questDeviceDisplayName(dev))} ${dev.enabled===false?`<span class='badge'>disabled</span>`:''}</div><div class='row-meta'>${esc(meta)}</div><div class='row-meta'>${observed?`${esc(observed.connectivity||'unknown')} / fw ${esc(observed.fw_version||'n/a')}`:'not observed'}</div>${debug}</div><div>${status(health)}<div class='row-meta'>${esc(questDeviceStatusText(dev))}</div></div><div class='actions'>${setup}</div></div>`;}
 function issueRow(i){const subject=i.device_id?deviceDisplayName(i.device_id):(i.room_id?roomName(i.room_id):i.scope);return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(subject)} - ${esc(i.title||i.code)}</div><div class='row-meta'>${esc(i.details||'')}</div></div>${status(i.severity)}</div>`;}
-function manualButtonGroups(){return questDevices().map(dev=>{const id=dev.id||'';const commands=(Array.isArray(dev.commands)?dev.commands:[]).filter(cmd=>cmd&&cmd.button_enabled&&cmd.id);if(!id||!commands.length)return null;return {id,name:dev.name||id,room_id:'',health:questDeviceHealth(dev),commands};}).filter(Boolean);}
-function renderRightSidebar(){const root=document.getElementById('gm_right_sidebar');if(!root)return;const groups=manualButtonGroups();root.innerHTML=`<div class='right-brand'><h2>Manual buttons</h2><p>Single-device controls</p></div><div class='manual-groups'>${groups.length?groups.map(g=>`<section class='manual-group'><div class='manual-group-head'><div><div class='manual-title'>${esc(g.name)}</div><div class='manual-meta'>${g.room_id?esc(roomName(g.room_id)):'Quest device'}</div></div>${status(g.health)}</div><div class='manual-buttons'>${g.commands.map(cmd=>`<button class='${cmd.dangerous?'danger':''}' data-manual-device='${esc(g.id)}' data-manual-command='${esc(cmd.id)}' data-dangerous='${cmd.dangerous?'1':'0'}'>${esc(cmd.label||cmd.id)}</button>`).join('')}</div>${isAdmin()?`<details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(g.id)}</div></details>`:''}</section>`).join(''):`<div class='manual-empty'>No manual buttons configured</div>`}</div>`;}
-function commandSupportsScenarioParams(command){const kind=String(command&&command.kind||'mqtt_publish');return kind.indexOf('internal_')===0;}
+function commandPolicy(cmd){return cmd&&cmd.policy&&typeof cmd.policy==='object'?cmd.policy:{};}
+function commandRequiresConfirmation(cmd){const p=commandPolicy(cmd);return !!p.requires_confirmation||(p.danger_level&&p.danger_level!=='normal');}
+function manualButtonGroups(){return questDevices().map(dev=>{const id=dev.id||'';const commands=(Array.isArray(dev.commands)?dev.commands:[]).filter(cmd=>cmd&&cmd.id&&commandPolicy(cmd).manual_allowed!==false);if(!id||!commands.length)return null;return {id,name:dev.name||id,room_id:'',health:questDeviceHealth(dev),commands};}).filter(Boolean);}
+function renderRightSidebar(){const root=document.getElementById('gm_right_sidebar');if(!root)return;const groups=manualButtonGroups();root.innerHTML=`<div class='right-brand'><h2>Manual buttons</h2><p>Single-device controls</p></div><div class='manual-groups'>${groups.length?groups.map(g=>`<section class='manual-group'><div class='manual-group-head'><div><div class='manual-title'>${esc(g.name)}</div><div class='manual-meta'>${g.room_id?esc(roomName(g.room_id)):'Quest device'}</div></div>${status(g.health)}</div><div class='manual-buttons'>${g.commands.map(cmd=>`<button class='${commandRequiresConfirmation(cmd)?'danger':''}' data-manual-device='${esc(g.id)}' data-manual-command='${esc(cmd.id)}' data-confirm-required='${commandRequiresConfirmation(cmd)?'1':'0'}'>${esc(cmd.label||cmd.id)}</button>`).join('')}</div>${isAdmin()?`<details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(g.id)}</div></details>`:''}</section>`).join(''):`<div class='manual-empty'>No manual buttons configured</div>`}</div>`;}
+function commandSupportsScenarioParams(command){return !!(command&&command.command);}
 function questDeviceCommandName(deviceId,commandId){const dev=questDeviceById(deviceId);const cmd=dev&&Array.isArray(dev.commands)?dev.commands.find(c=>(c.id||'')===commandId):null;return cmd&&(cmd.label||cmd.id)||commandId||'command';}
 function questDeviceEventName(deviceId,eventId){const dev=questDeviceById(deviceId);const ev=dev&&Array.isArray(dev.events)?dev.events.find(item=>(item.id||'')===eventId):null;return ev&&(ev.label||ev.id)||eventId||'event';}
-function questDeviceEventNameByType(deviceId,eventType){const dev=questDeviceById(deviceId);const ev=dev&&Array.isArray(dev.events)?dev.events.find(item=>(item.event_type||item.id||'')===eventType):null;return ev&&(ev.label||ev.id)||eventType||'event';}
-function scenarioStepText(s){if(!s)return '';const type=String(s.type||'').toLowerCase();if(type==='device_command')return `${deviceDisplayName(s.device_id)} -> ${questDeviceCommandName(s.device_id,s.command_id)}`;if(type==='wait_device_event')return `Wait ${deviceDisplayName(s.device_id)}: ${questDeviceEventName(s.device_id,s.event_id)}`;if(type==='wait_time')return `Wait ${Math.max(1,Math.round((Number(s.duration_ms)||1000)/1000))} sec`;if(type==='operator_approval')return `Operator approval: ${s.operator_prompt||s.prompt||s.label||'Confirm'}`;return s.label||s.id||s.type||'Step';}
+function questDeviceEventNameByType(deviceId,eventType){const dev=questDeviceById(deviceId);const ev=dev&&Array.isArray(dev.events)?dev.events.find(item=>(item.event||item.id||'')===eventType):null;return ev&&(ev.label||ev.id)||eventType||'event';}
+function scenarioAudioStepText(s){const params=s&&s.params&&typeof s.params==='object'?s.params:{};const command=String(s&&s.command_id||'');const channel=String(params.channel||'effect').toLowerCase();const file=compactText(audioBaseName(params.file||''),34);if(command==='play'){const kind=channel==='background'||channel==='bg'||channel==='music'?'bg':'sfx';return file?`Play ${kind}: ${file}`:`Play ${kind}`;}if(command==='stop')return `Stop audio${params.channel?`: ${params.channel}`:''}`;if(command==='pause')return 'Pause audio';if(command==='resume')return 'Resume audio';if(command==='set_volume')return `Set volume: ${params.volume??''}`;return `Audio: ${questDeviceCommandName('system_audio',command)}`;}
+function scenarioStepText(s){if(!s)return '';const type=String(s.type||'').toLowerCase();if(type==='device_command'){if(String(s.device_id||'')==='system_audio')return scenarioAudioStepText(s);return `${deviceDisplayName(s.device_id)} -> ${questDeviceCommandName(s.device_id,s.command_id)}`;}if(type==='wait_device_event')return `Wait ${deviceDisplayName(s.device_id)}: ${questDeviceEventName(s.device_id,s.event_id)}`;if(type==='wait_time')return `Wait ${Math.max(1,Math.round((Number(s.duration_ms)||1000)/1000))} sec`;if(type==='operator_approval')return `Operator approval: ${s.operator_prompt||s.prompt||s.label||'Confirm'}`;return s.label||s.id||s.type||'Step';}
 function scenarioStepLabel(room,total){const state=room.scenario_runtime_state||'idle';const idx=Number(room.scenario_current_step_index)||0;if(!total)return '0 / 0';if(state==='idle'||state==='stopped')return `0 / ${total}`;if(state==='done')return `${total} / ${total}`;return `${Math.min(total,idx+1)} / ${total}`;}
-function scenarioWaitText(room){const t=room.scenario_wait_type||'none';if(t==='time')return `time until ${room.scenario_wait_until_ms||0}`;if(t==='event'||t==='any_events'||t==='all_events'){const events=Array.isArray(room.scenario_wait_events)?room.scenario_wait_events:[];if(events.length>1)return `${t==='all_events'?'all of':'any of'} ${events.length} events`;const source=room.scenario_wait_source_id||'';const eventType=room.scenario_wait_event_type||'any';return `${source?deviceDisplayName(source):'Any device'}: ${source?questDeviceEventNameByType(source,eventType):eventType}`;}if(t==='flags'){const flags=Array.isArray(room.scenario_wait_flags)?room.scenario_wait_flags:[];return flags.length?`flags: ${flags.map(flag=>`${flag.name||'flag'}=${flag.value?'true':'false'}`).join(', ')}`:'flags';}if(t==='operator')return `operator: ${room.scenario_wait_operator_prompt||'approval'}`;return 'none';}
+function scenarioWaitText(room){const t=room.scenario_wait_type||'none';if(t==='time')return `time until ${room.scenario_wait_until_ms||0}`;if(t==='command_result')return `command result ${room.scenario_wait_event_type||''}`;if(t==='event'||t==='any_events'||t==='all_events'){const events=Array.isArray(room.scenario_wait_events)?room.scenario_wait_events:[];if(events.length>1)return `${t==='all_events'?'all of':'any of'} ${events.length} events`;const source=room.scenario_wait_source_id||'';const eventType=room.scenario_wait_event_type||'any';return `${source?deviceDisplayName(source):'Any device'}: ${source?questDeviceEventNameByType(source,eventType):eventType}`;}if(t==='flags'){const flags=Array.isArray(room.scenario_wait_flags)?room.scenario_wait_flags:[];return flags.length?`flags: ${flags.map(flag=>`${flag.name||'flag'}=${flag.value?'true':'false'}`).join(', ')}`:'flags';}if(t==='operator')return `operator: ${room.scenario_wait_operator_prompt||'approval'}`;return 'none';}
 function scenarioProgressStepState(room,index){const runtime=room&&room.scenario_runtime_state||'idle';const current=Math.max(0,Number(room&&room.scenario_current_step_index)||0);if(runtime==='done')return 'done';if(runtime==='error')return index<current?'done':(index===current?'error':'pending');if(runtime==='running'||runtime==='waiting')return index<current?'done':(index===current?'current':'pending');return 'pending';}
-function scenarioProgressBranchCurrentIndex(branchRuntime){
-if(!branchRuntime)return null;
-const raw=Math.max(0,Number(branchRuntime.current_step_index)||0);
-const start=Math.max(0,Number(branchRuntime.step_start_index)||0);
-const count=Math.max(0,Number(branchRuntime.step_count)||0);
-if(count>0&&raw>=start&&raw<=start+count&&raw>count)return raw-start;
-return raw;
-}
+function scenarioProgressBranchCurrentIndex(branchRuntime){if(!branchRuntime)return null;const rawNumber=Number(branchRuntime.current_step_index);if(!Number.isFinite(rawNumber))return null;const raw=Math.max(0,Math.floor(rawNumber));const start=Math.max(0,Number(branchRuntime.step_start_index)||0);const count=Math.max(0,Number(branchRuntime.step_count)||0);if(count>0&&start>0&&raw>=start&&raw<start+count){return raw-start;}if(count>0){return Math.max(0,Math.min(count-1,raw));}return raw;}
 function scenarioProgressBranchState(room,branchRuntime,localIndex,globalIndex){const runtime=(branchRuntime&&branchRuntime.state)||room&&room.scenario_runtime_state||'idle';const branchCurrent=scenarioProgressBranchCurrentIndex(branchRuntime);const current=branchCurrent!==null?branchCurrent:Math.max(0,Number(room&&room.scenario_current_step_index)||0);const index=branchRuntime?localIndex:globalIndex;if(runtime==='done')return 'done';if(runtime==='error')return index<current?'done':(index===current?'error':'pending');if(runtime==='running'||runtime==='waiting')return index<current?'done':(index===current?'current':'pending');return 'pending';}
 function scenarioProgressIcon(state){if(state==='done')return '&#10003;';if(state==='current')return '&rarr;';if(state==='error')return '!';return '';}
-function scenarioProgressBranches(scenarioOrSteps){if(scenarioOrSteps&&Array.isArray(scenarioOrSteps.branches)&&scenarioOrSteps.branches.length)return scenarioOrSteps.branches.map((branch,index)=>{const type=String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal';return {id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type,enabled:branch.enabled!==false,required_for_completion:type==='normal'&&branch.required_for_completion!==false,steps:Array.isArray(branch.steps)?branch.steps:[]};});const steps=Array.isArray(scenarioOrSteps)?scenarioOrSteps:(scenarioOrSteps&&Array.isArray(scenarioOrSteps.steps)?scenarioOrSteps.steps:[]);return steps.length?[{id:'main',name:'Main',type:'normal',enabled:true,required_for_completion:true,steps}]:[];}
-function scenarioProgressBranchRuntime(room,branch,index){const runtimes=Array.isArray(room&&room.scenario_branches)?room.scenario_branches:[];const branchId=branch&&branch.id||'';return (branchId&&runtimes.find(item=>(item.id||'')===branchId))||runtimes.find(item=>Number(item.index)===index)||null;}
+function scenarioProgressBranches(scenarioOrSteps){if(scenarioOrSteps&&Array.isArray(scenarioOrSteps.branches)&&scenarioOrSteps.branches.length)return scenarioOrSteps.branches.map((branch,index)=>{const type=String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal';return {id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type,enabled:branch.enabled!==false,required_for_completion:type==='normal'&&branch.required_for_completion!==false,trigger:branch.trigger||null,steps:scenarioBranchDisplaySteps(branch)};});const steps=Array.isArray(scenarioOrSteps)?scenarioOrSteps:(scenarioOrSteps&&Array.isArray(scenarioOrSteps.steps)?scenarioOrSteps.steps:[]);return steps.length?[{id:'main',name:'Main',type:'normal',enabled:true,required_for_completion:true,steps}]:[];}
+function scenarioProgressBranchRuntime(room,branch,index){const runtimes=Array.isArray(room&&room.scenario_branches)?room.scenario_branches:[];const byIndex=runtimes.find(item=>Number(item.index)===index);if(byIndex)return byIndex;const branchId=branch&&branch.id||'';if(branchId)return runtimes.find(item=>(item.id||'')===branchId)||null;return null;}
 function renderScenarioProgressStep(room,step,index,globalIndex,branchRuntime){const disabled=step&&step.enabled===false;const state=disabled?'disabled':scenarioProgressBranchState(room,branchRuntime,index,globalIndex);return `<div class='scenario-progress-step ${state}'><span class='scenario-progress-icon'>${scenarioProgressIcon(state)}</span><span class='scenario-progress-index'>${esc(index+1)}.</span><span class='scenario-progress-text'>${esc(scenarioStepText(step))}</span>${disabled?`<span class='badge'>disabled</span>`:''}</div>`;}
 function scenarioBranchDoneCount(room,branch,branchRuntime,globalStart){
 const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
 const total=steps.length;
 if(!total)return 0;
 const runtime=(branchRuntime&&branchRuntime.state)||room&&room.scenario_runtime_state||'idle';
+if(branch&&branch.type==='reactive'&&runtime==='waiting'&&(!branchRuntime||!branchRuntime.wait_type||branchRuntime.wait_type==='none'))return 0;
 if(runtime==='done')return total;
 if(runtime==='idle'||runtime==='stopped'||runtime==='disabled')return 0;
 if(runtime==='running'||runtime==='waiting'||runtime==='error'){
@@ -190,10 +221,25 @@ return Math.max(0,Math.min(total,Math.max(0,Number(room&&room.scenario_current_s
 }
 return 0;
 }
+function scenarioReactiveTriggerText(branch){
+const trigger=branch&&branch.trigger||{};
+const kind=String(trigger.kind||'device_event').toLowerCase();
+if(kind==='device_event'){
+const dev=questDeviceById(trigger.device_id);
+const name=dev?questDeviceDisplayName(dev):deviceDisplayName(trigger.device_id);
+const eventName=questDeviceEventName(trigger.device_id,trigger.event_id);
+return `Waiting for ${name}: ${eventName}`;
+}
+if(kind==='flag_changed')return `Waiting for flag: ${trigger.flag_name||trigger.event_id||'flag'}`;
+if(kind==='operator_event')return `Waiting for operator event: ${trigger.operator_event||trigger.event_id||'event'}`;
+if(kind==='runtime_event')return `Waiting for runtime event: ${trigger.runtime_event||trigger.event_id||'event'}`;
+return 'Waiting for trigger';
+}
 function scenarioBranchCurrentStep(branch,branchRuntime){
 const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
-if(!steps.length)return 'No steps';
+if(!steps.length)return branch&&branch.type==='reactive'?'No actions':'No steps';
 const runtime=branchRuntime&&branchRuntime.state||'idle';
+if(branch&&branch.type==='reactive'&&runtime==='waiting'&&(!branchRuntime||!branchRuntime.wait_type||branchRuntime.wait_type==='none'))return scenarioReactiveTriggerText(branch);
 if(runtime==='done')return 'Complete';
 const current=scenarioProgressBranchCurrentIndex(branchRuntime);
 if(current!==null&&steps[current])return scenarioStepText(steps[current]);
@@ -204,6 +250,7 @@ function scenarioProgressTypeLabel(branch){return branch.type==='reactive'?'reac
 function scenarioBranchWaitText(branchRuntime){
 const t=branchRuntime&&branchRuntime.wait_type||'none';
 if(t==='time')return `time until ${branchRuntime.wait_until_ms||0}`;
+if(t==='command_result')return `command result ${branchRuntime.wait_event_type||''}`;
 if(t==='event'||t==='any_events'||t==='all_events'){const events=Array.isArray(branchRuntime.wait_events)?branchRuntime.wait_events:[];if(events.length>1)return `${t==='all_events'?'all of':'any of'} ${events.length} events`;return branchRuntime.wait_event_type||branchRuntime.wait_event_id||'device event';}
 if(t==='flags'){const flags=Array.isArray(branchRuntime.wait_flags)?branchRuntime.wait_flags:[];return flags.length?flags.map(flag=>`${flag.name||flag.flag_name||'flag'}=${flag.value?'true':'false'}`).join(', '):'flags';}
 if(t==='operator')return branchRuntime.wait_operator_prompt||'operator approval';
@@ -233,7 +280,10 @@ const done=scenarioBranchDoneCount(room,branch,branchRuntime,item.start);
 const current=scenarioBranchCurrentStep(branch,branchRuntime);
 const detailsKey=`room-progress-steps:${room&&room.room_id||'room'}:${branch.id||item.index}`;
 const skip=renderScenarioBranchSkipButton(room,branch,branchRuntime);
-return `<section class='scenario-progress-branch ${!branch.enabled?'disabled':''} ${branch.type==='reactive'?'reactive':''} ${state}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(branch.name||branch.id||`Branch ${item.index+1}`)}</div><span class='badge'>${esc(state)}</span></div><div class='row-meta'>${esc(done)} / ${esc(steps.length)} steps / ${esc(scenarioProgressTypeLabel(branch))}${waitType&&waitType!=='none'?` / waiting ${esc(waitType)}`:''}</div><div class='scenario-progress-current'>${esc(current)}</div>${scenarioProgressBar(done,steps.length)}</div>${skip?`<div class='branch-runtime-actions'>${skip}</div>`:''}</div><details class='scenario-progress-step-details' ${detailsAttrs(detailsKey,false)}><summary>Show steps</summary><div class='scenario-progress'>${steps.length?steps.map((step,stepIndex)=>renderScenarioProgressStep(room,step,stepIndex,item.start+stepIndex,branchRuntime)).join(''):`<div class='empty'>No steps</div>`}</div></details></section>`;
+const unit=branch.type==='reactive'?'actions':'steps';
+const meta=branch.type==='reactive'?`${esc(done)} / ${esc(steps.length)} ${esc(unit)} / ${esc(scenarioProgressTypeLabel(branch))}`:`${esc(done)} / ${esc(steps.length)} ${esc(unit)} / ${esc(scenarioProgressTypeLabel(branch))}${waitType&&waitType!=='none'?` / waiting ${esc(waitType)}`:''}`;
+const actionRuntime=branch.type==='reactive'&&state==='waiting'&&(!waitType||waitType==='none')?null:branchRuntime;
+return `<section class='scenario-progress-branch ${!branch.enabled?'disabled':''} ${branch.type==='reactive'?'reactive':''} ${state}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(branch.name||branch.id||`Branch ${item.index+1}`)}</div><span class='badge'>${esc(state)}</span></div><div class='row-meta'>${meta}</div><div class='scenario-progress-current'>${esc(current)}</div>${scenarioProgressBar(done,steps.length)}</div>${skip?`<div class='branch-runtime-actions'>${skip}</div>`:''}</div><details class='scenario-progress-step-details' ${detailsAttrs(detailsKey,false)}><summary>Show ${esc(unit)}</summary><div class='scenario-progress'>${steps.length?steps.map((step,stepIndex)=>renderScenarioProgressStep(room,step,stepIndex,item.start+stepIndex,actionRuntime)).join(''):`<div class='empty'>No ${esc(unit)}</div>`}</div></details></section>`;
 }
 function renderScenarioProgressSection(title,items,mode){
 if(!items.length)return '';
@@ -285,7 +335,7 @@ function confirmDiscardScenario(){if(!scenarioEditor.dirty)return true;if(!confi
 function confirmDiscardQuestDevice(){if(!questDeviceEditor.dirty)return true;if(!confirm('Discard unsaved device changes?'))return false;clearQuestDeviceDirty();return true;}
 function confirmDiscardEditorChanges(){if(!confirmDiscardScenario())return false;if(!confirmDiscardProfile())return false;if(!confirmDiscardQuestDevice())return false;if(!confirmDiscardTransientFields())return false;return true;}
 function clearProfileDirty(){profileEditor.dirty=false;profileEditor.prefill=null;clearTransientFieldDirty();}
-function clearScenarioDirty(){scenarioEditor.dirty=false;scenarioEditor.draft=null;scenarioEditor.validation_report=null;clearTransientFieldDirty();}
+function clearScenarioDirty(){scenarioEditor.dirty=false;scenarioEditor.draft=null;scenarioEditor.original_scenario=null;scenarioEditor.validation_report=null;scenarioEditor.branch_count_shrink_allowed=false;scenarioEditor.branch_count_shrink_floor=0;clearTransientFieldDirty();}
 function clearQuestDeviceDirty(){questDeviceEditor.dirty=false;questDeviceEditor.draft=null;questDeviceEditor.discovery=null;clearTransientFieldDirty();}
 function markProfileDirty(){profileEditor.dirty=true;}
 function markScenarioDirty(){scenarioEditor.dirty=true;scenarioEditor.validation_report=null;if(document.getElementById('scenario_id'))scenarioEditor.draft=collectScenarioEditor();}
@@ -340,9 +390,14 @@ const skipWaitLabel=room.scenario_wait_operator_skip_label||'Skip wait';
 const waitPrompt=room.scenario_wait_operator_prompt||scenarioWaitText(room);
 const flags=Array.isArray(room.scenario_flags)?room.scenario_flags:[];
 const flagsHtml=flags.length?`<details class='scenario-advanced'><summary>Runtime flags</summary><div class='step-list'>${flags.map(flag=>`<div class='step-item'><span>${esc(flag.name||'flag')}</span><span class='badge'>${flag.value?'true':'false'}</span></div>`).join('')}</div></details>`:'';
+const assetTotal=Number(room.asset_audio_total)||0;
+const assetProblem=(Number(room.asset_audio_missing)||0)+(Number(room.asset_audio_bad)||0)+(Number(room.asset_audio_unsupported)||0)+(Number(room.asset_audio_io_error)||0);
+const assetPending=Number(room.asset_audio_unknown)||0;
+const assetClass=assetProblem?'bad-text':(assetPending?'warn-text':'');
+const assetHtml=assetTotal?`<div class='row-meta ${assetClass}'>Assets: ${esc(room.asset_prepare_state||'unknown')} / ${esc(room.asset_audio_ready||0)} ready of ${esc(assetTotal)}${assetProblem?`, ${esc(assetProblem)} error`:''}${assetPending?`, ${esc(assetPending)} pending`:''}</div>`:'';
 const clockState=room.timer_state||room.session_state||'idle';
 const startMinutes=Math.max(1,Math.round(((Number(room.timer_duration_ms)||3600000)/60000)));
-return `<div class='room-console' data-room-operator-console='1'><div class='card room-primary'><div class='card-head'><div><h2 class='section-title'>Game control</h2><div class='room-clock'>${fmtClock(room.timer_remaining_ms)}</div><div class='row-meta'>${esc(clockState)} / session ${esc(room.session_state||'idle')}</div></div>${status(roomDerivedHealth(room))}</div>${profiles.length?`<label class='field-stack'><span>Game mode</span><select class='scenario-select' data-room-profile-room='${esc(room.room_id)}'><option value='' ${
+return `<div class='room-console' data-room-operator-console='1'><div class='card room-primary'><div class='card-head'><div><h2 class='section-title'>Game control</h2>${roomClockHtml(room,'div','room-clock')}<div class='row-meta'>${esc(clockState)} / session ${esc(room.session_state||'idle')}</div></div>${status(roomDerivedHealth(room))}</div>${profiles.length?`<label class='field-stack'><span>Game mode</span><select class='scenario-select' data-room-profile-room='${esc(room.room_id)}'><option value='' ${
 selected?'':'selected'}
 >Select game mode</option>${
 profiles.map(p=>`<option value='${esc(p.id)}' ${selected&&selected.id===p.id?'selected':''} ${p.valid===false?'disabled':''}>${esc(p.name||p.id)} (${fmtClock(p.duration_ms)}${p.valid===false?', invalid':''})</option>`).join('')}
@@ -350,7 +405,7 @@ profiles.map(p=>`<option value='${esc(p.id)}' ${selected&&selected.id===p.id?'se
 esc(selectedName||selectedId||'none')}
 </span></div><div class='kv'><span class='k'>Scenario</span><span class='v'> ${
 esc(scenarioName(room.room_id,scenarioId))}
-</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>`:noProfilesHtml(room.room_id)}<div style='height:12px'></div><div class='actions'><button class='approve' data-room-game='start' data-room-id='${esc(room.room_id)}' ${canStart?'':'disabled'}>Start game</button><button data-room-game='stop' data-room-id='${esc(room.room_id)}' ${canStop?'':'disabled'}>Stop game</button><button class='danger' data-room-game='reset' data-room-id='${esc(room.room_id)}' ${canReset?'':'disabled'}>Reset game</button></div></div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room,steps.length))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText)}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
+</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div><div class='actions'><button class='approve' data-room-game='start' data-room-id='${esc(room.room_id)}' ${canStart?'':'disabled'}>Start game</button><button data-room-game='stop' data-room-id='${esc(room.room_id)}' ${canStop?'':'disabled'}>Stop game</button><button class='danger' data-room-game='reset' data-room-id='${esc(room.room_id)}' ${canReset?'':'disabled'}>Reset game</button></div></div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room,steps.length))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText)}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
 esc(waitPrompt)}
 </div>`:''}${canSkipWait?`<div class='operator-prompt'>Operator override available: ${esc(skipWaitLabel)}</div>`:''}${room.scenario_operator_message?`<div class='operator-prompt'>${
 esc(room.scenario_operator_message)}
@@ -438,7 +493,7 @@ const current=roomCurrentScenarioStep(room);
 const issues=roomQuestDeviceIssues(room).length+(Number(room.issue_count)||0);
 const devices=roomScenarioDeviceIds(room).length||room.device_count||0;
 const runtime=room.scenario_runtime_state||room.session_state||'idle';
-return `<tr class='clickable-row' data-open-room='${esc(room.room_id)}'><td><strong>${esc(room.title||room.name||room.room_id)}</strong><span>${esc(room.room_id||'')}</span></td><td>${status(roomDerivedHealth(room))}</td><td><strong>${esc(gameName)}</strong><span>${esc(scenarioNameText)}</span></td><td>${esc(fmtClock(room.timer_remaining_ms))}</td><td>${esc(runtime)}</td><td>${esc(current?scenarioStepText(current):'none')}</td><td>${esc(scenarioWaitText(room))}</td><td>${esc(devices)}</td><td>${esc(issues)}</td><td class='observed-actions'><button class='small-btn' data-open-room='${esc(room.room_id)}'>Open</button></td></tr>`;
+return `<tr class='clickable-row' data-open-room='${esc(room.room_id)}'><td><strong>${esc(room.title||room.name||room.room_id)}</strong><span>${esc(room.room_id||'')}</span></td><td>${status(roomDerivedHealth(room))}</td><td><strong>${esc(gameName)}</strong><span>${esc(scenarioNameText)}</span></td><td>${roomClockHtml(room,'span','')}</td><td>${esc(runtime)}</td><td>${esc(current?scenarioStepText(current):'none')}</td><td>${esc(scenarioWaitText(room))}</td><td>${esc(devices)}</td><td>${esc(issues)}</td><td class='observed-actions'><button class='small-btn' data-open-room='${esc(room.room_id)}'>Open</button></td></tr>`;
 }
 
 function dashboardIssueRow(issue){
@@ -487,7 +542,7 @@ const canFinish=room.session_present&&room.session_state!=='finished';
 const canScenarioNext=(room.selected_scenario_id||room.running_scenario_id)&&(room.scenario_runtime_state==='running'||room.scenario_runtime_state==='waiting');
 let body='';
 if(roomTab==='overview'){
-body=`<div class='grid cols-2'><div class='card'><div class='card-head'><div><div class='card-title'>Room state</div><div class='card-sub'>${esc(room.title||room.name||'Room')}</div></div>${status(roomDerivedHealth(room))}</div><div class='kvs'><div class='kv'><span class='k'>Timer</span><span class='v'>${fmtClock(room.timer_remaining_ms)}</span></div><div class='kv'><span class='k'>Session</span><span class='v'>${esc(room.session_state||'idle')}</span></div><div class='kv'><span class='k'>Scenario devices</span><span class='v'>${esc(questDevs.length)}</span></div><div class='kv'><span class='k'>Hints</span><span class='v'>${esc(room.hint_sent_count||0)}</span></div></div></div><div class='card'><h2 class='section-title'>Problems</h2><div class='list'>${issues.length?issues.slice(0,4).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>`;
+body=`<div class='grid cols-2'><div class='card'><div class='card-head'><div><div class='card-title'>Room state</div><div class='card-sub'>${esc(room.title||room.name||'Room')}</div></div>${status(roomDerivedHealth(room))}</div><div class='kvs'><div class='kv'><span class='k'>Timer</span>${roomClockHtml(room,'span','v')}</div><div class='kv'><span class='k'>Session</span><span class='v'>${esc(room.session_state||'idle')}</span></div><div class='kv'><span class='k'>Scenario devices</span><span class='v'>${esc(questDevs.length)}</span></div><div class='kv'><span class='k'>Hints</span><span class='v'>${esc(room.hint_sent_count||0)}</span></div></div></div><div class='card'><h2 class='section-title'>Problems</h2><div class='list'>${issues.length?issues.slice(0,4).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>`;
 }
 else if(roomTab==='devices'){
 const questRows=questDevs.length?questDevs.map(questDeviceMonitorRow).join(''):`<div class='card empty'>No quest devices referenced by selected scenario</div>`;
@@ -497,7 +552,7 @@ else if(roomTab==='issues'){
 body=`<div class='list'>${issues.length?issues.map(issueRow).join(''):`<div class='card empty'>No issues for this room</div>`}</div>`;
 }
 else{
-body=`${renderRoomOperatorConsole(room)}${isAdmin()?renderRoomScenarioControl(room):''}<div class='grid cols-2'><div class='card'><h2 class='section-title'>Hint</h2><div class='hint-row'><input id='gm_hint_input' value='${esc(room.hint_message||'')}' placeholder='Hint for players / operator note'><button data-room-hint='send' data-room-id='${esc(room.room_id)}'>Send hint</button><button data-room-hint='clear' data-room-id='${esc(room.room_id)}' ${room.hint_active?'':'disabled'}>Clear</button></div></div><div class='card'><h2 class='section-title'>Device issues</h2><div class='list'>${issues.length?issues.slice(0,5).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div><details class='scenario-advanced'><summary>Emergency controls</summary><div class='actions'><button data-room-game='stop' data-room-id='${esc(room.room_id)}' ${canFinish?'':'disabled'}>Stop game</button><button data-room-timer='reset' data-room-id='${esc(room.room_id)}' ${canReset?'':'disabled'}>Reset timer</button><button class='danger' data-room-timer='finish' data-room-id='${esc(room.room_id)}' ${canFinish?'':'disabled'}>Finish session</button><button class='danger' data-room-scenario-runtime='next' data-room-id='${esc(room.room_id)}' ${canScenarioNext?'':'disabled'}>Force next step</button></div></details>`;
+body=`<div data-room-control-runtime='${esc(room.room_id)}'>${renderRoomOperatorConsole(room)}${isAdmin()?renderRoomScenarioControl(room):''}</div><div class='grid cols-2'><div class='card'><h2 class='section-title'>Hint</h2><div class='hint-row'><input id='gm_hint_input' value='${esc(room.hint_message||'')}' placeholder='Hint for players / operator note'><button data-room-hint='send' data-room-id='${esc(room.room_id)}'>Send hint</button><button data-room-hint='clear' data-room-id='${esc(room.room_id)}' ${room.hint_active?'':'disabled'}>Clear</button></div></div><div class='card'><h2 class='section-title'>Device issues</h2><div class='list'>${issues.length?issues.slice(0,5).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div><details class='scenario-advanced'><summary>Emergency controls</summary><div class='actions'><button data-room-game='stop' data-room-id='${esc(room.room_id)}' ${canFinish?'':'disabled'}>Stop game</button><button data-room-timer='reset' data-room-id='${esc(room.room_id)}' ${canReset?'':'disabled'}>Reset timer</button><button class='danger' data-room-timer='finish' data-room-id='${esc(room.room_id)}' ${canFinish?'':'disabled'}>Finish session</button><button class='danger' data-room-scenario-runtime='next' data-room-id='${esc(room.room_id)}' ${canScenarioNext?'':'disabled'}>Force next step</button></div></details>`;
 }
 return `${adminActions}${tabs(roomTab,['control','overview','devices','issues'],'room')}<div>${body}</div>`;
 }
@@ -618,11 +673,66 @@ const base=defaultScenarioBranch(index,[]);
 const name=branch&&branch.name||base.name;
 const steps=branch&&Array.isArray(branch.steps)?branch.steps.map(normalizeScenarioEditorStep):[];
 const type=scenarioBranchTypeValue(branch||base);
-return {id:branch&&branch.id||slugifyId(name,`branch_${index+1}`),name,type,enabled:!branch||branch.enabled!==false,required_for_completion:type==='normal'&&(!branch||branch.required_for_completion!==false),cooldown_ms:Number(branch&&branch.cooldown_ms)||0,run_once:!!(branch&&branch.run_once),steps};
+const policy=branch&&branch.policy&&typeof branch.policy==='object'?branch.policy:null;
+const cooldownMs=Number(branch&&branch.cooldown_ms)||Number(policy&&policy.cooldown_ms)||0;
+const out={id:branch&&branch.id||slugifyId(name,`branch_${index+1}`),name,type,enabled:!branch||branch.enabled!==false,required_for_completion:type==='normal'&&(!branch||branch.required_for_completion!==false),cooldown_ms:cooldownMs,run_once:!!(branch&&branch.run_once),steps};
+if(branch&&typeof branch==='object'){
+['priority','max_fire_count','trigger','guard_flags','policy','reentry','variants','result_policy','on_complete'].forEach(key=>{
+if(branch[key]!==undefined)out[key]=JSON.parse(JSON.stringify(branch[key]));
+});
+}
+return out;
+}
+
+function uniqueScenarioBranchId(branches,type){
+const used=new Set((Array.isArray(branches)?branches:[]).map(branch=>String(branch&&branch.id||'')));
+const reactive=type==='reactive';
+
+if(!reactive&&!used.has('main'))return 'main';
+
+const prefix=reactive?'reaction':'branch';
+let n=reactive?1:2;
+
+while(used.has(`${prefix}_${n}`))n++;
+
+return `${prefix}_${n}`;
+}
+
+function scenarioBranchNumberFromId(id,type){
+const reactive=type==='reactive';
+if(!reactive&&id==='main')return 1;
+const prefix=reactive?'reaction_':'branch_';
+const raw=String(id||'');
+if(raw.indexOf(prefix)!==0)return 1;
+const n=Number(raw.slice(prefix.length));
+return Number.isFinite(n)&&n>0?n:1;
+}
+
+function defaultScenarioBranchName(id,type){
+const reactive=type==='reactive';
+const n=scenarioBranchNumberFromId(id,type);
+if(!reactive&&id==='main')return 'Main';
+return reactive?`Reaction ${n}`:`Branch ${n}`;
 }
 
 function normalizeScenarioBranches(obj){
-if(obj&&Array.isArray(obj.branches)&&obj.branches.length)return obj.branches.slice(0,8).map(normalizeScenarioBranch);
+if(obj&&Array.isArray(obj.branches)&&obj.branches.length){
+const normalized=obj.branches.slice(0,8).map(normalizeScenarioBranch);
+const used=new Set();
+normalized.forEach((branch,index)=>{
+const type=scenarioBranchTypeValue(branch);
+let id=String(branch&&branch.id||'').trim();
+if(!id||used.has(id)){
+id=uniqueScenarioBranchId(normalized.slice(0,index),type);
+branch.id=id;
+}
+used.add(id);
+if(!branch.name){
+branch.name=defaultScenarioBranchName(branch.id,type);
+}
+});
+return normalized;
+}
 const steps=obj&&Array.isArray(obj.steps)?obj.steps.map(normalizeScenarioEditorStep):[];
 return [defaultScenarioBranch(0,steps)];
 }
@@ -639,6 +749,34 @@ delete obj.valid;
 delete obj.validation_issue_count;
 delete obj.validation_issues;
 return obj;
+}
+
+function scenarioClone(obj){
+return obj?JSON.parse(JSON.stringify(obj)):obj;
+}
+
+function scenarioRestoreMissingOriginalBranches(source){
+if(!source||!scenarioEditor.original_scenario)return source;
+const original=scenarioEditor.original_scenario;
+if((source.id||'')!==(original.id||'')||(source.room_id||'')!==(original.room_id||''))return source;
+if(!Array.isArray(source.branches)||!Array.isArray(original.branches))return source;
+const shrinkFloor=Number(scenarioEditor.branch_count_shrink_floor)||0;
+if(scenarioEditor.branch_count_shrink_allowed&&shrinkFloor>0&&source.branches.length>=shrinkFloor)return source;
+if(scenarioEditor.branch_count_shrink_allowed&&shrinkFloor<=0)return source;
+if(source.branches.length>=original.branches.length)return source;
+const currentById=new Map(source.branches.map(branch=>[String(branch&&branch.id||''),branch]));
+const originalIds=new Set(original.branches.map(branch=>String(branch&&branch.id||'')));
+const merged=[];
+original.branches.forEach(branch=>{
+const id=String(branch&&branch.id||'');
+merged.push(currentById.has(id)?currentById.get(id):scenarioClone(branch));
+});
+source.branches.forEach(branch=>{
+const id=String(branch&&branch.id||'');
+if(!originalIds.has(id))merged.push(branch);
+});
+source.branches=merged;
+return source;
 }
 
 function scenarioActiveBranchIndex(scenario){
@@ -703,10 +841,10 @@ return Array.from(names).sort((a,b)=>a.localeCompare(b));
 function renderScenarioFlagInput(value,attr){
 const selected=String(value||'');
 const flags=scenarioKnownFlagNames();
-const input=`<input ${attr||''} placeholder='Flag name, e.g. puzzle_done' value='${esc(selected)}'>`;
-if(!flags.length)return input;
-const options=[`<option value=''>Use existing flag</option>`].concat(flags.map(name=>`<option value='${esc(name)}' ${name===selected?'selected':''}>${esc(name)}</option>`)).join('');
-return `<div class='flag-picker'>${input}<select data-scenario-flag-suggest>${options}</select></div>`;
+if(!flags.length)return `<input ${attr||''} placeholder='Flag name, e.g. puzzle_done' value='${esc(selected)}'>`;
+const listId=`scenario_flag_names_${++gmFlagDatalistSeq}`;
+const options=flags.map(name=>`<option value='${esc(name)}'></option>`).join('');
+return `<input ${attr||''} list='${esc(listId)}' placeholder='Flag name, e.g. puzzle_done' value='${esc(selected)}'><datalist id='${esc(listId)}'>${options}</datalist>`;
 }
 
 function scenarioStepTypeValue(s){
@@ -922,7 +1060,7 @@ return params;
 function defaultScenarioCommandItem(){
 const device=firstScenarioDevice(true);
 const command=firstCommandForDevice(device);
-return {device_id:device&&device.id||'',command_id:command&&command.id||''};
+return {device_id:device&&device.id||'',command_id:command&&command.id||'',params:defaultParamsForCommand(device,command)};
 }
 
 function firstDeviceWithEvent(){
@@ -1008,146 +1146,7 @@ if(normalized==='END_GAME')return newScenarioStep(index,'end_game');
 return newScenarioStep(index,'wait_time');
 }
 
-function scenarioStepPresetButtons(branch){
-const allowed=scenarioAllowedStepTypesForBranch(branch);
-const allowedSet=allowed?new Set(allowed):null;
-const schemas=scenarioStepSchemas().filter(schema=>!allowedSet||allowedSet.has(schema.type||''));
-const title=allowedSet?(Array.isArray(branch&&branch.steps)&&branch.steps.length?'Add action':'Add trigger'):'Add step';
-const hasSteps=Array.isArray(branch&&branch.steps)&&branch.steps.length>0;
-const hint=allowedSet&&!hasSteps?`<div class='row-meta scenario-reaction-hint'>Add one trigger first. Actions become available after the trigger.</div>`:'';
-return `<h2 class='section-title'>${esc(title)}</h2>${hint}<div class='scenario-step-presets'>${schemas.map(schema=>`<div class='scenario-step-preset-row'><button data-scenario-step-action='add_schema' data-scenario-step-type='${esc(schema.type||'WAIT_TIME')}'>${esc(schema.label||schema.type)}</button><button class='icon-btn' title='Show example' aria-label='Show step example' data-scenario-step-help='${esc(schema.type||'WAIT_TIME')}'>?</button></div>`).join('')}</div>`;
-}
-
-function scenarioDeviceById(deviceId){
-return scenarioCatalogDevices().find(device=>device.id===deviceId)||null;
-}
-
-function scenarioCommandById(deviceId,commandId){
-const device=scenarioDeviceById(deviceId);
-return device&&Array.isArray(device.commands)?device.commands.find(cmd=>cmd.id===commandId)||null:null;
-}
-
-function scenarioValidCommandId(device,commandId){
-const commands=device&&Array.isArray(device.commands)?device.commands:[];
-if(commandId&&commands.some(cmd=>cmd.id===commandId))return commandId;
-return commands[0]&&commands[0].id||'';
-}
-
-function scenarioValidEventId(device,eventId){
-const events=device&&Array.isArray(device.events)?device.events:[];
-if(eventId&&events.some(ev=>ev.id===eventId))return eventId;
-return events[0]&&events[0].id||'';
-}
-
-function scenarioEventById(deviceId,eventId){
-const device=scenarioDeviceById(deviceId);
-return device&&Array.isArray(device.events)?device.events.find(ev=>ev.id===eventId)||null:null;
-}
-
-function scenarioCommandName(deviceId,commandId){
-const command=scenarioCommandById(deviceId,commandId);
-return command&&(command.label||command.id)||commandId||'command';
-}
-
-function scenarioAudioCommandSummary(step){
-const commandId=String(step&&step.command_id||'');
-if(commandId==='play'){
-const params=step&&step.params||{};
-return audioChannelValue(params)==='background'?(params.repeat?'Play background repeat':'Play background'):'Play audio';
-}
-return scenarioCommandName('system_audio',commandId);
-}
-
-function scenarioDeviceEventName(deviceId,eventId){
-const event=scenarioEventById(deviceId,eventId);
-return event&&(event.label||event.id)||eventId||'event';
-}
-
-function scenarioStepPreviewText(step,index){
-const type=scenarioStepTypeValue(step);
-if(type==='DEVICE_COMMAND'){
-const device=scenarioDeviceById(step.device_id);
-if(String(step.device_id||'')==='system_audio')return `${index+1}. ${scenarioAudioCommandSummary(step)}`;
-return `${index+1}. ${scenarioDeviceName(device)} -> ${scenarioCommandName(step.device_id,step.command_id)}`;
-}
-if(type==='DEVICE_COMMAND_GROUP')return `${index+1}. Command group (${(Array.isArray(step.commands)?step.commands:[]).length})`;
-if(type==='WAIT_DEVICE_EVENT'){
-const device=scenarioDeviceById(step.device_id);
-return `${index+1}. Wait ${scenarioDeviceName(device)}: ${scenarioDeviceEventName(step.device_id,step.event_id)}`;
-}
-if(type==='WAIT_ANY_DEVICE_EVENT')return `${index+1}. Wait any of ${(Array.isArray(step.events)?step.events:[]).length} events`;
-if(type==='WAIT_ALL_DEVICE_EVENTS')return `${index+1}. Wait all ${(Array.isArray(step.events)?step.events:[]).length} events`;
-if(type==='WAIT_TIME')return `${index+1}. ${waitTimeLabel(step.duration_ms)}`;
-if(type==='OPERATOR_APPROVAL')return `${index+1}. Operator: ${step.prompt||step.operator_prompt||'approval'}`;
-if(type==='SHOW_OPERATOR_MESSAGE')return `${index+1}. Show operator: ${step.message||'message'}`;
-if(type==='SET_FLAG')return `${index+1}. Set flag ${step.flag_name||'flag'} = ${step.value===false?'false':'true'}`;
-if(type==='WAIT_FLAGS')return `${index+1}. Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`;
-if(type==='END_GAME')return `${index+1}. End game`;
-return `${index+1}. ${step.label||type}`;
-}
-
-function renderScenarioDraftPreview(steps){
-const list=Array.isArray(steps)?steps:[];
-return `<div class='step-list scenario-preview'>${list.length?list.map((step,index)=>`<div class='step-item'><span>${esc(scenarioStepPreviewText(step,index))}</span>${step.enabled===false?` <span class='badge'>disabled</span>`:''}</div>`).join(''):`<div class='empty'>No steps yet</div>`}</div>`;
-}
-
-function refreshScenarioStepLabel(stepEl){
-if(!stepEl)return;
-const label=stepEl.querySelector('[data-step-field="label"]');
-const typeField=stepEl.querySelector('[data-step-field="type"]');
-if(!label||!typeField)return;
-const type=typeField.value||'WAIT_TIME';
-if(type==='DEVICE_COMMAND'){
-const deviceId=(stepEl.querySelector('[data-step-field="device_id"]')||{}).value||'';
-const commandId=(stepEl.querySelector('[data-step-field="command_id"]')||{}).value||'';
-const device=scenarioDeviceById(deviceId);
-label.value=`${scenarioRoomNameForDevice(device)}: ${scenarioDeviceName(device)} - ${scenarioCommandName(deviceId,commandId)}`;
-}
-else if(type==='WAIT_DEVICE_EVENT'){
-const deviceId=(stepEl.querySelector('[data-step-field="device_id"]')||{}).value||'';
-const eventId=(stepEl.querySelector('[data-step-field="event_id"]')||{}).value||'';
-const device=scenarioDeviceById(deviceId);
-label.value=`${scenarioRoomNameForDevice(device)}: wait ${scenarioDeviceName(device)} - ${scenarioDeviceEventName(deviceId,eventId)}`;
-}
-else if(type==='WAIT_ANY_DEVICE_EVENT'){
-const count=stepEl.querySelectorAll('[data-event-group-item]').length||1;
-label.value=`Wait any device event (${count})`;
-}
-else if(type==='WAIT_ALL_DEVICE_EVENTS'){
-const count=stepEl.querySelectorAll('[data-event-group-item]').length||1;
-label.value=`Wait all device events (${count})`;
-}
-else if(type==='WAIT_TIME'){
-const seconds=(stepEl.querySelector('[data-step-field="duration_ms"]')||{}).value||1;
-label.value=`Wait ${seconds} sec`;
-}
-else if(type==='OPERATOR_APPROVAL'){
-const prompt=(stepEl.querySelector('[data-step-field="prompt"]')||{}).value||'approval';
-label.value=`Operator approval: ${prompt}`;
-}
-else if(type==='SHOW_OPERATOR_MESSAGE'){
-const message=(stepEl.querySelector('[data-step-field="message"]')||{}).value||'message';
-label.value=`Show operator: ${message}`;
-}
-else if(type==='DEVICE_COMMAND_GROUP'){
-const count=stepEl.querySelectorAll('[data-command-group-item]').length||1;
-label.value=`Command group (${count})`;
-}
-else if(type==='SET_FLAG'){
-const flag=(stepEl.querySelector('[data-step-field="flag_name"]')||{}).value||'flag';
-const valueField=stepEl.querySelector('[data-step-field="value"]');
-const value=valueField?(valueField.type==='checkbox'?valueField.checked:valueField.value!=='false'):true;
-label.value=`Set ${flag} = ${value?'true':'false'}`;
-}
-else if(type==='WAIT_FLAGS'){
-const count=stepEl.querySelectorAll('[data-flag-list-item]').length||1;
-label.value=`Wait flags (${count})`;
-}
-else if(type==='END_GAME'){
-label.value='End game';
-}
-}
-
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
 function audioFileIsWav(path){
 return /\.wav$/i.test(String(path||''));
 }
@@ -1187,12 +1186,9 @@ return `<div class='row'><input data-step-param='${esc(key)}' placeholder='${esc
 }
 
 function renderCommandParams(command,params){
-const schema=command&&Array.isArray(command.params_schema)?command.params_schema:[];
+const schema=command&&Array.isArray(command.args_schema)?command.args_schema:[];
 const values=params&&typeof params==='object'?params:{};
 if(!schema.length)return '';
-if(!commandSupportsScenarioParams(command)){
-return `<div class='row-meta warn-text'>Parameters are not applied to MQTT payload yet. This command publishes its saved static payload.</div>`;
-}
 return `<div class='builder-param-list'>${schema.map(param=>{
 const key=param.key||'';
 const label=param.label||key;
@@ -1234,10 +1230,12 @@ const device=scenarioDeviceById(selectedDevice)||devices[0]||null;
 if(device&&!selectedDevice)selectedDevice=device.id||'';
 const deviceCommands=device&&Array.isArray(device.commands)?device.commands:[];
 const selectedCommand=scenarioValidCommandId(device,item.command_id);
+const command=deviceCommands.find(cmd=>cmd.id===selectedCommand)||deviceCommands[0]||null;
 const deviceControl=devices.length?`<select class='scenario-select' data-group-command-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-group-command-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
 const commandItems=deviceCommands.map(cmd=>({id:cmd.id,name:cmd.label||cmd.id}));
 const commandControl=deviceCommands.length?`<select class='scenario-select' data-group-command-field='command_id'>${optionList(commandItems,selectedCommand,'Select command')}</select>`:`<input data-group-command-field='command_id' placeholder='Command ID' value='${esc(selectedCommand)}'>`;
-return `<div class='command-group-item' data-command-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${commandControl}<button class='icon-btn danger' title='Remove command' aria-label='Remove command' data-scenario-step-action='group_delete' data-command-index='${index}'>&times;</button></div></div>`;
+const paramsHtml=renderCommandParams(command,item.params);
+return `<div class='command-group-item' data-command-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${commandControl}<button class='icon-btn danger' title='Remove command' aria-label='Remove command' data-scenario-step-action='group_delete' data-command-index='${index}'>&times;</button></div>${paramsHtml}</div>`;
 }).join('')}<button data-scenario-step-action='group_add'>Add command</button></div>`;
 }
 
@@ -1388,6 +1386,277 @@ if(type==='SET_FLAG')return renderSetFlagPayload(step);
 if(scenarioStepSchema(type))return renderScenarioSchemaPayload(step,type);
 if(type==='OPERATOR_APPROVAL')return `<div class='row'><input data-step-field='prompt' placeholder='Operator prompt' value='${esc(step.prompt||step.operator_prompt||'')}'><input data-step-field='approve_label' placeholder='Approve label' value='${esc(step.approve_label||step.operator_approve_label||'Continue')}'></div>`;
 return `<div class='row'><input data-step-field='duration_ms' type='number' min='1' step='1' placeholder='Duration sec' value='${esc(durationMsToSeconds(step.duration_ms||1000))}'><span class='row-meta'>sec</span></div>`;
+}
+
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+function scenarioStepPresetButtons(branch){
+if(scenarioIsReactiveV2Branch(branch))return reactiveV2PresetButtons(branch);
+const allowed=scenarioAllowedStepTypesForBranch(branch);
+const allowedSet=allowed?new Set(allowed):null;
+const schemas=scenarioStepSchemas().filter(schema=>!allowedSet||allowedSet.has(schema.type||''));
+const title=allowedSet?(Array.isArray(branch&&branch.steps)&&branch.steps.length?'Add action':'Add trigger'):'Add step';
+const hasSteps=Array.isArray(branch&&branch.steps)&&branch.steps.length>0;
+const hint=allowedSet&&!hasSteps?`<div class='row-meta scenario-reaction-hint'>Add one trigger first. Actions become available after the trigger.</div>`:'';
+return `<h2 class='section-title'>${esc(title)}</h2>${hint}<div class='scenario-step-presets'>${schemas.map(schema=>`<div class='scenario-step-preset-row'><button data-scenario-step-action='add_schema' data-scenario-step-type='${esc(schema.type||'WAIT_TIME')}'>${esc(schema.label||schema.type)}</button><button class='icon-btn' title='Show example' aria-label='Show step example' data-scenario-step-help='${esc(schema.type||'WAIT_TIME')}'>?</button></div>`).join('')}</div>`;
+}
+
+function scenarioIsReactiveV2Branch(branch){
+return scenarioBranchTypeValue(branch)==='reactive'&&(Array.isArray(branch&&branch.variants)||!!(branch&&branch.trigger));
+}
+
+function reactiveV2ActionTypes(){
+return ['DEVICE_COMMAND','WAIT_TIME','SET_FLAG','SHOW_OPERATOR_MESSAGE'];
+}
+
+function reactiveV2ActionTypeOptions(type){
+const selected=scenarioStepTypeValue({type});
+const types=reactiveV2ActionTypes();
+const all=types.includes(selected)?types:[selected].concat(types);
+return all.map(t=>`<option value='${esc(t)}' ${selected===t?'selected':''}>${esc(scenarioStepTypeLabel(t))}</option>`).join('');
+}
+
+function defaultReactiveV2Trigger(){
+const device=firstDeviceWithEvent();
+const event=firstEventForDevice(device);
+return {kind:'device_event',device_id:device&&device.id||'',event_id:event&&event.id||''};
+}
+
+function defaultReactiveV2BranchFields(){
+return {priority:0,max_fire_count:0,trigger:defaultReactiveV2Trigger(),guard_flags:[],policy:{mode:'single',cooldown_ms:0,max_fire_count:0},reentry:{mode:'ignore'},variants:[{id:'variant_1',label:'Actions',actions:[]}],result_policy:{on_done:'continue',on_fail:'fail_reaction',on_timeout:'fail_reaction'},on_complete:[]};
+}
+
+function ensureReactiveV2Branch(branch){
+if(!branch)return branch;
+const defaults=defaultReactiveV2BranchFields();
+branch.priority=Number(branch.priority)||0;
+branch.max_fire_count=Number(branch.max_fire_count)||Number(branch.policy&&branch.policy.max_fire_count)||0;
+branch.trigger=branch.trigger&&typeof branch.trigger==='object'?branch.trigger:defaults.trigger;
+branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+branch.policy=branch.policy&&typeof branch.policy==='object'?branch.policy:defaults.policy;
+branch.policy.mode=branch.policy.mode||'single';
+branch.policy.cooldown_ms=Number(branch.policy.cooldown_ms)||Number(branch.cooldown_ms)||0;
+branch.policy.max_fire_count=Number(branch.policy.max_fire_count)||branch.max_fire_count||0;
+branch.cooldown_ms=Number(branch.cooldown_ms)||Number(branch.policy.cooldown_ms)||0;
+branch.reentry=branch.reentry&&typeof branch.reentry==='object'?branch.reentry:defaults.reentry;
+branch.reentry.mode=branch.reentry.mode||'ignore';
+branch.result_policy=branch.result_policy&&typeof branch.result_policy==='object'?branch.result_policy:defaults.result_policy;
+branch.result_policy.on_done=branch.result_policy.on_done||'continue';
+branch.result_policy.on_fail=branch.result_policy.on_fail||'fail_reaction';
+branch.result_policy.on_timeout=branch.result_policy.on_timeout||'fail_reaction';
+branch.variants=Array.isArray(branch.variants)&&branch.variants.length?branch.variants:defaults.variants;
+branch.variants=branch.variants.map((variant,index)=>({id:variant&&variant.id||`variant_${index+1}`,label:variant&&variant.label||variant&&variant.name||(index===0?'Actions':`Variant ${index+1}`),actions:Array.isArray(variant&&variant.actions)?variant.actions:[]}));
+branch.on_complete=Array.isArray(branch.on_complete)?branch.on_complete:[];
+return branch;
+}
+
+function reactiveV2PresetButtons(branch){
+const variants=Array.isArray(branch&&branch.variants)?branch.variants:[];
+return `<h2 class='section-title'>Reaction</h2><div class='row-meta'>${esc(variants.length)} variant${variants.length===1?'':'s'}. Use the rule editor on the right.</div>`;
+}
+
+function renderReactiveV2Trigger(branch){
+const trigger=branch.trigger||defaultReactiveV2Trigger();
+const kind=String(trigger.kind||'device_event');
+const devices=scenarioCatalogDevices().filter(device=>Array.isArray(device.events)&&device.events.length);
+let selectedDevice=trigger.device_id||((devices[0]&&devices[0].id)||'');
+const device=scenarioDeviceById(selectedDevice)||devices[0]||null;
+if(device&&!selectedDevice)selectedDevice=device.id||'';
+const events=device&&Array.isArray(device.events)?device.events:[];
+const selectedEvent=scenarioValidEventId(device,trigger.event_id||'');
+const kindOptions=['device_event','flag_changed','operator_event','runtime_event'].map(item=>`<option value='${item}' ${kind===item?'selected':''}>${item}</option>`).join('');
+let body='';
+if(kind==='device_event'){
+const deviceControl=devices.length?`<select class='scenario-select' data-v2-trigger-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-v2-trigger-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
+const eventControl=events.length?`<select class='scenario-select' data-v2-trigger-field='event_id'>${optionList(events,selectedEvent,'Select event')}</select>`:`<input data-v2-trigger-field='event_id' placeholder='Event ID' value='${esc(trigger.event_id||selectedEvent)}'>`;
+body=`<div class='scenario-v2-inline-fields'>${deviceControl}${eventControl}</div>`;
+}else if(kind==='flag_changed'){
+body=`<div class='scenario-v2-inline-fields'>${renderScenarioFlagInput(trigger.flag_name||'',`data-v2-trigger-field='flag_name'`)}</div>`;
+}else if(kind==='operator_event'){
+body=`<div class='scenario-v2-inline-fields'><input data-v2-trigger-field='operator_event' placeholder='Operator event' value='${esc(trigger.operator_event||'')}'></div>`;
+}else{
+body=`<div class='scenario-v2-inline-fields'><input data-v2-trigger-field='runtime_event' placeholder='Runtime event' value='${esc(trigger.runtime_event||'')}'></div>`;
+}
+return `<section class='scenario-v2-rule'><div class='scenario-v2-rule-label'>When</div><div class='scenario-v2-rule-body'><div class='scenario-v2-inline-fields narrow'><select class='scenario-select' data-v2-trigger-field='kind'>${kindOptions}</select></div>${body}</div></section>`;
+}
+
+function renderReactiveV2Type(branch){
+const policy=branch.policy||{};
+const mode=String(policy.mode||'single');
+const item=(value,label,sub)=>`<label class='scenario-v2-type-option ${mode===value?'active':''}'><input data-v2-policy-field='mode' type='radio' name='reactive_v2_mode' value='${esc(value)}' ${mode===value?'checked':''}><span><strong>${esc(label)}</strong><em>${esc(sub)}</em></span></label>`;
+return `<section class='scenario-v2-type'><div class='scenario-v2-type-title'>Reaction type</div><div class='scenario-v2-type-grid'>${item('single','Same actions','Run the same action list on every trigger.')}${item('escalate','Escalate','Run level 1, then level 2, then the next levels.')}${item('rotate','Rotate','Cycle through variants on each trigger.')}${item('random','Random','Pick one variant randomly.')}</div></section>`;
+}
+
+function renderReactiveV2Policy(branch){
+const policy=branch.policy||{};
+const reentry=branch.reentry||{};
+const result=branch.result_policy||{};
+const reentryMode=String(reentry.mode||'ignore');
+const isEscalate=String(policy.mode||'single')==='escalate';
+const resultAction=value=>['continue','set_flag','fail_reaction','fail_scenario','retry'].map(item=>`<option value='${item}' ${String(value||'')===item?'selected':''}>${item}</option>`).join('');
+return `<details class='scenario-advanced scenario-v2-settings'><summary>Advanced reaction settings</summary><div class='scenario-v2-settings-grid'><label class='field-stack'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></label><label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><label class='field-stack'><span>Reentry while running</span><select data-v2-reentry-field='mode'><option value='ignore' ${reentryMode==='ignore'?'selected':''}>ignore</option><option value='queue_one' ${reentryMode==='queue_one'?'selected':''}>queue_one</option></select></label>${isEscalate?'':`<label class='field-stack'><span>Max fires</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(Number(policy.max_fire_count)||Number(branch.max_fire_count)||0)}'></label>`}<label class='field-stack'><span>Priority</span><input data-v2-branch-field='priority' type='number' step='1' value='${esc(Number(branch.priority)||0)}'></label><label class='field-stack'><span>On done</span><select data-v2-result-field='on_done'>${resultAction(result.on_done||'continue')}</select></label><label class='field-stack'><span>On fail</span><select data-v2-result-field='on_fail'>${resultAction(result.on_fail||'fail_reaction')}</select></label><label class='field-stack'><span>On timeout</span><select data-v2-result-field='on_timeout'>${resultAction(result.on_timeout||'fail_reaction')}</select></label><label class='field-stack'><span>Result flag</span>${renderScenarioFlagInput(result.timeout_flag||result.flag||'',`data-v2-result-field='timeout_flag'`)}</label></div></details>`;
+}
+
+function renderReactiveV2Guards(branch){
+const guards=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+return `<section class='scenario-v2-rule'><div class='scenario-v2-rule-label'>If</div><div class='scenario-v2-rule-body'><div class='scenario-v2-guard-list'>${guards.length?guards.map((guard,index)=>`<div class='scenario-v2-guard' data-v2-guard-item='${index}'><span class='row-meta'>Flag</span>${renderScenarioFlagInput(guard.flag||guard.flag_name||guard.name||'',`data-v2-guard-field='flag'`)}<select data-v2-guard-field='value'><option value='true' ${guard.value!==false?'selected':''}>is true</option><option value='false' ${guard.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' data-reactive-v2-action='delete_guard' data-guard-index='${index}'>&times;</button></div>`).join(''):`<div class='empty compact-empty'>No guard flags. The reaction can run whenever the trigger arrives.</div>`}</div><button data-reactive-v2-action='add_guard'>Add condition</button></div></section>`;
+}
+
+function renderReactiveV2Action(action,variantIndex,actionIndex){
+const type=scenarioStepTypeValue(action);
+const summary=scenarioStepSummaryText(action);
+return `<div class='builder-step scenario-step-row scenario-step-${scenarioStepVisualType(action)} compact-step scenario-v2-action' data-v2-action='${actionIndex}' data-variant-index='${variantIndex}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${actionIndex+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(action)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge'>${esc(scenarioStepBadgeLabel(action))}</span></div><div class='actions compact-actions'><button class='icon-btn danger' data-reactive-v2-action='delete_action' data-variant-index='${variantIndex}' data-action-index='${actionIndex}'>&times;</button></div></div><div class='scenario-step-edit'><div class='scenario-v2-action-fields'><input data-step-field='label' placeholder='Action label' value='${esc(action.label||'')}'><select data-step-field='type'>${reactiveV2ActionTypeOptions(type)}</select></div>${renderScenarioStepPayload(action,type)}</div></div>`;
+}
+
+function renderReactiveV2ActionAddButtons(variantIndex){
+return `<div class='scenario-v2-action-add'><button data-reactive-v2-action='add_action' data-action-type='DEVICE_COMMAND' data-variant-index='${variantIndex}'>Add device command</button><button data-reactive-v2-action='add_action' data-action-type='WAIT_TIME' data-variant-index='${variantIndex}'>Add wait</button><button data-reactive-v2-action='add_action' data-action-type='SET_FLAG' data-variant-index='${variantIndex}'>Add flag</button><button data-reactive-v2-action='add_action' data-action-type='SHOW_OPERATOR_MESSAGE' data-variant-index='${variantIndex}'>Add message</button></div>`;
+}
+
+function renderReactiveV2Variants(branch){
+const variants=Array.isArray(branch.variants)?branch.variants:[];
+const mode=String(branch.policy&&branch.policy.mode||'single');
+const isSingle=mode==='single';
+const isEscalate=mode==='escalate';
+const title=isEscalate?'Escalation levels':(isSingle?'Actions':'Variants');
+const addLabel=isEscalate?'Add level':'Add variant';
+const shown=isSingle?(variants.length?[variants[0]]:[{id:'variant_1',label:'Actions',actions:[]}]):variants;
+const maxFireValue=Number(branch.policy&&branch.policy.max_fire_count)||Number(branch.max_fire_count)||shown.length||1;
+const escalateControls=isEscalate?`<label class='scenario-v2-max-fire'><span>Stop after level</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(maxFireValue)}'></label>`:'';
+return `<section class='scenario-v2-rule scenario-v2-then'><div class='scenario-v2-rule-label'>Then</div><div class='scenario-v2-rule-body'><div class='scenario-v2-subtitle-row'><div class='scenario-v2-subtitle'>${esc(title)}</div>${escalateControls}</div><div class='scenario-v2-variant-list'>${shown.map((variant,index)=>{const originalIndex=isSingle?0:index;const label=isEscalate?`Level ${index+1}`:(isSingle?'Actions':`Variant ${index+1}`);const nameValue=isSingle?'Actions':(variant.label||variant.name||label);return `<div class='scenario-v2-variant' data-v2-variant='${originalIndex}'><div class='scenario-v2-variant-head'><label class='field-stack'><span>${esc(label)}</span><input data-v2-variant-field='label' placeholder='${esc(label)} label' value='${esc(nameValue)}' ${isSingle?'readonly':''}></label><div class='actions'>${isSingle?'':`<button class='danger' data-reactive-v2-action='delete_variant' data-variant-index='${originalIndex}' ${variants.length<=1?'disabled':''}>Delete ${isEscalate?'level':'variant'}</button>`}</div></div><details class='scenario-advanced compact-advanced scenario-v2-variant-id'><summary>${esc(isEscalate?'Level id':'Variant id')}</summary><div class='row'><input data-v2-variant-field='id' placeholder='Variant ID' value='${esc(variant.id||'')}'></div></details><div class='scenario-v2-action-list'>${(Array.isArray(variant.actions)?variant.actions:[]).map((action,actionIndex)=>renderReactiveV2Action(action,originalIndex,actionIndex)).join('')||`<div class='empty'>No actions yet. Add one or more actions below.</div>`}</div>${renderReactiveV2ActionAddButtons(originalIndex)}</div>`;}).join('')}</div>${isSingle?'':`<button data-reactive-v2-action='add_variant'>${esc(addLabel)}</button>`}</div></section>`;
+}
+
+function renderReactiveV2Editor(branch){
+ensureReactiveV2Branch(branch);
+return `<div class='scenario-v2-editor'>${renderReactiveV2Type(branch)}${renderReactiveV2Trigger(branch)}${renderReactiveV2Guards(branch)}${renderReactiveV2Variants(branch)}${renderReactiveV2Policy(branch)}</div>`;
+}
+
+function scenarioDeviceById(deviceId){
+return scenarioCatalogDevices().find(device=>device.id===deviceId)||null;
+}
+
+function scenarioCommandById(deviceId,commandId){
+const device=scenarioDeviceById(deviceId);
+return device&&Array.isArray(device.commands)?device.commands.find(cmd=>cmd.id===commandId)||null:null;
+}
+
+function scenarioValidCommandId(device,commandId){
+const commands=device&&Array.isArray(device.commands)?device.commands:[];
+if(commandId&&commands.some(cmd=>cmd.id===commandId))return commandId;
+return commands[0]&&commands[0].id||'';
+}
+
+function scenarioValidEventId(device,eventId){
+const events=device&&Array.isArray(device.events)?device.events:[];
+if(eventId&&events.some(ev=>ev.id===eventId))return eventId;
+return events[0]&&events[0].id||'';
+}
+
+function scenarioEventById(deviceId,eventId){
+const device=scenarioDeviceById(deviceId);
+return device&&Array.isArray(device.events)?device.events.find(ev=>ev.id===eventId)||null:null;
+}
+
+function scenarioCommandName(deviceId,commandId){
+const command=scenarioCommandById(deviceId,commandId);
+return command&&(command.label||command.id)||commandId||'command';
+}
+
+function scenarioAudioCommandSummary(step){
+const commandId=String(step&&step.command_id||'');
+if(commandId==='play'){
+const params=step&&step.params||{};
+return audioChannelValue(params)==='background'?(params.repeat?'Play background repeat':'Play background'):'Play audio';
+}
+return scenarioCommandName('system_audio',commandId);
+}
+
+function scenarioDeviceEventName(deviceId,eventId){
+const event=scenarioEventById(deviceId,eventId);
+return event&&(event.label||event.id)||eventId||'event';
+}
+
+function scenarioStepPreviewText(step,index){
+const type=scenarioStepTypeValue(step);
+if(type==='DEVICE_COMMAND'){
+const device=scenarioDeviceById(step.device_id);
+if(String(step.device_id||'')==='system_audio')return `${index+1}. ${scenarioAudioCommandSummary(step)}`;
+return `${index+1}. ${scenarioDeviceName(device)} -> ${scenarioCommandName(step.device_id,step.command_id)}`;
+}
+if(type==='DEVICE_COMMAND_GROUP')return `${index+1}. Command group (${(Array.isArray(step.commands)?step.commands:[]).length})`;
+if(type==='WAIT_DEVICE_EVENT'){
+const device=scenarioDeviceById(step.device_id);
+return `${index+1}. Wait ${scenarioDeviceName(device)}: ${scenarioDeviceEventName(step.device_id,step.event_id)}`;
+}
+if(type==='WAIT_ANY_DEVICE_EVENT')return `${index+1}. Wait any of ${(Array.isArray(step.events)?step.events:[]).length} events`;
+if(type==='WAIT_ALL_DEVICE_EVENTS')return `${index+1}. Wait all ${(Array.isArray(step.events)?step.events:[]).length} events`;
+if(type==='WAIT_TIME')return `${index+1}. ${waitTimeLabel(step.duration_ms)}`;
+if(type==='OPERATOR_APPROVAL')return `${index+1}. Operator: ${step.prompt||step.operator_prompt||'approval'}`;
+if(type==='SHOW_OPERATOR_MESSAGE')return `${index+1}. Show operator: ${step.message||'message'}`;
+if(type==='SET_FLAG')return `${index+1}. Set flag ${step.flag_name||'flag'} = ${step.value===false?'false':'true'}`;
+if(type==='WAIT_FLAGS')return `${index+1}. Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`;
+if(type==='END_GAME')return `${index+1}. End game`;
+return `${index+1}. ${step.label||type}`;
+}
+
+function renderScenarioDraftPreview(steps){
+const list=Array.isArray(steps)?steps:[];
+return `<div class='step-list scenario-preview'>${list.length?list.map((step,index)=>`<div class='step-item'><span>${esc(scenarioStepPreviewText(step,index))}</span>${step.enabled===false?` <span class='badge'>disabled</span>`:''}</div>`).join(''):`<div class='empty'>No steps yet</div>`}</div>`;
+}
+
+function refreshScenarioStepLabel(stepEl){
+if(!stepEl)return;
+const label=stepEl.querySelector('[data-step-field="label"]');
+const typeField=stepEl.querySelector('[data-step-field="type"]');
+if(!label||!typeField)return;
+const type=typeField.value||'WAIT_TIME';
+if(type==='DEVICE_COMMAND'){
+const deviceId=(stepEl.querySelector('[data-step-field="device_id"]')||{}).value||'';
+const commandId=(stepEl.querySelector('[data-step-field="command_id"]')||{}).value||'';
+const device=scenarioDeviceById(deviceId);
+label.value=`${scenarioRoomNameForDevice(device)}: ${scenarioDeviceName(device)} - ${scenarioCommandName(deviceId,commandId)}`;
+}
+else if(type==='WAIT_DEVICE_EVENT'){
+const deviceId=(stepEl.querySelector('[data-step-field="device_id"]')||{}).value||'';
+const eventId=(stepEl.querySelector('[data-step-field="event_id"]')||{}).value||'';
+const device=scenarioDeviceById(deviceId);
+label.value=`${scenarioRoomNameForDevice(device)}: wait ${scenarioDeviceName(device)} - ${scenarioDeviceEventName(deviceId,eventId)}`;
+}
+else if(type==='WAIT_ANY_DEVICE_EVENT'){
+const count=stepEl.querySelectorAll('[data-event-group-item]').length||1;
+label.value=`Wait any device event (${count})`;
+}
+else if(type==='WAIT_ALL_DEVICE_EVENTS'){
+const count=stepEl.querySelectorAll('[data-event-group-item]').length||1;
+label.value=`Wait all device events (${count})`;
+}
+else if(type==='WAIT_TIME'){
+const seconds=(stepEl.querySelector('[data-step-field="duration_ms"]')||{}).value||1;
+label.value=`Wait ${seconds} sec`;
+}
+else if(type==='OPERATOR_APPROVAL'){
+const prompt=(stepEl.querySelector('[data-step-field="prompt"]')||{}).value||'approval';
+label.value=`Operator approval: ${prompt}`;
+}
+else if(type==='SHOW_OPERATOR_MESSAGE'){
+const message=(stepEl.querySelector('[data-step-field="message"]')||{}).value||'message';
+label.value=`Show operator: ${message}`;
+}
+else if(type==='DEVICE_COMMAND_GROUP'){
+const count=stepEl.querySelectorAll('[data-command-group-item]').length||1;
+label.value=`Command group (${count})`;
+}
+else if(type==='SET_FLAG'){
+const flag=(stepEl.querySelector('[data-step-field="flag_name"]')||{}).value||'flag';
+const valueField=stepEl.querySelector('[data-step-field="value"]');
+const value=valueField?(valueField.type==='checkbox'?valueField.checked:valueField.value!=='false'):true;
+label.value=`Set ${flag} = ${value?'true':'false'}`;
+}
+else if(type==='WAIT_FLAGS'){
+const count=stepEl.querySelectorAll('[data-flag-list-item]').length||1;
+label.value=`Wait flags (${count})`;
+}
+else if(type==='END_GAME'){
+label.value='End game';
+}
 }
 
 function scenarioStepSummaryText(step){
@@ -1574,7 +1843,7 @@ const branches=Array.isArray(base&&base.branches)?base.branches:[];
 if(!branches.length)return '';
 const flow=branches.map((branch,index)=>({branch,index})).filter(item=>scenarioBranchTypeValue(item.branch)==='normal');
 const reactions=branches.map((branch,index)=>({branch,index})).filter(item=>scenarioBranchTypeValue(item.branch)==='reactive');
-const tab=item=>`<button class='scenario-branch-tab ${item.index===activeIndex?'active':''}' data-scenario-branch-action='select' data-branch-index='${item.index}'><span>${esc(item.branch.name||item.branch.id||`Branch ${item.index+1}`)}</span><em>${esc((Array.isArray(item.branch.steps)?item.branch.steps.length:0))}</em></button>`;
+const tab=item=>`<button class='scenario-branch-tab ${item.index===activeIndex?'active':''}' data-scenario-branch-action='select' data-branch-index='${item.index}'><span>${esc(item.branch.name||item.branch.id||`Branch ${item.index+1}`)}</span><em>${esc(scenarioIsReactiveV2Branch(item.branch)?(Array.isArray(item.branch.variants)?item.branch.variants.length:0):(Array.isArray(item.branch.steps)?item.branch.steps.length:0))}</em></button>`;
 return `<div class='scenario-branch-tabs grouped'><div class='scenario-branch-tab-group'><span class='row-meta'>Scenario flow</span>${flow.map(tab).join('')}<button class='scenario-branch-add' data-scenario-branch-action='add'>+ Branch</button></div><div class='scenario-branch-tab-group'><span class='row-meta'>Reactions</span>${reactions.map(tab).join('')}<button class='scenario-branch-add' data-scenario-branch-action='add_reactive'>+ Reaction</button></div></div>`;
 }
 
@@ -1582,8 +1851,9 @@ function renderScenarioBranchSettings(branch,index,total){
 if(!branch)return '';
 const branchIdKey=`scenario:branch:${scenarioEditor.room_id}:${branch.id||index}`;
 const type=scenarioBranchTypeValue(branch);
+const isV2=scenarioIsReactiveV2Branch(branch);
 const typeField=type==='normal'?`<div class='field-stack'><span>Type</span><select data-scenario-branch-field='type'><option value='normal' selected>Scenario flow</option><option value='reactive'>Reaction</option></select></div>`:`<input type='hidden' data-scenario-branch-field='type' value='reactive'>`;
-const controls=type==='normal'?`<label class='row-meta branch-toggle'><input data-scenario-branch-field='required_for_completion' type='checkbox' ${branch.required_for_completion!==false?'checked':''}> Required for finish</label>`:`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><div class='field-stack compact-field'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></div>`;
+const controls=type==='normal'?`<label class='row-meta branch-toggle'><input data-scenario-branch-field='required_for_completion' type='checkbox' ${branch.required_for_completion!==false?'checked':''}> Required for finish</label>`:(isV2?'':`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><div class='field-stack compact-field'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></div>`);
 return `<div class='scenario-branch-settings ${type==='reactive'?'reactive':''}'><div class='field-stack branch-name-field'><span>${type==='reactive'?'Reaction name':'Branch name'}</span><input data-scenario-branch-field='name' placeholder='${type==='reactive'?'Reaction name':'Branch name'}' value='${esc(branch.name||'')}'></div>${typeField}<label class='row-meta branch-toggle'><input data-scenario-branch-field='enabled' type='checkbox' ${branch.enabled!==false?'checked':''}> Enabled</label>${controls}<button class='danger scenario-branch-delete' data-scenario-branch-action='delete' data-branch-index='${index}' ${total<=1?'disabled':''}>Delete</button><details class='scenario-advanced compact-advanced' ${detailsAttrs(branchIdKey,false)}><summary>Branch id</summary><div class='row'><input data-scenario-branch-field='id' placeholder='Branch ID' value='${esc(branch.id||'')}'></div></details></div>`;
 }
 
@@ -1607,8 +1877,14 @@ alert('A scenario can have up to 8 branches.');
 return;
 }
 const branchType=action==='add_reactive'?'reactive':'normal';
-draft.branches.push(defaultScenarioBranch(nextIndex,[],branchType));
-scenarioEditor.active_branch=nextIndex;
+const branchId=uniqueScenarioBranchId(draft.branches,branchType);
+const branch=defaultScenarioBranch(nextIndex,[],branchType);
+
+branch.id=branchId;
+branch.name=defaultScenarioBranchName(branchId,branchType);
+if(branchType==='reactive')ensureReactiveV2Branch(branch);
+draft.branches.push(branch);
+scenarioEditor.active_branch=draft.branches.length-1;
 scenarioEditor.expanded_step=-1;
 }
 else if(action==='delete'){
@@ -1616,6 +1892,8 @@ const removeIndex=Number.isFinite(index)?index:scenarioActiveBranchIndex(draft);
 if(draft.branches.length<=1)return;
 if(!confirm('Delete this scenario branch?'))return;
 draft.branches.splice(removeIndex,1);
+scenarioEditor.branch_count_shrink_allowed=true;
+scenarioEditor.branch_count_shrink_floor=draft.branches.length;
 scenarioEditor.active_branch=Math.max(0,Math.min(removeIndex,draft.branches.length-1));
 scenarioEditor.expanded_step=-1;
 }
@@ -1645,29 +1923,108 @@ return `<div class='builder-step scenario-step-row scenario-step-${visual} ${val
 return `<div class='builder-step scenario-step-row scenario-step-${visual} scenario-step-expanded ${validationClass} compact-step' data-scenario-step='${index}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${index+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(step)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge' title='${esc(fullType)}'>${esc(badge)}</span>${issueBadge}</div>${controls}</div>${renderScenarioInlineIssues(stepIssues)}<div class='scenario-step-edit'><div class='row compact-row'><input data-step-field='label' placeholder='Step label' value='${esc(step.label||'')}'><select data-step-field='type'>${scenarioTypeOptions(type)}</select><label class='row-meta enabled-inline'><input data-step-field='enabled' type='checkbox' ${step.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label></div>${renderScenarioStepPayload(step,type)}</div></div>`;
 }
 
+function collectReactiveActionFromElement(el,previous,index){
+const get=name=>{const n=el.querySelector(`[data-step-field='${name}']`);return n?n.value:'';};
+const type=get('type')||previous.type||'SET_FLAG';
+if(scenarioStepTypeValue(previous)!==scenarioStepTypeValue({type})){
+previous=newScenarioStepForType(index,type);
+}
+let label=get('label')||previous.label||'';
+const action={id:previous.id||slugifyId(label||`action_${index+1}`,'action'),label,type};
+if(type==='DEVICE_COMMAND'){
+action.device_id=get('device_id')||previous.device_id||'';
+const device=scenarioDeviceById(action.device_id);
+action.command_id=scenarioValidCommandId(device,get('command_id')||previous.command_id||'');
+const commandName=scenarioCommandName(action.device_id,action.command_id);
+if(!label||label===previous.label||label.indexOf(' - ')>=0){
+label=action.device_id==='system_audio'?commandName:`${scenarioRoomNameForDevice(device)}: ${scenarioDeviceName(device)} - ${commandName}`;
+action.label=label;
+}
+const command=scenarioCommandById(action.device_id,action.command_id);
+const params=commandSupportsScenarioParams(command)?{...(previous.params&&typeof previous.params==='object'?previous.params:{})}:{};
+el.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});
+if(Object.keys(params).length)action.params=params;
+}else if(type==='DEVICE_COMMAND_GROUP'){
+action.mode=previous.mode||'sequential';
+action.commands=[];
+el.querySelectorAll('[data-command-group-item]').forEach((item,itemIndex)=>{const deviceField=item.querySelector('[data-group-command-field="device_id"]');const commandField=item.querySelector('[data-group-command-field="command_id"]');const previousItem=Array.isArray(previous.commands)?(previous.commands[itemIndex]||{}):{};const deviceId=(deviceField?deviceField.value:'')||previousItem.device_id||'';const device=scenarioDeviceById(deviceId);const commandId=scenarioValidCommandId(device,(commandField?commandField.value:'')||previousItem.command_id||'');const command=scenarioCommandById(deviceId,commandId);const params=commandSupportsScenarioParams(command)?{...(previousItem.params&&typeof previousItem.params==='object'?previousItem.params:{})}:{};item.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});const out={device_id:deviceId,command_id:commandId};if(Object.keys(params).length)out.params=params;action.commands.push(out);});
+}else if(type==='WAIT_TIME'){
+action.duration_ms=get('duration_ms')?durationSecondsToMs(get('duration_ms')):(previous.duration_ms||1000);
+}else if(type==='SHOW_OPERATOR_MESSAGE'){
+action.message=get('message')||previous.message||'';
+}else if(type==='SET_FLAG'){
+const valueField=el.querySelector(`[data-step-field='value']`);
+action.flag_name=get('flag_name')||previous.flag_name||previous.flag||'';
+action.value=valueField?(valueField.type==='checkbox'?valueField.checked:valueField.value!=='false'):(previous.value!==false);
+}
+return action;
+}
+
+function collectReactiveV2BranchFromDom(branch,root){
+if(!branch||!root)return branch;
+ensureReactiveV2Branch(branch);
+const value=(selector,def='')=>{const nodes=Array.from(root.querySelectorAll(selector));if(!nodes.length)return def;const checked=nodes.find(n=>n.type==='radio'&&n.checked);const n=checked||nodes[0];return n?n.value:def;};
+branch.priority=Number(value('[data-v2-branch-field="priority"]',branch.priority))||0;
+branch.policy=branch.policy&&typeof branch.policy==='object'?branch.policy:{};
+branch.policy.mode=value('[data-v2-policy-field="mode"]',branch.policy.mode||'single')||'single';
+branch.policy.cooldown_ms=Number(branch.cooldown_ms)||Number(branch.policy.cooldown_ms)||0;
+branch.policy.max_fire_count=Math.max(0,Math.round(Number(value('[data-v2-policy-field="max_fire_count"]',branch.policy.max_fire_count||0))||0));
+branch.max_fire_count=branch.policy.max_fire_count;
+branch.reentry={mode:value('[data-v2-reentry-field="mode"]',branch.reentry&&branch.reentry.mode||'ignore')||'ignore'};
+branch.result_policy={
+on_done:value('[data-v2-result-field="on_done"]',branch.result_policy&&branch.result_policy.on_done||'continue')||'continue',
+on_fail:value('[data-v2-result-field="on_fail"]',branch.result_policy&&branch.result_policy.on_fail||'fail_reaction')||'fail_reaction',
+on_timeout:value('[data-v2-result-field="on_timeout"]',branch.result_policy&&branch.result_policy.on_timeout||'fail_reaction')||'fail_reaction'}
+;const resultFlag=value('[data-v2-result-field="timeout_flag"]',branch.result_policy&&branch.result_policy.timeout_flag||branch.result_policy&&branch.result_policy.flag||'');if(resultFlag){branch.result_policy.flag=resultFlag;branch.result_policy.timeout_flag=resultFlag;}
+const kind=value('[data-v2-trigger-field="kind"]',branch.trigger&&branch.trigger.kind||'device_event')||'device_event';
+branch.trigger={kind};
+if(kind==='device_event'){branch.trigger.device_id=value('[data-v2-trigger-field="device_id"]',branch.trigger.device_id||'');const device=scenarioDeviceById(branch.trigger.device_id);branch.trigger.event_id=scenarioValidEventId(device,value('[data-v2-trigger-field="event_id"]',branch.trigger.event_id||''));}
+else if(kind==='flag_changed')branch.trigger.flag_name=value('[data-v2-trigger-field="flag_name"]',branch.trigger.flag_name||'');
+else if(kind==='operator_event')branch.trigger.operator_event=value('[data-v2-trigger-field="operator_event"]',branch.trigger.operator_event||'');
+else if(kind==='runtime_event')branch.trigger.runtime_event=value('[data-v2-trigger-field="runtime_event"]',branch.trigger.runtime_event||'');
+branch.guard_flags=[];
+root.querySelectorAll('[data-v2-guard-item]').forEach(item=>{const name=(item.querySelector('[data-v2-guard-field="flag"]')||{}).value||'';const val=(item.querySelector('[data-v2-guard-field="value"]')||{}).value;if(name)branch.guard_flags.push({flag:name,value:val!=='false'});});
+const previousVariants=Array.isArray(branch.variants)?branch.variants.map(variant=>JSON.parse(JSON.stringify(variant))):[];
+branch.variants=[];
+root.querySelectorAll('[data-v2-variant]').forEach((variantEl,variantIndex)=>{const id=(variantEl.querySelector('[data-v2-variant-field="id"]')||{}).value||`variant_${variantIndex+1}`;const label=(variantEl.querySelector('[data-v2-variant-field="label"]')||{}).value||`Variant ${variantIndex+1}`;const previous=previousVariants[variantIndex]||{};const variant={id,label,actions:[]};variantEl.querySelectorAll('[data-v2-action]').forEach((actionEl,actionIndex)=>{const previousAction=Array.isArray(previous.actions)?(previous.actions[actionIndex]||{}):{};variant.actions.push(collectReactiveActionFromElement(actionEl,previousAction,actionIndex));});branch.variants.push(variant);});
+if(!branch.variants.length)branch.variants=defaultReactiveV2BranchFields().variants;
+branch.steps=[];
+if(!Array.isArray(branch.on_complete)||!branch.on_complete.length)delete branch.on_complete;
+return branch;
+}
+
 function scenarioEditorSource(){
 const roomId=scenarioEditor.room_id;
-if(scenarioEditor.draft&&scenarioEditor.draft.room_id===roomId)return JSON.parse(JSON.stringify(scenarioEditor.draft));
+let source=null;
+if(scenarioEditor.draft&&scenarioEditor.draft.room_id===roomId)source=JSON.parse(JSON.stringify(scenarioEditor.draft));
+else{
 const editing=roomScenarios(roomId).find(s=>s.id===scenarioEditor.scenario_id)||null;
-return scenarioEditableJson(editing,roomId);
+source=scenarioEditableJson(editing,roomId);
+}
+return scenarioRestoreMissingOriginalBranches(source);
 }
 
 function collectScenarioEditor(){
 const source=scenarioEditorSource();
 if(!Array.isArray(source.branches)||!source.branches.length)source.branches=normalizeScenarioBranches(source);
-const branchIndex=scenarioActiveBranchIndex(source);
+const editor=document.querySelector('[data-scenario-editor]');
+const renderedBranchIndex=Number(editor&&editor.dataset.activeBranchIndex);
+const branchIndex=Number.isFinite(renderedBranchIndex)
+  ? Math.max(0,Math.min(source.branches.length-1,Math.floor(renderedBranchIndex)))
+  : scenarioActiveBranchIndex(source);
 const branches=source.branches.map((branch,index)=>({
 ...normalizeScenarioBranch(branch,index),
 steps:Array.isArray(branch.steps)?branch.steps.map(step=>JSON.parse(JSON.stringify(step))):[]}
 ));
 const activeBranch=branches[branchIndex]||branches[0];
-const branchName=document.querySelector('[data-scenario-branch-field="name"]');
-const branchId=document.querySelector('[data-scenario-branch-field="id"]');
-const branchType=document.querySelector('[data-scenario-branch-field="type"]');
-const branchEnabled=document.querySelector('[data-scenario-branch-field="enabled"]');
-const branchRequired=document.querySelector('[data-scenario-branch-field="required_for_completion"]');
-const branchCooldown=document.querySelector('[data-scenario-branch-field="cooldown_sec"]');
-const branchRunOnce=document.querySelector('[data-scenario-branch-field="run_once"]');
+const root=editor||document;
+const branchName=root.querySelector('[data-scenario-branch-field="name"]');
+const branchId=root.querySelector('[data-scenario-branch-field="id"]');
+const branchType=root.querySelector('[data-scenario-branch-field="type"]');
+const branchEnabled=root.querySelector('[data-scenario-branch-field="enabled"]');
+const branchRequired=root.querySelector('[data-scenario-branch-field="required_for_completion"]');
+const branchCooldown=root.querySelector('[data-scenario-branch-field="cooldown_sec"]');
+const branchRunOnce=root.querySelector('[data-scenario-branch-field="run_once"]');
 const previousActiveSteps=activeBranch&&Array.isArray(activeBranch.steps)?activeBranch.steps.map(step=>JSON.parse(JSON.stringify(step))):[];
 if(activeBranch){
 activeBranch.name=(branchName&&branchName.value)||activeBranch.name||`Branch ${branchIndex+1}`;
@@ -1676,19 +2033,27 @@ activeBranch.type=branchType?scenarioBranchTypeValue({type:branchType.value}):sc
 activeBranch.enabled=branchEnabled?branchEnabled.checked:activeBranch.enabled!==false;
 activeBranch.required_for_completion=activeBranch.type==='normal'&&(branchRequired?branchRequired.checked:activeBranch.required_for_completion!==false);
 activeBranch.cooldown_ms=activeBranch.type==='reactive'?Math.max(0,Math.round(Number(branchCooldown&&branchCooldown.value)||0))*1000:0;
+if(activeBranch.type==='reactive'&&activeBranch.policy&&typeof activeBranch.policy==='object')activeBranch.policy.cooldown_ms=activeBranch.cooldown_ms;
 activeBranch.run_once=activeBranch.type==='reactive'&&!!(branchRunOnce&&branchRunOnce.checked);
 activeBranch.steps=[];
+if(scenarioIsReactiveV2Branch(activeBranch)){
+collectReactiveV2BranchFromDom(activeBranch,root);
+}
 }
 const scenario={
-id:(document.getElementById('scenario_id')||{
-}
-).value||'',name:(document.getElementById('scenario_name')||{
-}
-).value||'',room_id:scenarioEditor.room_id,branches}
+id:(root.querySelector('#scenario_id')||{}).value||'',
+name:(root.querySelector('#scenario_name')||{}).value||'',
+room_id:scenarioEditor.room_id,
+branches}
 ;
 
-document.querySelectorAll('[data-scenario-step]').forEach((el,index)=>{
+const stepsPanel=root.querySelector('.scenario-steps-panel');
+if(!scenarioIsReactiveV2Branch(activeBranch))(stepsPanel?stepsPanel.querySelectorAll('[data-scenario-step]'):[]).forEach((el,index)=>{
 const previous=previousActiveSteps[index]?JSON.parse(JSON.stringify(previousActiveSteps[index])):{};
+if(!el.querySelector(`[data-step-field='type']`)&&previous.type){
+if(activeBranch)activeBranch.steps.push(previous);
+return;
+}
 const get=name=>{
 const n=el.querySelector(`[data-step-field='${name}']`);return n?n.value:'';}
 ;const enabled=el.querySelector(`[data-step-field='enabled']`);const type=get('type')||previous.type||'WAIT_TIME';const label=get('label')||previous.label||'';const step={
@@ -1699,7 +2064,7 @@ else if(type==='DEVICE_COMMAND_GROUP'){
 const renderedItems=el.querySelectorAll('[data-command-group-item]');
 step.commands=[];
 if(!renderedItems.length&&Array.isArray(previous.commands))step.commands=previous.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:cmd.params&&typeof cmd.params==='object'?cmd.params:{}}));
-renderedItems.forEach((item,itemIndex)=>{const deviceField=item.querySelector('[data-group-command-field="device_id"]');const commandField=item.querySelector('[data-group-command-field="command_id"]');const previousItem=Array.isArray(previous.commands)?(previous.commands[itemIndex]||{}):{};step.commands.push({device_id:(deviceField?deviceField.value:'')||previousItem.device_id||'',command_id:(commandField?commandField.value:'')||previousItem.command_id||''});});}
+renderedItems.forEach((item,itemIndex)=>{const deviceField=item.querySelector('[data-group-command-field="device_id"]');const commandField=item.querySelector('[data-group-command-field="command_id"]');const previousItem=Array.isArray(previous.commands)?(previous.commands[itemIndex]||{}):{};const deviceId=(deviceField?deviceField.value:'')||previousItem.device_id||'';const commandId=(commandField?commandField.value:'')||previousItem.command_id||'';const command=scenarioCommandById(deviceId,commandId);const params=commandSupportsScenarioParams(command)?{...(previousItem.params&&typeof previousItem.params==='object'?previousItem.params:{})}:{};item.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});if(deviceId==='system_audio'&&commandId==='play'&&params.channel!=='background')params.repeat=false;const out={device_id:deviceId,command_id:commandId};if(Object.keys(params).length)out.params=params;step.commands.push(out);});}
 else if(type==='WAIT_DEVICE_EVENT'){
 step.device_id=get('device_id')||previous.device_id||'';step.event_id=get('event_id')||previous.event_id||'';
 const timeout=get('timeout_ms');step.timeout_ms=timeout!==''?durationSecondsToMs(timeout):0;
@@ -1852,6 +2217,60 @@ skipNextScenarioDomSync();
 render();
 }
 
+function applyReactiveV2Action(action,variantIndex,actionIndex,actionType){
+const draft=collectScenarioEditor();
+const branch=scenarioActiveBranch(draft);
+if(!scenarioIsReactiveV2Branch(branch))return;
+ensureReactiveV2Branch(branch);
+variantIndex=Number.isFinite(Number(variantIndex))?Number(variantIndex):0;
+actionIndex=Number.isFinite(Number(actionIndex))?Number(actionIndex):0;
+if(action==='add_guard'){
+branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+branch.guard_flags.push({flag:'puzzle_done',value:true});
+}else if(action==='delete_guard'){
+branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+branch.guard_flags.splice(actionIndex,1);
+}else if(action==='add_variant'){
+branch.variants=Array.isArray(branch.variants)?branch.variants:[];
+const n=branch.variants.length+1;
+const mode=String(branch.policy&&branch.policy.mode||'single');
+branch.variants.push({id:`variant_${n}`,label:mode==='escalate'?`Level ${n}`:`Variant ${n}`,actions:[]});
+}else if(action==='delete_variant'){
+branch.variants=Array.isArray(branch.variants)?branch.variants:[];
+if(branch.variants.length>1)branch.variants.splice(variantIndex,1);
+}else if(action==='add_action'){
+const variant=branch.variants[variantIndex];
+if(variant){
+variant.actions=Array.isArray(variant.actions)?variant.actions:[];
+variant.actions.push(newScenarioStepForType(variant.actions.length,actionType||'DEVICE_COMMAND'));
+}
+}else if(action==='delete_action'){
+const variant=branch.variants[variantIndex];
+if(variant){
+variant.actions=Array.isArray(variant.actions)?variant.actions:[];
+variant.actions.splice(actionIndex,1);
+}
+}else if(action==='group_add'||action==='group_delete'){
+const variant=branch.variants[variantIndex];
+const item=variant&&Array.isArray(variant.actions)?variant.actions[actionIndex]:null;
+if(item&&scenarioStepTypeValue(item)==='DEVICE_COMMAND_GROUP'){
+item.commands=Array.isArray(item.commands)?item.commands:[];
+if(action==='group_add'){
+item.commands.push(defaultScenarioCommandItem());
+}else{
+const commandIndex=Number.isFinite(Number(actionType))?Number(actionType):0;
+item.commands.splice(commandIndex,1);
+if(!item.commands.length)item.commands.push(defaultScenarioCommandItem());
+}
+}
+}
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
+skipNextScenarioDomSync();
+render();
+}
+
 function renderScenariosAdminView(){
 setPage('Scenarios','Room scenario editor');
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
@@ -1863,7 +2282,10 @@ const roomId=scenarioEditor.room_id;
 const scenarios=roomScenarios(roomId);
 const editing=scenarios.find(s=>s.id===scenarioEditor.scenario_id)||null;
 const editorOpen=!!(scenarioEditor.open||editing||scenarioEditor.dirty);
-const base=(scenarioEditor.draft&&scenarioEditor.draft.room_id===roomId)?scenarioEditor.draft:scenarioEditableJson(editing,roomId);
+if(editing&&!scenarioEditor.original_scenario){
+scenarioEditor.original_scenario=scenarioEditableJson(editing,roomId);
+}
+const base=editorOpen?scenarioEditorSource():scenarioEditableJson(editing,roomId);
 if(!Array.isArray(base.branches)||!base.branches.length)base.branches=normalizeScenarioBranches(base);
 const activeBranchIndex=scenarioActiveBranchIndex(base);
 scenarioEditor.active_branch=activeBranchIndex;
@@ -1881,7 +2303,11 @@ const rows=scenarios.length?scenarios.map(s=>`<div class='row-card'><div class='
 const scenarioIdKey=`scenario:id:${roomId}:${base.id||'new'}`;
 const jsonKey=`scenario:json:${roomId}:${base.id||'new'}`;
 const emptyStepsText=scenarioBranchTypeValue(activeBranch)==='reactive'?'Add a trigger first. This reaction will listen for it, then run the actions you add after it.':'No steps yet';
-const editorHtml=editorOpen?`<div class='card scenario-editor-card'><div class='scenario-editor-head'><div><h2 class='section-title'>${editing?'Edit scenario':'New scenario'}${scenarioEditor.dirty?' *':''}</h2><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'><button data-scenario-validate='1'>Validate</button><button data-scenario-save='1'>Save</button></div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(scenarioIdKey,false)}><summary>Scenario id</summary><div class='row'><input id='scenario_id' placeholder='Scenario ID' value='${esc(base.id||'')}'></div></details>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout'><aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside><section class='scenario-steps-panel'><h2 class='section-title'>Steps: ${esc(activeBranch&&activeBranch.name||'Branch')}</h2><div>${activeSteps.length?activeSteps.map((step,i)=>renderScenarioStepEditor(step,i,activeSteps.length,Number(scenarioEditor.expanded_step)===i,issuesByStep[i]||[])).join(''):`<div class='empty'>${esc(emptyStepsText)}</div>`}</div></section></div><details style='margin-top:10px' ${detailsAttrs(jsonKey,false)}><summary class='row-meta'>Debug JSON</summary><textarea id='scenario_json' class='builder-json' readonly>${esc(json)}</textarea></details></div>`:`<div class='card empty'><h2 class='section-title'>Scenario editor</h2><div class='row-meta'>Select a scenario or create a new one.</div></div>`;
+const activeBranchIsV2=scenarioIsReactiveV2Branch(activeBranch);
+const branchEditorBody=activeBranchIsV2
+?renderReactiveV2Editor(activeBranch)
+:`<section class='scenario-steps-panel'><h2 class='section-title'>Steps: ${esc(activeBranch&&activeBranch.name||'Branch')}</h2><div>${activeSteps.length?activeSteps.map((step,i)=>renderScenarioStepEditor(step,i,activeSteps.length,Number(scenarioEditor.expanded_step)===i,issuesByStep[i]||[])).join(''):`<div class='empty'>${esc(emptyStepsText)}</div>`}</div></section>`;
+const editorHtml=editorOpen?`<div class='card scenario-editor-card' data-scenario-editor='1' data-active-branch-index='${activeBranchIndex}'><div class='scenario-editor-head'><div><h2 class='section-title'>${editing?'Edit scenario':'New scenario'}${scenarioEditor.dirty?' *':''}</h2><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'><button data-scenario-validate='1'>Validate</button><button data-scenario-save='1'>Save</button></div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(scenarioIdKey,false)}><summary>Scenario id</summary><div class='row'><input id='scenario_id' placeholder='Scenario ID' value='${esc(base.id||'')}'></div></details>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout ${activeBranchIsV2?'scenario-editor-layout-v2':''}'>${activeBranchIsV2?'':`<aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside>`}${branchEditorBody}</div><details style='margin-top:10px' ${detailsAttrs(jsonKey,false)}><summary class='row-meta'>Debug JSON</summary><textarea id='scenario_json' class='builder-json' readonly>${esc(json)}</textarea></details></div>`:`<div class='card empty'><h2 class='section-title'>Scenario editor</h2><div class='row-meta'>Select a scenario or create a new one.</div></div>`;
 return `<div class='scenario-room-bar'><div><span class='row-meta'>Room</span><select class='scenario-select' data-scenario-room-select>${rooms.map(r=>`<option value='${esc(r.room_id)}' ${
 r.room_id===roomId?'selected':''}
 >${
@@ -1933,14 +2359,17 @@ return `<div class='builder-step'><div class='card-head'><div><h2 class='section
 
 function renderQuestCommandRow(cmd,index){
 const c=cmd||{};
-const params=Array.isArray(c.params_schema)?c.params_schema:[];
-const paramsNote=params.length?(commandSupportsScenarioParams(c)?`<div class='row-meta'>Params: ${esc(params.map(p=>p.label||p.key).join(', '))}</div>`:`<div class='row-meta warn-text'>Params are advertised by the client, but MQTT commands currently publish the static payload below.</div>`):'';
-return `<div class='builder-step' data-quest-command='${index}'><div class='builder-step-head'><div class='builder-step-title'>Command ${index+1}${params.length?` <span class='badge'>${commandSupportsScenarioParams(c)?`${params.length} params`:'static payload'}</span>`:''}</div><div class='actions'><button class='danger' data-quest-command-delete='${index}'>Delete</button></div></div><div class='row'><input data-quest-command-field='label' placeholder='Button label' value='${esc(c.label||'')}'><input data-quest-command-field='topic' placeholder='MQTT topic' value='${esc(c.topic||'')}'></div><div class='row'><input data-quest-command-field='payload' placeholder='Payload' value='${esc(c.payload||'')}'></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-command-field='id' placeholder='Command ID' value='${esc(c.id||'')}'><input data-quest-command-field='kind' placeholder='Kind' value='${esc(c.kind||'mqtt_publish')}'></div>${paramsNote}</details><label class='row-meta'><input data-quest-command-field='button_enabled' type='checkbox' ${c.button_enabled!==false?'checked':''} style='min-width:auto'> Show as manual button</label><label class='row-meta'><input data-quest-command-field='dangerous' type='checkbox' ${c.dangerous?'checked':''} style='min-width:auto'> Require confirmation</label></div>`;
+const p=c.policy&&typeof c.policy==='object'?c.policy:{};
+const params=Array.isArray(c.args_schema)?c.args_schema:[];
+const paramsNote=params.length?`<div class='row-meta'>Args: ${esc(params.map(p=>p.label||p.key).join(', '))}</div>`:'';
+const defaultArgs=c.default_args&&typeof c.default_args==='object'?JSON.stringify(c.default_args):'';
+return `<div class='builder-step' data-quest-command='${index}'><div class='builder-step-head'><div class='builder-step-title'>Command ${index+1}${params.length?` <span class='badge'>${params.length} args</span>`:''}</div><div class='actions'><button class='danger' data-quest-command-delete='${index}'>Delete</button></div></div><div class='row'><input data-quest-command-field='label' placeholder='Button label' value='${esc(c.label||'')}'><input data-quest-command-field='command' placeholder='Command, e.g. relay.pulse' value='${esc(c.command||'')}'></div><div class='row'><input data-quest-command-field='capability' placeholder='Capability, e.g. relay' value='${esc(c.capability||'')}'><input data-quest-command-field='default_args' placeholder='Default args JSON' value='${esc(defaultArgs)}'></div><div class='row'><input data-quest-command-field='timeout_ms' placeholder='Timeout ms' value='${esc(p.timeout_ms||3000)}'><input data-quest-command-field='danger_level' placeholder='Danger level' value='${esc(p.danger_level||'normal')}'></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-command-field='id' placeholder='Command ID' value='${esc(c.id||'')}'></div>${paramsNote}</details><label class='row-meta'><input data-quest-command-field='manual_allowed' type='checkbox' ${p.manual_allowed!==false?'checked':''} style='min-width:auto'> Allow manual control</label><label class='row-meta'><input data-quest-command-field='scenario_allowed' type='checkbox' ${p.scenario_allowed!==false?'checked':''} style='min-width:auto'> Allow scenario control</label><label class='row-meta'><input data-quest-command-field='requires_confirmation' type='checkbox' ${p.requires_confirmation?'checked':''} style='min-width:auto'> Require confirmation</label><label class='row-meta'><input data-quest-command-field='result_required' type='checkbox' ${p.result_required!==false?'checked':''} style='min-width:auto'> Wait for result</label></div>`;
 }
 
 function renderQuestEventRow(ev,index){
 const e=ev||{};
-return `<div class='builder-step' data-quest-event='${index}'><div class='builder-step-head'><div class='builder-step-title'>Event ${index+1}</div><div class='actions'><button class='danger' data-quest-event-delete='${index}'>Delete</button></div></div><div class='row'><input data-quest-event-field='label' placeholder='Event label' value='${esc(e.label||'')}'><input data-quest-event-field='topic' placeholder='MQTT topic' value='${esc(e.topic||'')}'></div><div class='row'><input data-quest-event-field='payload' placeholder='Payload filter' value='${esc(e.payload||'')}'><input data-quest-event-field='event_type' placeholder='Event type' value='${esc(e.event_type||'')}'></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-event-field='id' placeholder='Event ID' value='${esc(e.id||'')}'></div></details></div>`;
+const match=e.match&&typeof e.match==='object'?JSON.stringify(e.match):'';
+return `<div class='builder-step' data-quest-event='${index}'><div class='builder-step-head'><div class='builder-step-title'>Event ${index+1}</div><div class='actions'><button class='danger' data-quest-event-delete='${index}'>Delete</button></div></div><div class='row'><input data-quest-event-field='label' placeholder='Event label' value='${esc(e.label||'')}'><input data-quest-event-field='event' placeholder='Event, e.g. input.pressed' value='${esc(e.event||'')}'></div><div class='row'><input data-quest-event-field='capability' placeholder='Capability, e.g. input' value='${esc(e.capability||'')}'><input data-quest-event-field='match' placeholder='Match JSON' value='${esc(match)}'></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-event-field='id' placeholder='Event ID' value='${esc(e.id||'')}'></div></details></div>`;
 }
 
 function renderQuestDeviceListRow(d){
@@ -1974,7 +2403,6 @@ function render(){
 const root=document.getElementById('gm_content');
 if(!root)return;
 if(gmSkipScenarioDomSync)gmSkipScenarioDomSync=false;
-else syncScenarioDraftFromDom();
 applyGMRoleLayout();
 const summary=gmState&&gmState.summary?gmState.summary:{
 }
@@ -2166,6 +2594,7 @@ try{
 const res=await gmFetch('/api/gm/state');
 if(!res.ok)throw new Error('HTTP '+res.status);
 gmState=await res.json();
+syncRoomTimerBaselines();
 await Promise.all([loadObserved(),loadAudit(),loadTimeline(),loadQuestDevices(),loadRoomScenarios(),loadRoomProfiles(),loadScenarioEditorCatalogs()]);
 applyInitialOperatorRoute();
 if(silent&&!forceRender&&shouldDeferAutoRender()){
@@ -2184,6 +2613,89 @@ renderRightSidebar();
 }
 }
 
+function syncRoomTimerBaselines(){
+const now=performance.now();
+(gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[]).forEach(room=>{
+room._timer_synced_at_ms=now;
+});
+}
+
+function mergeRoomRuntimeState(roomId,data){
+if(!gmState||!Array.isArray(gmState.rooms)||!roomId||!data)return false;
+const room=gmState.rooms.find(r=>(r.room_id||'')===roomId);
+if(!room)return false;
+[
+'session_state','timer_state','timer_duration_ms','timer_remaining_ms',
+'hint_active','hint_sent_count','hint_message',
+'selected_profile_id','selected_profile_name','selected_profile_scenario_id','selected_profile_duration_ms',
+'selected_scenario_id','selected_scenario_name',
+'running_scenario_id','running_scenario_name','running_scenario_generation',
+'scenario_runtime_state','scenario_current_step_index',
+'scenario_wait_type','scenario_wait_until_ms','scenario_wait_started_at_ms',
+'scenario_wait_event_type','scenario_wait_source_id',
+'scenario_wait_events','scenario_wait_event_count',
+'scenario_wait_flags','scenario_wait_flag_count',
+'scenario_wait_operator_prompt','scenario_wait_operator_label',
+'scenario_wait_operator_skip_allowed','scenario_wait_operator_skip_label',
+'scenario_operator_message',
+'scenario_flags','scenario_flag_count',
+'scenario_branches','scenario_branch_count',
+'scenario_last_error',
+'asset_prepare_state','asset_audio_total','asset_audio_ready',
+'asset_audio_missing','asset_audio_bad','asset_audio_unsupported',
+'asset_audio_io_error','asset_audio_unknown'
+].forEach(key=>{
+if(Object.prototype.hasOwnProperty.call(data,key))room[key]=data[key];
+});
+room._timer_synced_at_ms=performance.now();
+return true;
+}
+
+function updateVisibleRoomClocks(){
+const rooms=gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[];
+if(!rooms.length)return;
+document.querySelectorAll('[data-room-clock]').forEach(el=>{
+const roomId=el.dataset.roomClock||'';
+const room=rooms.find(item=>(item.room_id||'')===roomId);
+if(!room)return;
+const text=fmtClock(roomTimerDisplayMs(room));
+if(el.textContent!==text)el.textContent=text;
+});
+}
+
+function renderRoomRuntimePanel(roomId){
+if(currentView!=='room'||currentRoomId!==roomId||roomTab!=='control')return false;
+const room=roomById(roomId);
+if(!room)return false;
+const panels=Array.from(document.querySelectorAll('[data-room-control-runtime]'));
+const panel=panels.find(el=>(el.dataset.roomControlRuntime||'')===roomId);
+if(!panel)return false;
+panel.innerHTML=`${renderRoomOperatorConsole(room)}${isAdmin()?renderRoomScenarioControl(room):''}`;
+renderRightSidebar();
+return true;
+}
+
+async function loadGMRuntimeOnly(roomId,forceFullRender){
+if(!roomId||!gmState){
+await loadGM(true,true);
+return;
+}
+const res=await gmFetch(`/api/gm/room/runtime?room_id=${encodeURIComponent(roomId)}`);
+if(!res.ok)throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
+const data=await res.json();
+if(!mergeRoomRuntimeState(roomId,data)){
+await loadGM(true,true);
+return;
+}
+if(!forceFullRender&&renderRoomRuntimePanel(roomId))return;
+render();
+}
+
+async function refreshAfterRuntimeAction(roomId,forceFullRender){
+clearTransientFieldDirty();
+await loadGMRuntimeOnly(roomId,forceFullRender);
+}
+
 async function runManualDeviceCommand(deviceId,commandId){
 if(!deviceId||!commandId)throw new Error('Manual button is incomplete');
 setGMStatus('Triggering button...');
@@ -2198,7 +2710,12 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+if(currentRoomId){
+await loadGMRuntimeOnly(currentRoomId);
+}
+else{
+renderRightSidebar();
+}
 setGMStatus('Button sent','gm-ok');
 }
 
@@ -2284,7 +2801,7 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Timer updated','gm-ok');
 }
 
@@ -2318,7 +2835,7 @@ else{
 throw new Error('Unsupported hint action');
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,true);
 setGMStatus('Hint updated','gm-ok');
 }
 
@@ -2337,7 +2854,7 @@ throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 currentRoomProfileId[roomId]=profileId;
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Game mode selected','gm-ok');
 }
 
@@ -2353,7 +2870,7 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Game updated','gm-ok');
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
@@ -2374,15 +2891,23 @@ const get=k=>row.querySelector(`[data-quest-command-field="${k}"]`);
 const label=(get('label')&&get('label').value||'').trim();
 const rawCmdId=(get('id')&&get('id').value||'').trim();
 const cmdId=rawCmdId||slugifyId(label,'command');
-const topic=(get('topic')&&get('topic').value||'').trim();
-const payload=(get('payload')&&get('payload').value||'');
-const kind=(get('kind')&&get('kind').value||'mqtt_publish').trim()||'mqtt_publish';
-const buttonEnabled=!!(get('button_enabled')&&get('button_enabled').checked);
-const dangerous=!!(get('dangerous')&&get('dangerous').checked);
+const command=(get('command')&&get('command').value||'').trim();
+const capability=(get('capability')&&get('capability').value||'').trim()||(command.split('.')[0]||'');
+const defaultArgsText=(get('default_args')&&get('default_args').value||'').trim();
+const defaultArgs=defaultArgsText?JSON.parse(defaultArgsText):undefined;
+const timeoutMs=Math.max(1,Number(get('timeout_ms')&&get('timeout_ms').value||3000)||3000);
+const manualAllowed=!!(get('manual_allowed')&&get('manual_allowed').checked);
+const scenarioAllowed=!!(get('scenario_allowed')&&get('scenario_allowed').checked);
+const requiresConfirmation=!!(get('requires_confirmation')&&get('requires_confirmation').checked);
+const resultRequired=!!(get('result_required')&&get('result_required').checked);
+const dangerLevel=(get('danger_level')&&get('danger_level').value||'normal').trim()||'normal';
 const existing=baseCommands.find(c=>(c.id||'')===(rawCmdId||cmdId))||baseCommands[Number(row.dataset.questCommand)]||{};
-const paramsSchema=Array.isArray(existing.params_schema)?existing.params_schema:[];
-if(label||rawCmdId||topic||payload){
-commands.push({id:cmdId,label:label||cmdId,kind,topic,payload,button_enabled:buttonEnabled,dangerous,params_schema:paramsSchema});
+const argsSchema=Array.isArray(existing.args_schema)?existing.args_schema:[];
+if(label||rawCmdId||command){
+const policy={manual_allowed:manualAllowed,scenario_allowed:scenarioAllowed,requires_confirmation:requiresConfirmation,result_required:resultRequired,timeout_ms:timeoutMs,danger_level:dangerLevel};
+const cmd={id:cmdId,label:label||cmdId,capability,command,policy,args_schema:argsSchema};
+if(defaultArgs)cmd.default_args=defaultArgs;
+commands.push(cmd);
 }
 });
 const events=[];
@@ -2391,11 +2916,14 @@ const get=k=>row.querySelector(`[data-quest-event-field="${k}"]`);
 const label=(get('label')&&get('label').value||'').trim();
 const rawEventId=(get('id')&&get('id').value||'').trim();
 const eventId=rawEventId||slugifyId(label,'event');
-const topic=(get('topic')&&get('topic').value||'').trim();
-const payload=(get('payload')&&get('payload').value||'');
-const eventType=(get('event_type')&&get('event_type').value||eventId).trim()||eventId;
-if(label||rawEventId||topic||payload){
-events.push({id:eventId,label:label||eventId,topic,payload,event_type:eventType});
+const eventName=(get('event')&&get('event').value||'').trim();
+const capability=(get('capability')&&get('capability').value||'').trim()||(eventName.split('.')[0]||'');
+const matchText=(get('match')&&get('match').value||'').trim();
+const match=matchText?JSON.parse(matchText):undefined;
+if(label||rawEventId||eventName){
+const event={id:eventId,label:label||eventId,capability,event:eventName};
+if(match)event.match=match;
+events.push(event);
 }
 });
 if(strict&&(!name||!clientId))throw new Error('Fill device name and physical client ID');
@@ -2415,27 +2943,36 @@ return {key,label,type,optional:!!(item&&item.optional)};
 function normalizeDiscoveredCommand(item,index){
 const label=String(item&&item.label||item&&item.name||item&&item.id||`Command ${index+1}`).trim();
 const id=String(item&&item.id||slugifyId(label,'command')).trim();
+const command=String(item&&item.command||'').trim();
+const policy=item&&item.policy&&typeof item.policy==='object'?item.policy:{};
 return {
 id,
 label:label||id,
-kind:String(item&&item.kind||'mqtt_publish').trim()||'mqtt_publish',
-topic:String(item&&item.topic||'').trim(),
-payload:String(item&&item.payload||''),
-button_enabled:item&&item.button_enabled===false?false:true,
-dangerous:!!(item&&item.dangerous),
-params_schema:normalizeQuestParamSchema(item&&item.params_schema)
+capability:String(item&&item.capability||command.split('.')[0]||'').trim(),
+command,
+default_args:item&&item.default_args&&typeof item.default_args==='object'?item.default_args:undefined,
+policy:{
+manual_allowed:policy.manual_allowed===false?false:true,
+scenario_allowed:policy.scenario_allowed===false?false:true,
+requires_confirmation:!!policy.requires_confirmation,
+result_required:policy.result_required===false?false:true,
+timeout_ms:Number(policy.timeout_ms)||3000,
+danger_level:String(policy.danger_level||'normal')
+},
+args_schema:normalizeQuestParamSchema(item&&item.args_schema)
 };
 }
 
 function normalizeDiscoveredEvent(item,index){
 const label=String(item&&item.label||item&&item.name||item&&item.id||`Event ${index+1}`).trim();
 const id=String(item&&item.id||slugifyId(label,'event')).trim();
+const eventName=String(item&&item.event||'').trim()||id;
 return {
 id,
 label:label||id,
-topic:String(item&&item.topic||'').trim(),
-payload:String(item&&item.payload||''),
-event_type:String(item&&item.event_type||id).trim()||id
+capability:String(item&&item.capability||eventName.split('.')[0]||'').trim(),
+event:eventName,
+match:item&&item.match&&typeof item.match==='object'?item.match:undefined
 };
 }
 
@@ -2443,8 +2980,8 @@ function questDeviceFromDiscoveredInterface(clientId,iface){
 const base=collectQuestDeviceEditor(false);
 const name=(base.name||iface&&iface.name||iface&&iface.label||clientId||'Quest device').trim();
 const id=(base.id||questDeviceEditor.device_id||slugifyId(name,'device')).trim();
-const commands=(Array.isArray(iface&&iface.commands)?iface.commands:[]).map(normalizeDiscoveredCommand).filter(c=>c.id);
-const events=(Array.isArray(iface&&iface.events)?iface.events:[]).map(normalizeDiscoveredEvent).filter(ev=>ev.id);
+const commands=(Array.isArray(iface&&iface.commands)?iface.commands:[]).map(normalizeDiscoveredCommand).filter(c=>c.id&&c.command);
+const events=(Array.isArray(iface&&iface.events)?iface.events:[]).map(normalizeDiscoveredEvent).filter(ev=>ev.id&&ev.event);
 return {
 id,
 client_id:clientId,
@@ -2470,11 +3007,11 @@ if(!res.ok){
 const msg=body&&(body.message||body.error||body.code);
 throw new Error(msg||('HTTP '+res.status));
 }
-const iface=body&&body.quest_interface;
-if(!iface||typeof iface!=='object')throw new Error('Device returned no quest_interface');
+const iface=body&&body.device_description;
+if(!iface||typeof iface!=='object')throw new Error('Device returned no device_description');
 const device=questDeviceFromDiscoveredInterface(clientId,iface);
 questDeviceEditor.draft=current;
-questDeviceEditor.discovery={client_id:clientId,quest_interface:iface,device};
+questDeviceEditor.discovery={client_id:clientId,device_description:iface,device};
 setGMStatus('Config received','gm-ok');
 render();
 }
@@ -2502,7 +3039,7 @@ questDeviceEditor.draft=collectQuestDeviceEditor(false);
 function addQuestDeviceCommand(){
 setQuestDeviceDraftFromEditor();
 questDeviceEditor.draft.commands=Array.isArray(questDeviceEditor.draft.commands)?questDeviceEditor.draft.commands:[];
-questDeviceEditor.draft.commands.push({id:'',label:'',kind:'mqtt_publish',topic:'',payload:'',button_enabled:true,dangerous:false,params_schema:[]});
+questDeviceEditor.draft.commands.push({id:'',label:'',capability:'',command:'',policy:{manual_allowed:true,scenario_allowed:true,requires_confirmation:false,result_required:true,timeout_ms:3000,danger_level:'normal'},args_schema:[]});
 markQuestDeviceDirty();
 render();
 }
@@ -2510,7 +3047,7 @@ render();
 function addQuestDeviceEvent(){
 setQuestDeviceDraftFromEditor();
 questDeviceEditor.draft.events=Array.isArray(questDeviceEditor.draft.events)?questDeviceEditor.draft.events:[];
-questDeviceEditor.draft.events.push({id:'',label:'',topic:'',payload:'',event_type:''});
+questDeviceEditor.draft.events.push({id:'',label:'',capability:'',event:''});
 markQuestDeviceDirty();
 render();
 }
@@ -2642,6 +3179,12 @@ throw new Error('Scenario JSON is invalid');
 if(scenario&&!scenario.id&&scenario.name)scenario.id=slugifyId(scenario.name,'scenario');
 if(!scenario||!scenario.name)throw new Error('Scenario name is required');
 scenario.room_id=scenarioEditor.room_id;
+const existing=roomScenarios(scenario.room_id).find(item=>(item.id||'')===(scenario.id||''))||null;
+if(existing&&Array.isArray(existing.branches)&&Array.isArray(scenario.branches)&&
+existing.branches.length>scenario.branches.length&&
+(!scenarioEditor.branch_count_shrink_allowed||(Number(scenarioEditor.branch_count_shrink_floor)||0)>scenario.branches.length)){
+throw new Error(`Refusing to save incomplete scenario: editor has ${scenario.branches.length} branches, saved scenario has ${existing.branches.length}. Refresh and try again; use Delete on a branch when you really want to remove it.`);
+}
 if(!Array.isArray(scenario.branches)||!scenario.branches.length){
 if(!Array.isArray(scenario.steps))scenario.steps=[];
 }
@@ -2822,7 +3365,7 @@ throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 currentRoomScenarioId[roomId]=scenarioId;
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Scenario selected','gm-ok');
 }
 
@@ -2839,7 +3382,7 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Scenario updated','gm-ok');
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
@@ -2881,6 +3424,7 @@ const scenarioSave=e.target.closest('button[data-scenario-save]');
 const scenarioValidate=e.target.closest('button[data-scenario-validate]');
 const scenarioBranchAction=e.target.closest('button[data-scenario-branch-action]');
 const scenarioStepAction=e.target.closest('button[data-scenario-step-action]');
+const reactiveV2Action=e.target.closest('button[data-reactive-v2-action]');
 const scenarioStepHelp=e.target.closest('button[data-scenario-step-help]');
 const audioFilesRefresh=e.target.closest('button[data-audio-files-refresh]');
 const storageAction=e.target.closest('button[data-storage-action]');
@@ -2991,6 +3535,8 @@ scenarioEditor.open=true;
 scenarioEditor.expanded_step=-1;
 scenarioEditor.active_branch=0;
 clearScenarioDirty();
+const original=roomScenarios(scenarioEditor.room_id).find(s=>s.id===scenarioEditor.scenario_id)||null;
+scenarioEditor.original_scenario=original?scenarioEditableJson(original,scenarioEditor.room_id):null;
 render();
 return;
 }
@@ -3049,7 +3595,16 @@ const index=Number(scenarioBranchAction.dataset.branchIndex);
 applyScenarioBranchAction(scenarioBranchAction.dataset.scenarioBranchAction||'',Number.isFinite(index)?index:0);
 return;
 }
+if(reactiveV2Action&&!reactiveV2Action.disabled){
+applyReactiveV2Action(reactiveV2Action.dataset.reactiveV2Action||'',reactiveV2Action.dataset.variantIndex,reactiveV2Action.dataset.actionIndex||reactiveV2Action.dataset.guardIndex,reactiveV2Action.dataset.actionType||'');
+return;
+}
 if(scenarioStepAction&&!scenarioStepAction.disabled){
+const v2ActionEl=scenarioStepAction.closest('[data-v2-action]');
+if(v2ActionEl){
+applyReactiveV2Action(scenarioStepAction.dataset.scenarioStepAction||'',v2ActionEl.dataset.variantIndex,v2ActionEl.dataset.v2Action,scenarioStepAction.dataset.commandIndex||'');
+return;
+}
 const stepEl=scenarioStepAction.closest('[data-scenario-step]');
 const fallbackIndex=Number(stepEl&&stepEl.dataset.scenarioStep);
 const index=Number.isFinite(Number(scenarioStepAction.dataset.stepIndex))?Number(scenarioStepAction.dataset.stepIndex):fallbackIndex;
@@ -3149,7 +3704,7 @@ gmRightSidebar.onclick=async e=>{
 const btn=e.target.closest('button[data-manual-device][data-manual-command]');
 if(!btn||btn.disabled)return;
 try{
-if(btn.dataset.dangerous==='1'&&!confirm('Run this manual command?'))return;
+if(btn.dataset.confirmRequired==='1'&&!confirm('Run this manual command?'))return;
 await runManualDeviceCommand(btn.dataset.manualDevice||'',btn.dataset.manualCommand||'');
 }
 catch(err){
@@ -3178,7 +3733,7 @@ if(key)gmOpenDetails[key]=detail.open;
 document.getElementById('gm_content').oninput=e=>{
 markControlDirty(e.target);
 const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field]');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
 const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
 if(profileField)markProfileDirty();
 if(scenarioField)markScenarioDirty();
@@ -3200,12 +3755,13 @@ const groupDevice=e.target.closest('select[data-group-command-field="device_id"]
 const groupCommand=e.target.closest('select[data-group-command-field="command_id"]');
 const eventGroupDevice=e.target.closest('select[data-event-group-field="device_id"]');
 const eventGroupEvent=e.target.closest('select[data-event-group-field="event_id"]');
-const flagSuggest=e.target.closest('select[data-scenario-flag-suggest]');
 const branchType=e.target.closest('select[data-scenario-branch-field="type"]');
+const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const reactiveV2ActionField=e.target.closest('[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field]');
 const profile=e.target.closest('select[data-room-profile-room]');
 const scenario=e.target.closest('select[data-room-scenario-room]');
 const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field]');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
 const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
 try{
 markControlDirty(e.target);
@@ -3251,25 +3807,32 @@ clearTransientFieldDirty();
 render();
 return;
 }
-if(flagSuggest){
-const wrapper=flagSuggest.closest('.flag-picker');
-const input=wrapper&&wrapper.querySelector('[data-step-field="flag_name"],[data-flag-list-field="flag_name"]');
-if(input&&flagSuggest.value){
-input.value=flagSuggest.value;
-markControlDirty(input);
-refreshScenarioStepLabel(input.closest('[data-scenario-step]'));
-}
-markScenarioDirty();
-return;
-}
 if(branchType){
 const draft=collectScenarioEditor();
 const branch=scenarioActiveBranch(draft);
 if(branch){
 branch.type=scenarioBranchTypeValue({type:branchType.value});
 branch.required_for_completion=branch.type==='normal'&&branch.required_for_completion!==false;
-if(branch.type==='reactive')branch.required_for_completion=false;
+if(branch.type==='reactive'){branch.required_for_completion=false;ensureReactiveV2Branch(branch);}
 }
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
+skipNextScenarioDomSync();
+render();
+return;
+}
+if(reactiveV2Field){
+const draft=collectScenarioEditor();
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
+skipNextScenarioDomSync();
+render();
+return;
+}
+if(reactiveV2ActionField){
+const draft=collectScenarioEditor();
 scenarioEditor.draft=draft;
 scenarioEditor.dirty=true;
 scenarioEditor.validation_report=null;
@@ -3464,3 +4027,4 @@ window.__sessionRolePromise=loadGMSession();
 window.__sessionRolePromise.then(()=>loadGM());
 
 setInterval(()=>loadGM(true),3000);
+setInterval(updateVisibleRoomClocks,250);

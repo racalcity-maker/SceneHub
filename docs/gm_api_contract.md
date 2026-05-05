@@ -96,7 +96,7 @@ GM UI registration labels are derived client-side from device config bindings an
 
 ### `POST /api/gm/device/describe-interface`
 
-Admin-only. Requests quest interface metadata from an observed physical client.
+Admin-only. Requests device description metadata from an observed physical client.
 
 Request:
 
@@ -121,7 +121,7 @@ Success response:
   "ok": true,
   "client_id": "relay_room_2",
   "request_id": "iface_123456",
-  "quest_interface": {
+  "device_description": {
     "version": 1,
     "commands": [],
     "events": []
@@ -135,7 +135,7 @@ Known errors:
 - `publish_failed`
 - `timeout`
 - `device_error`
-- `missing_quest_interface`
+- `missing_device_description`
 
 The admin UI imports returned commands/events only after confirmation.
 
@@ -156,21 +156,32 @@ Quest devices are the new capability-device model. They describe what a physical
     {
       "id": "reset",
       "label": "Reset altar",
-      "kind": "mqtt_publish",
-      "topic": "quest/altar_1/cmd/reset",
-      "payload": "1",
-      "button_enabled": true,
-      "dangerous": false,
-      "params_schema": []
+      "capability": "relay",
+      "command": "relay.pulse",
+      "default_args": {
+        "channel": 1,
+        "duration_ms": 1000
+      },
+      "policy": {
+        "manual_allowed": true,
+        "scenario_allowed": true,
+        "requires_confirmation": false,
+        "result_required": true,
+        "timeout_ms": 3000,
+        "danger_level": "normal"
+      },
+      "args_schema": []
     }
   ],
   "events": [
     {
       "id": "completed",
       "label": "Altar completed",
-      "topic": "quest/altar_1/event",
-      "payload": "completed",
-      "event_type": "completed"
+      "capability": "input",
+      "event": "input.pressed",
+      "match": {
+        "channel": 1
+      }
     }
   ]
 }
@@ -184,7 +195,7 @@ Current device capacity:
 - MQTT broker: `20` simultaneous clients.
 - saved Quest Devices: `20`, excluding built-in system devices when APIs request `include_system=false`.
 - observed physical clients: `20`, tied to `QUEST_DEVICE_MAX_DEVICES`.
-- room/session snapshots: `16`, tied to `ROOM_CATALOG_MAX_ROOMS`.
+- room/session snapshots: `4`, tied to `ROOM_CATALOG_MAX_ROOMS`.
 
 ### `GET /api/gm/devices`
 
@@ -245,7 +256,7 @@ Rules:
 
 - Device must exist and be enabled.
 - Command must exist.
-- Command must have `button_enabled: true`.
+- Command must have `policy.manual_allowed: true`.
 - System-device commands are allowed when exposed as manual buttons.
 - Optional `params` is passed to parameterized command handlers.
 
@@ -764,7 +775,7 @@ Supported `system_audio` commands:
 }
 ```
 
-`WAIT_DEVICE_EVENT` resolves the saved quest-device event capability. For MQTT devices it waits on the event `topic` and optional `payload`. For `system_audio`, `playback_finished` maps to the internal audio-finished event.
+`WAIT_DEVICE_EVENT` resolves the saved quest-device event capability. For SceneHub-native devices it waits on the saved `event` name and the physical `client_id`. For `system_audio`, `playback_finished` maps to the internal audio-finished event.
 
 Wait steps may expose an operator-only skip button:
 

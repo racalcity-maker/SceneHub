@@ -22,7 +22,12 @@ extern "C" {
 #define QUEST_DEVICE_COMMAND_ID_MAX_LEN QUEST_ID_MAX_LEN
 #define QUEST_DEVICE_EVENT_ID_MAX_LEN QUEST_ID_MAX_LEN
 #define QUEST_DEVICE_PARAM_KEY_MAX_LEN 32
-#define QUEST_DEVICE_KIND_MAX_LEN 32
+#define QUEST_DEVICE_COMMAND_NAME_MAX_LEN 48
+#define QUEST_DEVICE_CAPABILITY_MAX_LEN 32
+#define QUEST_DEVICE_DANGER_LEVEL_MAX_LEN 16
+#define QUEST_DEVICE_DEFAULT_ARGS_JSON_MAX_LEN QUEST_PAYLOAD_MAX_LEN
+#define QUEST_DEVICE_MATCH_JSON_MAX_LEN QUEST_PAYLOAD_MAX_LEN
+#define QUEST_DEVICE_COMMAND_TIMEOUT_DEFAULT_MS 3000
 #define QUEST_DEVICE_STORAGE_PATH "/sdcard/quest/quest_devices.json"
 #define QUEST_DEVICE_SYSTEM_AUDIO_ID "system_audio"
 
@@ -43,11 +48,15 @@ typedef struct {
 typedef struct {
     char id[QUEST_DEVICE_COMMAND_ID_MAX_LEN];
     char label[QUEST_DEVICE_NAME_MAX_LEN];
-    char kind[QUEST_DEVICE_KIND_MAX_LEN];
-    char topic[QUEST_TOPIC_MAX_LEN];
-    char payload[QUEST_PAYLOAD_MAX_LEN];
-    bool button_enabled;
-    bool dangerous;
+    char capability[QUEST_DEVICE_CAPABILITY_MAX_LEN];
+    char command[QUEST_DEVICE_COMMAND_NAME_MAX_LEN];
+    char default_args_json[QUEST_DEVICE_DEFAULT_ARGS_JSON_MAX_LEN];
+    bool manual_allowed;
+    bool scenario_allowed;
+    bool requires_confirmation;
+    bool result_required;
+    uint32_t timeout_ms;
+    char danger_level[QUEST_DEVICE_DANGER_LEVEL_MAX_LEN];
     quest_device_command_param_t params[QUEST_DEVICE_MAX_COMMAND_PARAMS];
     uint8_t param_count;
 } quest_device_command_t;
@@ -55,9 +64,9 @@ typedef struct {
 typedef struct {
     char id[QUEST_DEVICE_EVENT_ID_MAX_LEN];
     char label[QUEST_DEVICE_NAME_MAX_LEN];
-    char topic[QUEST_TOPIC_MAX_LEN];
-    char payload[QUEST_PAYLOAD_MAX_LEN];
-    char event_type[QUEST_DEVICE_EVENT_ID_MAX_LEN];
+    char capability[QUEST_DEVICE_CAPABILITY_MAX_LEN];
+    char event[QUEST_DEVICE_COMMAND_NAME_MAX_LEN];
+    char match_json[QUEST_DEVICE_MATCH_JSON_MAX_LEN];
 } quest_device_event_t;
 
 typedef struct {

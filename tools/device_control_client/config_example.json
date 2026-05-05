@@ -23,34 +23,58 @@
       "simulate_fault": false,
       "simulate_degraded": false,
       "fake_reboot_ms": 3500,
-      "quest_interface": {
+      "device_description": {
         "version": 1,
         "commands": [
           {
             "id": "reset_order",
             "label": "Reset UID order",
-            "topic": "quest/uid_gate_1/cmd/reset_order",
-            "payload": "1",
-            "button_enabled": true,
-            "dangerous": false
+            "capability": "uid",
+            "command": "uid.reset_order",
+            "default_args": {},
+            "policy": {
+              "manual_allowed": true,
+              "scenario_allowed": true,
+              "requires_confirmation": false,
+              "result_required": true,
+              "timeout_ms": 3000,
+              "danger_level": "normal"
+            },
+            "args_schema": []
           },
           {
             "id": "force_success",
             "label": "Force success",
-            "topic": "quest/uid_gate_1/cmd/force_success",
-            "payload": "1",
-            "button_enabled": true,
-            "dangerous": false,
+            "capability": "uid",
+            "command": "uid.force_success",
+            "default_args": {},
+            "policy": {
+              "manual_allowed": true,
+              "scenario_allowed": true,
+              "requires_confirmation": false,
+              "result_required": true,
+              "timeout_ms": 3000,
+              "danger_level": "normal"
+            },
+            "args_schema": [],
             "emit_event_id": "sequence_valid",
             "emit_delay_ms": 250
           },
           {
             "id": "force_fail",
             "label": "Force fail",
-            "topic": "quest/uid_gate_1/cmd/force_fail",
-            "payload": "1",
-            "button_enabled": true,
-            "dangerous": false,
+            "capability": "uid",
+            "command": "uid.force_fail",
+            "default_args": {},
+            "policy": {
+              "manual_allowed": true,
+              "scenario_allowed": true,
+              "requires_confirmation": false,
+              "result_required": true,
+              "timeout_ms": 3000,
+              "danger_level": "normal"
+            },
+            "args_schema": [],
             "emit_event_id": "sequence_invalid",
             "emit_delay_ms": 250
           }
@@ -59,16 +83,16 @@
           {
             "id": "sequence_valid",
             "label": "UID sequence valid",
-            "topic": "quest/uid_gate_1/event",
-            "payload": "sequence_valid",
-            "event_type": "sequence_valid"
+            "capability": "uid",
+            "event": "uid.sequence_valid",
+            "match": {}
           },
           {
             "id": "sequence_invalid",
             "label": "UID sequence invalid",
-            "topic": "quest/uid_gate_1/event",
-            "payload": "sequence_invalid",
-            "event_type": "sequence_invalid"
+            "capability": "uid",
+            "event": "uid.sequence_invalid",
+            "match": {}
           }
         ]
       }
@@ -87,56 +111,126 @@
       "simulate_degraded": false,
       "diag_interval_ms": 15000,
       "fake_reboot_ms": 4500,
-      "quest_interface": {
+      "device_description": {
         "version": 1,
         "commands": [
           {
             "id": "open_door",
             "label": "Open room 2 door",
-            "topic": "quest/relay_room_2/cmd/open_door",
-            "payload": "1",
-            "button_enabled": true,
-            "dangerous": true,
+            "capability": "relay",
+            "command": "relay.pulse",
+            "default_args": {
+              "channel": 1,
+              "duration_ms": 1000
+            },
+            "policy": {
+              "manual_allowed": true,
+              "scenario_allowed": true,
+              "requires_confirmation": true,
+              "result_required": true,
+              "timeout_ms": 3000,
+              "danger_level": "warning"
+            },
+            "args_schema": [
+              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
+              { "key": "duration_ms", "label": "Duration ms", "type": "number", "optional": true }
+            ],
             "emit_event_id": "door_opened",
             "emit_delay_ms": 300
           },
           {
             "id": "close_door",
             "label": "Close room 2 door",
-            "topic": "quest/relay_room_2/cmd/close_door",
-            "payload": "1",
-            "button_enabled": true,
-            "dangerous": true,
+            "capability": "relay",
+            "command": "relay.set",
+            "default_args": {
+              "channel": 1,
+              "on": false
+            },
+            "policy": {
+              "manual_allowed": true,
+              "scenario_allowed": true,
+              "requires_confirmation": true,
+              "result_required": true,
+              "timeout_ms": 3000,
+              "danger_level": "warning"
+            },
+            "args_schema": [
+              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
+              { "key": "on", "label": "On", "type": "checkbox", "optional": false }
+            ],
             "emit_event_id": "door_closed",
             "emit_delay_ms": 300
           },
           {
             "id": "open_drawer_1",
             "label": "Open drawer 1",
-            "topic": "quest/relay_room_2/cmd/open_drawer_1",
-            "payload": "1",
-            "button_enabled": true,
-            "dangerous": false,
+            "capability": "relay",
+            "command": "relay.pulse",
+            "default_args": {
+              "channel": 2,
+              "duration_ms": 1000
+            },
+            "policy": {
+              "manual_allowed": true,
+              "scenario_allowed": true,
+              "requires_confirmation": false,
+              "result_required": true,
+              "timeout_ms": 3000,
+              "danger_level": "normal"
+            },
+            "args_schema": [
+              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
+              { "key": "duration_ms", "label": "Duration ms", "type": "number", "optional": true }
+            ],
             "emit_event_id": "drawer_1_opened",
             "emit_delay_ms": 300
           },
           {
             "id": "open_drawer_2",
             "label": "Open drawer 2",
-            "topic": "quest/relay_room_2/cmd/open_drawer_2",
-            "payload": "1",
-            "button_enabled": true,
-            "dangerous": false,
+            "capability": "relay",
+            "command": "relay.pulse",
+            "default_args": {
+              "channel": 3,
+              "duration_ms": 1000
+            },
+            "policy": {
+              "manual_allowed": true,
+              "scenario_allowed": true,
+              "requires_confirmation": false,
+              "result_required": true,
+              "timeout_ms": 3000,
+              "danger_level": "normal"
+            },
+            "args_schema": [
+              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
+              { "key": "duration_ms", "label": "Duration ms", "type": "number", "optional": true }
+            ],
             "emit_event_id": "drawer_2_opened",
             "emit_delay_ms": 300
           },
           {
             "id": "tv_on",
             "label": "Turn TV on",
-            "topic": "quest/relay_room_2/cmd/tv_on",
-            "payload": "1",
-            "button_enabled": true,
-            "dangerous": false,
+            "capability": "relay",
+            "command": "relay.set",
+            "default_args": {
+              "channel": 4,
+              "on": true
+            },
+            "policy": {
+              "manual_allowed": true,
+              "scenario_allowed": true,
+              "requires_confirmation": false,
+              "result_required": true,
+              "timeout_ms": 3000,
+              "danger_level": "normal"
+            },
+            "args_schema": [
+              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
+              { "key": "on", "label": "On", "type": "checkbox", "optional": false }
+            ],
             "emit_event_id": "tv_started",
             "emit_delay_ms": 500
           }
@@ -145,37 +239,37 @@
           {
             "id": "door_opened",
             "label": "Door opened",
-            "topic": "quest/relay_room_2/event",
-            "payload": "door_opened",
-            "event_type": "door_opened"
+            "capability": "input",
+            "event": "input.pressed",
+            "match": { "channel": 1 }
           },
           {
             "id": "door_closed",
             "label": "Door closed",
-            "topic": "quest/relay_room_2/event",
-            "payload": "door_closed",
-            "event_type": "door_closed"
+            "capability": "input",
+            "event": "input.released",
+            "match": { "channel": 1 }
           },
           {
             "id": "drawer_1_opened",
             "label": "Drawer 1 opened",
-            "topic": "quest/relay_room_2/event",
-            "payload": "drawer_1_opened",
-            "event_type": "drawer_1_opened"
+            "capability": "input",
+            "event": "input.pressed",
+            "match": { "channel": 2 }
           },
           {
             "id": "drawer_2_opened",
             "label": "Drawer 2 opened",
-            "topic": "quest/relay_room_2/event",
-            "payload": "drawer_2_opened",
-            "event_type": "drawer_2_opened"
+            "capability": "input",
+            "event": "input.pressed",
+            "match": { "channel": 3 }
           },
           {
             "id": "tv_started",
             "label": "TV started",
-            "topic": "quest/relay_room_2/event",
-            "payload": "tv_started",
-            "event_type": "tv_started"
+            "capability": "input",
+            "event": "input.pressed",
+            "match": { "channel": 4 }
           }
         ]
       }

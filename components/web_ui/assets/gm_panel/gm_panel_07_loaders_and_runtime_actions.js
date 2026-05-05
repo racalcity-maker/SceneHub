@@ -165,6 +165,7 @@ try{
 const res=await gmFetch('/api/gm/state');
 if(!res.ok)throw new Error('HTTP '+res.status);
 gmState=await res.json();
+syncRoomTimerBaselines();
 await Promise.all([loadObserved(),loadAudit(),loadTimeline(),loadQuestDevices(),loadRoomScenarios(),loadRoomProfiles(),loadScenarioEditorCatalogs()]);
 applyInitialOperatorRoute();
 if(silent&&!forceRender&&shouldDeferAutoRender()){
@@ -183,6 +184,89 @@ renderRightSidebar();
 }
 }
 
+function syncRoomTimerBaselines(){
+const now=performance.now();
+(gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[]).forEach(room=>{
+room._timer_synced_at_ms=now;
+});
+}
+
+function mergeRoomRuntimeState(roomId,data){
+if(!gmState||!Array.isArray(gmState.rooms)||!roomId||!data)return false;
+const room=gmState.rooms.find(r=>(r.room_id||'')===roomId);
+if(!room)return false;
+[
+'session_state','timer_state','timer_duration_ms','timer_remaining_ms',
+'hint_active','hint_sent_count','hint_message',
+'selected_profile_id','selected_profile_name','selected_profile_scenario_id','selected_profile_duration_ms',
+'selected_scenario_id','selected_scenario_name',
+'running_scenario_id','running_scenario_name','running_scenario_generation',
+'scenario_runtime_state','scenario_current_step_index',
+'scenario_wait_type','scenario_wait_until_ms','scenario_wait_started_at_ms',
+'scenario_wait_event_type','scenario_wait_source_id',
+'scenario_wait_events','scenario_wait_event_count',
+'scenario_wait_flags','scenario_wait_flag_count',
+'scenario_wait_operator_prompt','scenario_wait_operator_label',
+'scenario_wait_operator_skip_allowed','scenario_wait_operator_skip_label',
+'scenario_operator_message',
+'scenario_flags','scenario_flag_count',
+'scenario_branches','scenario_branch_count',
+'scenario_last_error',
+'asset_prepare_state','asset_audio_total','asset_audio_ready',
+'asset_audio_missing','asset_audio_bad','asset_audio_unsupported',
+'asset_audio_io_error','asset_audio_unknown'
+].forEach(key=>{
+if(Object.prototype.hasOwnProperty.call(data,key))room[key]=data[key];
+});
+room._timer_synced_at_ms=performance.now();
+return true;
+}
+
+function updateVisibleRoomClocks(){
+const rooms=gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[];
+if(!rooms.length)return;
+document.querySelectorAll('[data-room-clock]').forEach(el=>{
+const roomId=el.dataset.roomClock||'';
+const room=rooms.find(item=>(item.room_id||'')===roomId);
+if(!room)return;
+const text=fmtClock(roomTimerDisplayMs(room));
+if(el.textContent!==text)el.textContent=text;
+});
+}
+
+function renderRoomRuntimePanel(roomId){
+if(currentView!=='room'||currentRoomId!==roomId||roomTab!=='control')return false;
+const room=roomById(roomId);
+if(!room)return false;
+const panels=Array.from(document.querySelectorAll('[data-room-control-runtime]'));
+const panel=panels.find(el=>(el.dataset.roomControlRuntime||'')===roomId);
+if(!panel)return false;
+panel.innerHTML=`${renderRoomOperatorConsole(room)}${isAdmin()?renderRoomScenarioControl(room):''}`;
+renderRightSidebar();
+return true;
+}
+
+async function loadGMRuntimeOnly(roomId,forceFullRender){
+if(!roomId||!gmState){
+await loadGM(true,true);
+return;
+}
+const res=await gmFetch(`/api/gm/room/runtime?room_id=${encodeURIComponent(roomId)}`);
+if(!res.ok)throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
+const data=await res.json();
+if(!mergeRoomRuntimeState(roomId,data)){
+await loadGM(true,true);
+return;
+}
+if(!forceFullRender&&renderRoomRuntimePanel(roomId))return;
+render();
+}
+
+async function refreshAfterRuntimeAction(roomId,forceFullRender){
+clearTransientFieldDirty();
+await loadGMRuntimeOnly(roomId,forceFullRender);
+}
+
 async function runManualDeviceCommand(deviceId,commandId){
 if(!deviceId||!commandId)throw new Error('Manual button is incomplete');
 setGMStatus('Triggering button...');
@@ -197,7 +281,12 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+if(currentRoomId){
+await loadGMRuntimeOnly(currentRoomId);
+}
+else{
+renderRightSidebar();
+}
 setGMStatus('Button sent','gm-ok');
 }
 
@@ -283,7 +372,7 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Timer updated','gm-ok');
 }
 
@@ -317,7 +406,7 @@ else{
 throw new Error('Unsupported hint action');
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,true);
 setGMStatus('Hint updated','gm-ok');
 }
 
@@ -336,7 +425,7 @@ throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 currentRoomProfileId[roomId]=profileId;
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Game mode selected','gm-ok');
 }
 
@@ -352,6 +441,6 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Game updated','gm-ok');
 }

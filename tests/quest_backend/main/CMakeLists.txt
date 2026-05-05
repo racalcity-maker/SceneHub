@@ -4,6 +4,7 @@ set(TEST_SRCS
     "test_event_bus.c"
     "test_config_store_utils.c"
     "test_audio_player_state.c"
+    "test_command_executor.c"
     "test_ota_manager.c"
     "test_device_control_ingest.c"
     "test_quest_device.c"
@@ -24,5 +25,5 @@ set(TEST_SRCS
 idf_component_register(
     SRCS ${TEST_SRCS}
     INCLUDE_DIRS "." "../../../components/web_ui" "../../../components/audio_player"
-    PRIV_REQUIRES web_ui audio_player ota_manager gm_core gm_control room_catalog orchestrator_core event_bus service_status config_store device_control_ingest room_scenario quest_device unity json
+    PRIV_REQUIRES web_ui audio_player command_executor ota_manager gm_core gm_control room_catalog orchestrator_core event_bus service_status config_store device_control_ingest room_scenario quest_device unity json
 )

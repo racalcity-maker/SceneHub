@@ -33,6 +33,9 @@ extern "C" {
 #define ROOM_SCENARIO_BRANCH_NAME_MAX_LEN 64
 #define ROOM_SCENARIO_MAX_BRANCHES 8
 #define ROOM_SCENARIO_MAX_STEPS 48
+#define ROOM_SCENARIO_MAX_REACTIVE_VARIANTS 8
+#define ROOM_SCENARIO_MAX_REACTIVE_ACTIONS 24
+#define ROOM_SCENARIO_MAX_REACTIVE_GROUP_COMMANDS 8
 #define ROOM_SCENARIO_MAX_SCENARIOS 24
 #define ROOM_SCENARIO_VALIDATION_CODE_MAX_LEN 48
 #define ROOM_SCENARIO_VALIDATION_MESSAGE_MAX_LEN 128
@@ -63,6 +66,41 @@ typedef enum {
     ROOM_SCENARIO_BRANCH_REACTIVE,
 } room_scenario_branch_type_t;
 
+typedef enum {
+    ROOM_SCENARIO_REENTRY_IGNORE = 0,
+    ROOM_SCENARIO_REENTRY_QUEUE_ONE,
+    ROOM_SCENARIO_REENTRY_RESTART,
+    ROOM_SCENARIO_REENTRY_PARALLEL,
+} room_scenario_reentry_mode_t;
+
+typedef enum {
+    ROOM_SCENARIO_REACTIVE_TRIGGER_NONE = 0,
+    ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT,
+    ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED,
+    ROOM_SCENARIO_REACTIVE_TRIGGER_OPERATOR_EVENT,
+    ROOM_SCENARIO_REACTIVE_TRIGGER_RUNTIME_EVENT,
+} room_scenario_reactive_trigger_kind_t;
+
+typedef enum {
+    ROOM_SCENARIO_REACTIVE_POLICY_SINGLE = 0,
+    ROOM_SCENARIO_REACTIVE_POLICY_ROTATE,
+    ROOM_SCENARIO_REACTIVE_POLICY_RANDOM,
+    ROOM_SCENARIO_REACTIVE_POLICY_ESCALATE,
+} room_scenario_reactive_policy_mode_t;
+
+typedef enum {
+    ROOM_SCENARIO_REACTIVE_RESULT_CONTINUE = 0,
+    ROOM_SCENARIO_REACTIVE_RESULT_SET_FLAG,
+    ROOM_SCENARIO_REACTIVE_RESULT_FAIL_REACTION,
+    ROOM_SCENARIO_REACTIVE_RESULT_FAIL_SCENARIO,
+    ROOM_SCENARIO_REACTIVE_RESULT_RETRY,
+} room_scenario_reactive_result_action_t;
+
+typedef enum {
+    ROOM_SCENARIO_COMMAND_GROUP_SEQUENTIAL = 0,
+    ROOM_SCENARIO_COMMAND_GROUP_PARALLEL,
+} room_scenario_command_group_mode_t;
+
 typedef struct {
     char device_id[ROOM_SCENARIO_DEVICE_ID_MAX_LEN];
     char command_id[ROOM_SCENARIO_DEVICE_COMMAND_ID_MAX_LEN];
@@ -73,6 +111,7 @@ typedef struct {
     struct {
         char device_id[ROOM_SCENARIO_DEVICE_ID_MAX_LEN];
         char command_id[ROOM_SCENARIO_DEVICE_COMMAND_ID_MAX_LEN];
+        char params_json[ROOM_SCENARIO_COMMAND_PARAMS_JSON_MAX_LEN];
     } commands[ROOM_SCENARIO_COMMAND_GROUP_MAX_COMMANDS];
     uint8_t command_count;
 } room_scenario_device_command_group_t;
@@ -114,6 +153,15 @@ typedef struct {
 typedef room_scenario_set_flag_t room_scenario_flag_condition_t;
 
 typedef struct {
+    room_scenario_reactive_trigger_kind_t kind;
+    char device_id[ROOM_SCENARIO_DEVICE_ID_MAX_LEN];
+    char event_id[ROOM_SCENARIO_DEVICE_EVENT_ID_MAX_LEN];
+    char flag_name[ROOM_SCENARIO_FLAG_NAME_MAX_LEN];
+    char runtime_event[ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
+    char operator_event[ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
+} room_scenario_reactive_trigger_t;
+
+typedef struct {
     room_scenario_flag_condition_t flags[ROOM_SCENARIO_WAIT_FLAGS_MAX_FLAGS];
     uint8_t flag_count;
     uint32_t timeout_ms;
@@ -143,13 +191,51 @@ typedef struct {
 } room_scenario_step_t;
 
 typedef struct {
+    char id[ROOM_SCENARIO_STEP_ID_MAX_LEN];
+    char label[ROOM_SCENARIO_STEP_LABEL_MAX_LEN];
+    uint16_t action_start_index;
+    uint8_t action_count;
+} room_scenario_reactive_variant_t;
+
+typedef struct {
+    char id[ROOM_SCENARIO_STEP_ID_MAX_LEN];
+    char label[ROOM_SCENARIO_STEP_LABEL_MAX_LEN];
+    room_scenario_step_type_t type;
+    room_scenario_command_group_mode_t group_mode;
+    uint16_t group_command_start_index;
+    uint8_t group_command_count;
+
+    union {
+        room_scenario_device_command_t device_command;
+        room_scenario_wait_time_t wait_time;
+        room_scenario_operator_message_t operator_message;
+        room_scenario_set_flag_t set_flag;
+    } data;
+} room_scenario_reactive_action_t;
+
+typedef struct {
     char id[ROOM_SCENARIO_BRANCH_ID_MAX_LEN];
     char name[ROOM_SCENARIO_BRANCH_NAME_MAX_LEN];
     room_scenario_branch_type_t type;
     bool enabled;
     bool required_for_completion;
+    uint16_t priority;
+    room_scenario_reactive_policy_mode_t policy_mode;
     uint32_t cooldown_ms;
+    uint32_t max_fire_count;
     bool run_once;
+    room_scenario_reentry_mode_t reentry_mode;
+    room_scenario_reactive_trigger_t trigger;
+    room_scenario_flag_condition_t guard_flags[ROOM_SCENARIO_WAIT_FLAGS_MAX_FLAGS];
+    uint8_t guard_flag_count;
+    room_scenario_reactive_result_action_t result_on_done;
+    room_scenario_reactive_result_action_t result_on_fail;
+    room_scenario_reactive_result_action_t result_on_timeout;
+    char result_flag[ROOM_SCENARIO_FLAG_NAME_MAX_LEN];
+    uint16_t variant_start_index;
+    uint8_t variant_count;
+    uint16_t on_complete_action_start_index;
+    uint8_t on_complete_action_count;
     uint16_t step_start_index;
     uint16_t step_count;
 } room_scenario_branch_t;
@@ -161,6 +247,12 @@ typedef struct {
 
     room_scenario_step_t steps[ROOM_SCENARIO_MAX_STEPS];
     size_t step_count;
+    room_scenario_reactive_variant_t reactive_variants[ROOM_SCENARIO_MAX_REACTIVE_VARIANTS];
+    size_t reactive_variant_count;
+    room_scenario_reactive_action_t reactive_actions[ROOM_SCENARIO_MAX_REACTIVE_ACTIONS];
+    size_t reactive_action_count;
+    room_scenario_device_command_t reactive_group_commands[ROOM_SCENARIO_MAX_REACTIVE_GROUP_COMMANDS];
+    size_t reactive_group_command_count;
     room_scenario_branch_t branches[ROOM_SCENARIO_MAX_BRANCHES];
     size_t branch_count;
 } room_scenario_t;
@@ -198,6 +290,9 @@ esp_err_t room_scenario_step_type_from_str(const char *s,
 const char *room_scenario_branch_type_to_str(room_scenario_branch_type_t type);
 esp_err_t room_scenario_branch_type_from_str(const char *s,
                                              room_scenario_branch_type_t *out);
+const char *room_scenario_reentry_mode_to_str(room_scenario_reentry_mode_t mode);
+esp_err_t room_scenario_reentry_mode_from_str(const char *s,
+                                              room_scenario_reentry_mode_t *out);
 esp_err_t room_scenario_to_json(const room_scenario_t *s, cJSON *out);
 esp_err_t room_scenario_from_json(const cJSON *json, room_scenario_t *out);
 esp_err_t room_scenario_store_export_json(cJSON **out);

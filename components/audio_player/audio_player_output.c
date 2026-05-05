@@ -22,6 +22,7 @@
 #define AUDIO_SAMPLE_RATE 44100
 #define AUDIO_BITS        I2S_DATA_BIT_WIDTH_16BIT
 #define AUDIO_CHANNELS    2
+#define AUDIO_FRAME_BYTES (AUDIO_CHANNELS * sizeof(int16_t))
 #define AUDIO_SILENCE_DRAIN_MS 50
 #define AUDIO_SILENCE_FRAMES 256
 
@@ -246,28 +247,100 @@ void audio_player_output_play_tone(int freq_hz, int duration_ms, int volume_perc
 esp_err_t audio_player_output_write(const void *data, size_t len, size_t *bytes_written, TickType_t timeout)
 {
     esp_err_t err = ESP_OK;
-    size_t local_written = 0;
+    size_t total_written = 0;
+
     if (bytes_written) {
         *bytes_written = 0;
     }
+
     if (!data || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    // ВАЖНО: I2S stereo 16-bit должен получать только целые фреймы.
+    len -= len % AUDIO_FRAME_BYTES;
+    if (len == 0) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     err = output_ensure_lock();
     if (err != ESP_OK) {
         return err;
     }
+
     if (!output_lock()) {
         return ESP_ERR_TIMEOUT;
     }
+
     err = output_enable_locked();
-    if (err == ESP_OK) {
-        err = i2s_channel_write(s_tx_chan, data, len, &local_written, timeout);
+
+    const uint8_t *src = (const uint8_t *)data;
+
+    while (err == ESP_OK && total_written < len) {
+        size_t written_now = 0;
+        size_t remaining = len - total_written;
+
+        // Пишем только frame-aligned размер.
+        remaining -= remaining % AUDIO_FRAME_BYTES;
+        if (remaining == 0) {
+            break;
+        }
+
+        err = i2s_channel_write(
+            s_tx_chan,
+            src + total_written,
+            remaining,
+            &written_now,
+            timeout
+        );
+
+        if (written_now > 0) {
+            // Самая важная защита.
+            // Если драйвер вернул запись не кратную 4 байтам,
+            // значит аудиопоток может съехать по границам сэмплов.
+            if ((written_now % AUDIO_FRAME_BYTES) != 0) {
+                ESP_LOGE(TAG,
+                         "unaligned i2s write: %u bytes, frame=%u. Resetting output.",
+                         (unsigned)written_now,
+                         (unsigned)AUDIO_FRAME_BYTES);
+
+                output_disable_locked();
+
+                if (s_tx_chan) {
+                    i2s_del_channel(s_tx_chan);
+                    s_tx_chan = NULL;
+                }
+
+                s_tx_enabled = false;
+                esp_err_t reset_err = audio_player_output_setup();
+                if (reset_err != ESP_OK) {
+                    ESP_LOGE(TAG, "i2s recover failed: %s", esp_err_to_name(reset_err));
+                    error_monitor_report_audio_fault();
+                }
+
+                err = ESP_FAIL;
+                break;
+            }
+
+            total_written += written_now;
+        }
+
+        if (err != ESP_OK) {
+            break;
+        }
+
+        if (written_now == 0) {
+            err = ESP_ERR_TIMEOUT;
+            break;
+        }
     }
+
     output_unlock();
+
     if (bytes_written) {
-        *bytes_written = local_written;
+        *bytes_written = total_written;
     }
+
     return err;
 }
 

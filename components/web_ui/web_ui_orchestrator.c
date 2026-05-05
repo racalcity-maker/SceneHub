@@ -5,6 +5,7 @@
 
 #include "cJSON.h"
 #include "device_control_ingest.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -25,6 +26,7 @@
 #define ORCH_INTERFACE_DISCOVERY_POLL_MS 100
 
 static const char *TAG = "web_ui_orchestrator";
+EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_gm_state_snapshot;
 
 static void *orch_snapshot_alloc(size_t size)
 {
@@ -245,10 +247,10 @@ static esp_err_t orch_publish_describe_interface(const char *client_id, const ch
     return mqtt_core_publish(topic, payload);
 }
 
-static cJSON *orch_extract_quest_interface(const char *data_json)
+static cJSON *orch_extract_device_description(const char *data_json)
 {
     cJSON *data = NULL;
-    cJSON *quest_interface = NULL;
+    cJSON *device_description = NULL;
     cJSON *detached = NULL;
     if (!data_json || !data_json[0]) {
         return NULL;
@@ -258,12 +260,12 @@ static cJSON *orch_extract_quest_interface(const char *data_json)
         cJSON_Delete(data);
         return NULL;
     }
-    quest_interface = cJSON_GetObjectItemCaseSensitive(data, "quest_interface");
-    if (!cJSON_IsObject(quest_interface)) {
+    device_description = cJSON_GetObjectItemCaseSensitive(data, "device_description");
+    if (!cJSON_IsObject(device_description)) {
         cJSON_Delete(data);
         return NULL;
     }
-    detached = cJSON_Duplicate(quest_interface, true);
+    detached = cJSON_Duplicate(device_description, true);
     cJSON_Delete(data);
     return detached;
 }
@@ -334,7 +336,8 @@ esp_err_t orchestrator_describe_interface_handler(httpd_req_t *req)
                 vTaskDelay(pdMS_TO_TICKS(ORCH_INTERFACE_DISCOVERY_POLL_MS));
                 continue;
             }
-            if (strcmp(device->result_status, "ok") != 0) {
+            if (strcmp(device->result_status, "ok") != 0 &&
+                strcmp(device->result_status, "done") != 0) {
                 ESP_LOGW(TAG, "describe_interface device error client=%s request_id=%s status=%s code=%s",
                          client_id,
                          request_id,
@@ -348,11 +351,11 @@ esp_err_t orchestrator_describe_interface_handler(httpd_req_t *req)
                 heap_caps_free(device);
                 return send_err;
             }
-            cJSON *quest_interface = orch_extract_quest_interface(device->result_data_json);
-            if (!quest_interface) {
+            cJSON *device_description = orch_extract_device_description(device->result_data_json);
+            if (!device_description) {
                 esp_err_t send_err = orch_send_interface_discovery_error(req,
                                                                          "422 Unprocessable Entity",
-                                                                         "missing_quest_interface",
+                                                                         "missing_device_description",
                                                                          client_id,
                                                                          request_id);
                 heap_caps_free(device);
@@ -360,14 +363,14 @@ esp_err_t orchestrator_describe_interface_handler(httpd_req_t *req)
             }
             cJSON *root = cJSON_CreateObject();
             if (!root) {
-                cJSON_Delete(quest_interface);
+                cJSON_Delete(device_description);
                 heap_caps_free(device);
                 return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
             }
             cJSON_AddBoolToObject(root, "ok", true);
             cJSON_AddStringToObject(root, "client_id", client_id);
             cJSON_AddStringToObject(root, "request_id", request_id);
-            cJSON_AddItemToObject(root, "quest_interface", quest_interface);
+            cJSON_AddItemToObject(root, "device_description", device_description);
             ESP_LOGI(TAG, "describe_interface success client=%s request_id=%s", client_id, request_id);
             esp_err_t send_err = web_ui_send_json(req, root);
             heap_caps_free(device);
@@ -476,25 +479,19 @@ esp_err_t orchestrator_control_devices_handler(httpd_req_t *req)
 
 esp_err_t gm_state_handler(httpd_req_t *req)
 {
-    orch_registry_snapshot_t *snapshot = orch_snapshot_alloc(sizeof(*snapshot));
     cJSON *root = NULL;
 
-    if (!snapshot) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
-    }
-    esp_err_t err = orchestrator_registry_build_snapshot(snapshot);
+    memset(&s_gm_state_snapshot, 0, sizeof(s_gm_state_snapshot));
+    esp_err_t err = orchestrator_registry_build_snapshot(&s_gm_state_snapshot);
     if (err != ESP_OK) {
-        heap_caps_free(snapshot);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "gm snapshot failed");
     }
 
-    root = orchestrator_api_view_gm_state(snapshot);
+    root = orchestrator_api_view_gm_state(&s_gm_state_snapshot);
     if (!root) {
-        heap_caps_free(snapshot);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
     }
 
     err = web_ui_send_json(req, root);
-    heap_caps_free(snapshot);
     return err;
 }

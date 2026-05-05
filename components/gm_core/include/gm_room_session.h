@@ -46,6 +46,7 @@ typedef enum {
     GM_ROOM_SCENARIO_WAIT_OPERATOR,
     GM_ROOM_SCENARIO_WAIT_FLAGS,
     GM_ROOM_SCENARIO_WAIT_ALL_DEVICE_EVENTS,
+    GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT,
 } gm_room_scenario_wait_type_t;
 
 typedef struct {
@@ -62,10 +63,21 @@ typedef struct {
     bool active;
     room_scenario_branch_type_t type;
     bool required_for_completion;
+    uint16_t priority;
     uint32_t cooldown_ms;
     uint32_t cooldown_until_ms;
+    uint32_t max_fire_count;
+    uint32_t fire_count;
     bool run_once;
     bool fired_once;
+    room_scenario_reentry_mode_t reentry_mode;
+    bool pending_trigger;
+    uint8_t policy_cursor;
+    uint8_t policy_stage;
+    uint8_t last_variant_index;
+    uint16_t reactive_action_start_index;
+    uint8_t reactive_action_count;
+    uint8_t reactive_current_action;
     uint16_t branch_index;
     uint16_t step_start_index;
     uint16_t step_count;

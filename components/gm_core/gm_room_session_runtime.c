@@ -2,36 +2,13 @@
 
 #include <string.h>
 
+#include "command_executor.h"
 #include "esp_heap_caps.h"
-#include "esp_log.h"
 #include "quest_common_utils.h"
 #include "quest_device.h"
 #include "room_scenario.h"
 
 #define GM_SCENARIO_MAX_STEPS_PER_TICK 8
-
-static const char *TAG = "gm_room_session";
-
-static void scenario_branch_clear_wait_fields(gm_room_scenario_branch_runtime_t *branch)
-{
-    if (!branch) {
-        return;
-    }
-    branch->wait_type = GM_ROOM_SCENARIO_WAIT_NONE;
-    branch->wait_until_ms = 0;
-    branch->wait_started_at_ms = 0;
-    branch->wait_event_type[0] = '\0';
-    branch->wait_source_id[0] = '\0';
-    memset(branch->wait_events, 0, sizeof(branch->wait_events));
-    memset(branch->wait_event_matched, 0, sizeof(branch->wait_event_matched));
-    branch->wait_event_count = 0;
-    memset(branch->wait_flags, 0, sizeof(branch->wait_flags));
-    branch->wait_flag_count = 0;
-    branch->wait_operator_prompt[0] = '\0';
-    branch->wait_operator_label[0] = '\0';
-    branch->wait_operator_skip_allowed = false;
-    branch->wait_operator_skip_label[0] = '\0';
-}
 
 static room_scenario_t *scenario_alloc(void)
 {
@@ -40,203 +17,6 @@ static room_scenario_t *scenario_alloc(void)
         scenario = heap_caps_calloc(1, sizeof(*scenario), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
     return scenario;
-}
-
-static esp_err_t scenario_enter_wait_device_event_locked(gm_room_session_t *session,
-                                                         const room_scenario_wait_device_event_t *wait,
-                                                         uint32_t now_ms)
-{
-    quest_device_t *device = NULL;
-    quest_device_event_t event = {0};
-    esp_err_t err = ESP_OK;
-    if (!session || !wait || !wait->device_id[0] || !wait->event_id[0]) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    device = (quest_device_t *)gm_room_session_heap_alloc(sizeof(*device));
-    if (!device) {
-        return ESP_ERR_NO_MEM;
-    }
-    err = quest_device_get(wait->device_id, device);
-    if (err != ESP_OK) {
-        heap_caps_free(device);
-        return err;
-    }
-    if (!device->enabled) {
-        heap_caps_free(device);
-        return ESP_ERR_INVALID_STATE;
-    }
-    err = quest_device_get_event(wait->device_id, wait->event_id, &event);
-    if (err != ESP_OK) {
-        heap_caps_free(device);
-        return err;
-    }
-    heap_caps_free(device);
-    session->scenario_state = GM_ROOM_SCENARIO_WAITING;
-    gm_room_session_scenario_clear_wait_locked(session);
-    session->wait_type = GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT;
-    session->wait_started_at_ms = now_ms;
-    session->wait_until_ms = wait->timeout_ms > 0 ? now_ms + wait->timeout_ms : 0;
-    if (strcmp(wait->device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0) {
-        quest_str_copy(session->wait_event_type,
-                    sizeof(session->wait_event_type),
-                    event.event_type[0] ? event.event_type : event.id);
-        session->wait_source_id[0] = '\0';
-    } else {
-        quest_str_copy(session->wait_event_type,
-                    sizeof(session->wait_event_type),
-                    event.payload);
-        quest_str_copy(session->wait_source_id,
-                    sizeof(session->wait_source_id),
-                    event.topic);
-    }
-    session->wait_event_count = 1;
-    quest_str_copy(session->wait_events[0].event_type,
-                sizeof(session->wait_events[0].event_type),
-                session->wait_event_type);
-    quest_str_copy(session->wait_events[0].source_id,
-                sizeof(session->wait_events[0].source_id),
-                session->wait_source_id);
-    ESP_LOGI(TAG,
-             "scenario step entered: WAIT_DEVICE_EVENT room=%s device=%s event=%s topic=%s payload=%s",
-             session->room_id,
-             wait->device_id,
-             wait->event_id,
-             session->wait_source_id[0] ? session->wait_source_id : "*",
-             session->wait_event_type[0] ? session->wait_event_type : "*");
-    gm_room_session_mark_session_changed_locked(session);
-    return ESP_OK;
-}
-
-static esp_err_t scenario_resolve_wait_event_match(const room_scenario_wait_device_event_t *wait,
-                                                   gm_room_scenario_wait_event_match_t *out)
-{
-    quest_device_event_t event = {0};
-    quest_device_t *device = NULL;
-    esp_err_t err = ESP_OK;
-    if (!wait || !out || !wait->device_id[0] || !wait->event_id[0]) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    device = (quest_device_t *)gm_room_session_heap_alloc(sizeof(*device));
-    if (!device) {
-        return ESP_ERR_NO_MEM;
-    }
-    err = quest_device_get(wait->device_id, device);
-    if (err != ESP_OK) {
-        heap_caps_free(device);
-        return err;
-    }
-    if (!device->enabled) {
-        heap_caps_free(device);
-        return ESP_ERR_INVALID_STATE;
-    }
-    err = quest_device_get_event(wait->device_id, wait->event_id, &event);
-    if (err != ESP_OK) {
-        heap_caps_free(device);
-        return err;
-    }
-    heap_caps_free(device);
-    memset(out, 0, sizeof(*out));
-    if (strcmp(wait->device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0) {
-        quest_str_copy(out->event_type,
-                    sizeof(out->event_type),
-                    event.event_type[0] ? event.event_type : event.id);
-        out->source_id[0] = '\0';
-    } else {
-        quest_str_copy(out->event_type,
-                    sizeof(out->event_type),
-                    event.payload);
-        quest_str_copy(out->source_id,
-                    sizeof(out->source_id),
-                    event.topic);
-    }
-    return ESP_OK;
-}
-
-static esp_err_t scenario_enter_wait_any_device_event_locked(gm_room_session_t *session,
-                                                             const room_scenario_wait_any_device_event_t *wait_any,
-                                                             uint32_t now_ms)
-{
-    if (!session || !wait_any || wait_any->event_count == 0 ||
-        wait_any->event_count > ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    session->scenario_state = GM_ROOM_SCENARIO_WAITING;
-    gm_room_session_scenario_clear_wait_locked(session);
-    session->wait_type = GM_ROOM_SCENARIO_WAIT_ANY_DEVICE_EVENT;
-    session->wait_started_at_ms = now_ms;
-    session->wait_event_count = wait_any->event_count;
-    for (uint8_t i = 0; i < wait_any->event_count; ++i) {
-        esp_err_t err = scenario_resolve_wait_event_match(&wait_any->events[i],
-                                                          &session->wait_events[i]);
-        if (err != ESP_OK) {
-            gm_room_session_scenario_clear_wait_locked(session);
-            return err;
-        }
-    }
-    quest_str_copy(session->wait_event_type,
-                sizeof(session->wait_event_type),
-                session->wait_events[0].event_type);
-    quest_str_copy(session->wait_source_id,
-                sizeof(session->wait_source_id),
-                session->wait_events[0].source_id);
-    gm_room_session_mark_session_changed_locked(session);
-    return ESP_OK;
-}
-
-static esp_err_t scenario_enter_wait_all_device_events_locked(gm_room_session_t *session,
-                                                              const room_scenario_wait_all_device_events_t *wait_all,
-                                                              uint32_t now_ms)
-{
-    if (!session || !wait_all || wait_all->event_count == 0 ||
-        wait_all->event_count > ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    session->scenario_state = GM_ROOM_SCENARIO_WAITING;
-    gm_room_session_scenario_clear_wait_locked(session);
-    session->wait_type = GM_ROOM_SCENARIO_WAIT_ALL_DEVICE_EVENTS;
-    session->wait_started_at_ms = now_ms;
-    session->wait_event_count = wait_all->event_count;
-    for (uint8_t i = 0; i < wait_all->event_count; ++i) {
-        esp_err_t err = scenario_resolve_wait_event_match(&wait_all->events[i],
-                                                          &session->wait_events[i]);
-        if (err != ESP_OK) {
-            gm_room_session_scenario_clear_wait_locked(session);
-            return err;
-        }
-        session->wait_event_matched[i] = false;
-    }
-    quest_str_copy(session->wait_event_type,
-                sizeof(session->wait_event_type),
-                session->wait_events[0].event_type);
-    quest_str_copy(session->wait_source_id,
-                sizeof(session->wait_source_id),
-                session->wait_events[0].source_id);
-    gm_room_session_mark_session_changed_locked(session);
-    return ESP_OK;
-}
-
-static esp_err_t scenario_enter_wait_flags_locked(gm_room_session_t *session,
-                                                  const room_scenario_wait_flags_t *wait_flags,
-                                                  uint32_t now_ms)
-{
-    if (!session || !wait_flags || wait_flags->flag_count == 0 ||
-        wait_flags->flag_count > ROOM_SCENARIO_WAIT_FLAGS_MAX_FLAGS) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    session->scenario_state = GM_ROOM_SCENARIO_WAITING;
-    gm_room_session_scenario_clear_wait_locked(session);
-    session->wait_type = GM_ROOM_SCENARIO_WAIT_FLAGS;
-    session->wait_started_at_ms = now_ms;
-    session->wait_until_ms = wait_flags->timeout_ms > 0 ? now_ms + wait_flags->timeout_ms : 0;
-    session->wait_flag_count = wait_flags->flag_count;
-    for (uint8_t i = 0; i < wait_flags->flag_count; ++i) {
-        quest_str_copy(session->wait_flags[i].name,
-                    sizeof(session->wait_flags[i].name),
-                    wait_flags->flags[i].name);
-        session->wait_flags[i].value = wait_flags->flags[i].value;
-    }
-    gm_room_session_mark_session_changed_locked(session);
-    return ESP_OK;
 }
 
 static esp_err_t load_selected_scenario_for_room(const char *room_id, room_scenario_t **out_scenario)
@@ -312,13 +92,19 @@ static esp_err_t execute_scenario_locked(gm_room_session_t *session,
         switch (step->type) {
         case ROOM_SCENARIO_STEP_DEVICE_COMMAND: {
             char command_error[96] = {0};
+            gm_room_session_command_dispatch_t dispatch = {0};
             esp_err_t err = gm_room_session_execute_quest_device_command_internal(&step->data.device_command,
                                                          command_error,
-                                                         sizeof(command_error));
+                                                         sizeof(command_error),
+                                                         &dispatch);
             if (err != ESP_OK) {
                 scenario_set_error_locked(session,
                                           command_error[0] ? command_error : "device_command_failed");
                 return err;
+            }
+            if (dispatch.result_required) {
+                scenario_enter_wait_command_result_locked(session, &dispatch, now_ms);
+                return ESP_OK;
             }
             session->scenario_state = GM_ROOM_SCENARIO_RUNNING;
             session->current_step_index++;
@@ -331,15 +117,31 @@ static esp_err_t execute_scenario_locked(gm_room_session_t *session,
             for (uint8_t i = 0; i < step->data.device_command_group.command_count; ++i) {
                 char command_error[96] = {0};
                 room_scenario_device_command_t command = {0};
+                quest_device_command_t command_meta = {0};
                 quest_str_copy(command.device_id,
                             sizeof(command.device_id),
                             step->data.device_command_group.commands[i].device_id);
                 quest_str_copy(command.command_id,
                             sizeof(command.command_id),
                             step->data.device_command_group.commands[i].command_id);
+                quest_str_copy(command.params_json,
+                            sizeof(command.params_json),
+                            step->data.device_command_group.commands[i].params_json);
+                esp_err_t meta_err = quest_device_get_command(command.device_id,
+                                                              command.command_id,
+                                                              &command_meta);
+                if (meta_err != ESP_OK) {
+                    scenario_set_error_locked(session, "device_command_group_command_not_found");
+                    return meta_err;
+                }
+                if (command_meta.result_required) {
+                    scenario_set_error_locked(session, "device_command_group_result_required_unsupported");
+                    return ESP_ERR_NOT_SUPPORTED;
+                }
                 esp_err_t err = gm_room_session_execute_quest_device_command_internal(&command,
                                                              command_error,
-                                                             sizeof(command_error));
+                                                             sizeof(command_error),
+                                                             NULL);
                 if (err != ESP_OK) {
                     scenario_set_error_locked(session,
                                               command_error[0] ? command_error
@@ -427,10 +229,6 @@ static esp_err_t execute_scenario_locked(gm_room_session_t *session,
                         step->data.operator_approval.approve_label[0]
                             ? step->data.operator_approval.approve_label
                             : "Continue");
-            ESP_LOGI(TAG,
-                     "operator approval entered: room=%s prompt=%s",
-                     session->room_id,
-                     session->wait_operator_prompt);
             gm_room_session_mark_session_changed_locked(session);
             return ESP_OK;
         case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
@@ -486,6 +284,9 @@ esp_err_t gm_room_session_execute_branch_locked(gm_room_session_t *session,
     if (!session || !branch || !branch->active) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (gm_room_session_branch_is_reactive_v2(session, branch)) {
+        return gm_room_session_reactive_v2_continue_locked(session, branch, now_ms);
+    }
     end_index = scenario_branch_end_index(branch, &session->running_scenario);
     gm_room_session_scenario_branch_load_into_session(session, branch);
     err = execute_scenario_locked(session,
@@ -498,7 +299,8 @@ esp_err_t gm_room_session_execute_branch_locked(gm_room_session_t *session,
         branch->type == ROOM_SCENARIO_BRANCH_REACTIVE &&
         branch->scenario_state == GM_ROOM_SCENARIO_DONE) {
         branch->fired_once = true;
-        if (!branch->run_once) {
+        branch->fire_count++;
+        if (branch->max_fire_count == 0 || branch->fire_count < branch->max_fire_count) {
             branch->current_step_index = branch->step_start_index;
             branch->cooldown_until_ms = branch->cooldown_ms > 0 ? now_ms + branch->cooldown_ms : 0;
             branch->scenario_state = branch->cooldown_ms > 0
@@ -533,6 +335,9 @@ static esp_err_t execute_all_running_branches_locked(gm_room_session_t *session,
         gm_room_scenario_branch_runtime_t *branch = &session->branch_runtimes[i];
         esp_err_t err = ESP_OK;
         if (!branch->active || branch->scenario_state != GM_ROOM_SCENARIO_RUNNING) {
+            continue;
+        }
+        if (gm_room_session_branch_is_reactive_v2(session, branch)) {
             continue;
         }
         err = gm_room_session_execute_branch_locked(session, branch, now_ms, budget_per_branch);
@@ -791,10 +596,6 @@ esp_err_t gm_room_session_scenario_approve(const char *room_id)
         return ESP_ERR_INVALID_STATE;
     }
     gm_room_session_scenario_branch_load_into_session(session, branch);
-    ESP_LOGI(TAG,
-             "operator approved: room=%s prompt=%s",
-             session->room_id,
-             session->wait_operator_prompt);
     session->current_step_index++;
     session->scenario_state = GM_ROOM_SCENARIO_RUNNING;
     gm_room_session_scenario_clear_wait_locked(session);
@@ -834,7 +635,14 @@ esp_err_t gm_room_session_scenario_reset(const char *room_id)
 
 void gm_room_session_scenario_tick(void)
 {
+    event_bus_message_t timeout_events[4] = {0};
+    size_t timeout_count = command_executor_poll_timeouts(timeout_events,
+                                                         sizeof(timeout_events) / sizeof(timeout_events[0]));
     uint32_t now_ms = gm_room_session_scenario_now_ms();
+    for (size_t i = 0; i < timeout_count; ++i) {
+        (void)event_bus_post_priority(&timeout_events[i], EVENT_BUS_PRIORITY_HIGH, 0);
+        (void)gm_room_session_scenario_on_event(&timeout_events[i]);
+    }
     if (gm_room_session_sessions_lock() != ESP_OK) {
         return;
     }
@@ -857,16 +665,28 @@ void gm_room_session_scenario_tick(void)
                         continue;
                     }
                     branch->current_step_index = branch->step_start_index;
-                    branch->scenario_state = GM_ROOM_SCENARIO_RUNNING;
+                    branch->scenario_state = gm_room_session_branch_is_reactive_v2(session, branch)
+                                                 ? GM_ROOM_SCENARIO_WAITING
+                                                 : GM_ROOM_SCENARIO_RUNNING;
                     branch->cooldown_until_ms = 0;
                     scenario_branch_clear_wait_fields(branch);
                     gm_room_session_mark_session_changed_locked(session);
+                    if (gm_room_session_branch_is_reactive_v2(session, branch)) {
+                        continue;
+                    }
                 }
                 gm_room_session_scenario_branch_load_into_session(session, branch);
                 if (session->scenario_state == GM_ROOM_SCENARIO_WAITING &&
                     session->wait_type == GM_ROOM_SCENARIO_WAIT_TIME) {
                     if (!scenario_time_reached(now_ms, session->wait_until_ms)) {
                         gm_room_session_scenario_branch_save_from_session(branch, session);
+                        continue;
+                    }
+                    if (gm_room_session_branch_is_reactive_v2(session, branch)) {
+                        branch->reactive_current_action++;
+                        branch->scenario_state = GM_ROOM_SCENARIO_RUNNING;
+                        scenario_branch_clear_wait_fields(branch);
+                        (void)gm_room_session_reactive_v2_continue_locked(session, branch, now_ms);
                         continue;
                     }
                     session->current_step_index++;

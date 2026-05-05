@@ -117,6 +117,24 @@ static void test_audio_player_format_mapping_handles_known_and_unknown_formats(v
     TEST_ASSERT_EQUAL(AUDIO_PLAYER_FMT_OGG, audio_player_to_public_format(AUDIO_FMT_OGG));
 }
 
+static void test_audio_player_asset_prepare_caches_missing_path_status(void)
+{
+    audio_player_asset_info_t info = {0};
+    const char *path = "/sdcard/quest/__missing_scenehub_asset__.wav";
+
+    audio_player_asset_cache_clear();
+    TEST_ASSERT_FALSE(audio_player_asset_is_prepared(path));
+    TEST_ASSERT_EQUAL(ESP_OK, audio_player_prepare_path(path, &info));
+    TEST_ASSERT_EQUAL_STRING(path, info.path);
+    TEST_ASSERT_EQUAL(AUDIO_PLAYER_ASSET_MISSING, info.status);
+    TEST_ASSERT_TRUE(audio_player_asset_is_prepared(path));
+
+    memset(&info, 0, sizeof(info));
+    TEST_ASSERT_EQUAL(ESP_OK, audio_player_asset_get(path, &info));
+    TEST_ASSERT_EQUAL(AUDIO_PLAYER_ASSET_MISSING, info.status);
+    TEST_ASSERT_EQUAL_STRING(path, info.path);
+}
+
 void register_audio_player_state_tests(void)
 {
     RUN_TEST(test_audio_player_volume_clamps_and_updates_status);
@@ -124,4 +142,5 @@ void register_audio_player_state_tests(void)
     RUN_TEST(test_audio_player_status_progress_bitrate_and_message_are_stable);
     RUN_TEST(test_audio_player_seek_state_requires_active_path);
     RUN_TEST(test_audio_player_format_mapping_handles_known_and_unknown_formats);
+    RUN_TEST(test_audio_player_asset_prepare_caches_missing_path_status);
 }

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "scenehub_command_result.h"
 
 static void *orch_device_alloc(size_t size)
 {
@@ -84,7 +85,8 @@ static void orch_apply_control_ingest(const quest_device_t *dev, orch_device_ent
     if (ingest->has_diag) {
         orch_promote_health(dst, orch_health_from_diag_level(ingest->diag_level));
     }
-    if (ingest->has_result && strcmp(ingest->result_status, "error") == 0) {
+    if (ingest->has_result &&
+        scenehub_command_result_is_failure(ingest->result_status)) {
         orch_promote_health(dst, ORCH_HEALTH_DEGRADED);
     }
     heap_caps_free(ingest);

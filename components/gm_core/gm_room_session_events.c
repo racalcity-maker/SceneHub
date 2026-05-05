@@ -2,9 +2,11 @@
 
 #include <string.h>
 
+#include "command_executor.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "scenehub_command_result.h"
 
 #define GM_SCENARIO_MAX_STEPS_PER_TICK 8
 
@@ -140,6 +142,41 @@ static bool wait_all_device_events_met(const gm_room_session_t *session)
     return true;
 }
 
+static bool command_result_is_success(const event_bus_message_t *message)
+{
+    return message && scenehub_command_result_is_success(message->payload);
+}
+
+static bool command_result_is_failure(const event_bus_message_t *message)
+{
+    return message && scenehub_command_result_is_failure(message->payload);
+}
+
+static bool command_result_is_pending(const event_bus_message_t *message)
+{
+    return message && scenehub_command_result_is_pending(message->payload);
+}
+
+static bool branch_wait_matches_message(gm_room_session_t *session,
+                                        gm_room_scenario_branch_runtime_t *branch,
+                                        const event_bus_message_t *message)
+{
+    bool matches = false;
+    if (!session || !branch || !message ||
+        !branch->active ||
+        branch->scenario_state != GM_ROOM_SCENARIO_WAITING ||
+        (branch->wait_type != GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT &&
+         branch->wait_type != GM_ROOM_SCENARIO_WAIT_ANY_DEVICE_EVENT &&
+         branch->wait_type != GM_ROOM_SCENARIO_WAIT_ALL_DEVICE_EVENTS &&
+         branch->wait_type != GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT)) {
+        return false;
+    }
+    gm_room_session_scenario_branch_load_into_session(session, branch);
+    matches = wait_event_match_index(session, message) >= 0;
+    gm_room_session_scenario_branch_save_from_session(branch, session);
+    return matches;
+}
+
 esp_err_t gm_room_session_scenario_on_event(const event_bus_message_t *message)
 {
     uint32_t now_ms = gm_room_session_scenario_now_ms();
@@ -147,6 +184,7 @@ esp_err_t gm_room_session_scenario_on_event(const event_bus_message_t *message)
     if (!message) {
         return ESP_ERR_INVALID_ARG;
     }
+    command_executor_on_event(message);
     if (gm_room_session_sessions_lock() != ESP_OK) {
         return ESP_ERR_TIMEOUT;
     }
@@ -155,16 +193,54 @@ esp_err_t gm_room_session_scenario_on_event(const event_bus_message_t *message)
         if (!session->in_use || !session->running_scenario_valid) {
             continue;
         }
+        bool reactive_matches[ROOM_SCENARIO_MAX_BRANCHES] = {0};
+        uint8_t reactive_match_count = 0;
         for (uint8_t branch_index = 0;
              branch_index < session->branch_runtime_count &&
              branch_index < ROOM_SCENARIO_MAX_BRANCHES;
              ++branch_index) {
             gm_room_scenario_branch_runtime_t *branch = &session->branch_runtimes[branch_index];
+            if (branch->type != ROOM_SCENARIO_BRANCH_REACTIVE) {
+                continue;
+            }
+            if ((gm_room_session_reactive_v2_matches_event(session, branch, message) &&
+                 branch->scenario_state == GM_ROOM_SCENARIO_WAITING &&
+                 branch->wait_type == GM_ROOM_SCENARIO_WAIT_NONE) ||
+                branch_wait_matches_message(session, branch, message)) {
+                reactive_matches[branch_index] = true;
+                reactive_match_count++;
+            }
+        }
+        if (reactive_match_count > 1) {
+            ESP_LOGW(TAG,
+                     "reactive trigger conflict: room=%s event=%s source=%s matches=%u",
+                     session->room_id,
+                     event_type_name(message->type),
+                     event_source_id(message),
+                     (unsigned)reactive_match_count);
+            matched_any = true;
+        }
+        for (uint8_t branch_index = 0;
+             branch_index < session->branch_runtime_count &&
+             branch_index < ROOM_SCENARIO_MAX_BRANCHES;
+             ++branch_index) {
+            gm_room_scenario_branch_runtime_t *branch = &session->branch_runtimes[branch_index];
+            if (reactive_match_count > 1 && reactive_matches[branch_index]) {
+                continue;
+            }
+            if (gm_room_session_reactive_v2_matches_event(session, branch, message)) {
+                esp_err_t err = gm_room_session_reactive_v2_fire_locked(session, branch, now_ms);
+                if (err == ESP_OK) {
+                    matched_any = true;
+                }
+                continue;
+            }
             if (!branch->active ||
                 branch->scenario_state != GM_ROOM_SCENARIO_WAITING ||
                 (branch->wait_type != GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT &&
                  branch->wait_type != GM_ROOM_SCENARIO_WAIT_ANY_DEVICE_EVENT &&
-                 branch->wait_type != GM_ROOM_SCENARIO_WAIT_ALL_DEVICE_EVENTS)) {
+                 branch->wait_type != GM_ROOM_SCENARIO_WAIT_ALL_DEVICE_EVENTS &&
+                 branch->wait_type != GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT)) {
                 continue;
             }
             gm_room_session_scenario_branch_load_into_session(session, branch);
@@ -174,12 +250,38 @@ esp_err_t gm_room_session_scenario_on_event(const event_bus_message_t *message)
                 continue;
             }
 
-            ESP_LOGI(TAG,
-                     "scenario event matched: room=%s branch=%u event=%s source=%s",
-                     session->room_id,
-                     (unsigned)branch->branch_index,
-                     session->wait_event_type[0] ? session->wait_event_type : "*",
-                     session->wait_source_id[0] ? session->wait_source_id : "*");
+            if (session->wait_type == GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT) {
+                if (command_result_is_pending(message)) {
+                    matched_any = true;
+                    gm_room_session_scenario_branch_save_from_session(branch, session);
+                    continue;
+                }
+                if (command_result_is_failure(message)) {
+                    if (gm_room_session_branch_is_reactive_v2(session, branch)) {
+                        matched_any = true;
+                        (void)gm_room_session_reactive_v2_handle_result_failure_locked(session,
+                                                                                       branch,
+                                                                                       message->payload,
+                                                                                       now_ms);
+                        continue;
+                    }
+                    scenario_set_error_locked(session, "device_command_result_failed");
+                    matched_any = true;
+                    gm_room_session_scenario_branch_save_from_session(branch, session);
+                    continue;
+                }
+                if (!command_result_is_success(message)) {
+                    gm_room_session_scenario_branch_save_from_session(branch, session);
+                    continue;
+                }
+                if (gm_room_session_branch_is_reactive_v2(session, branch)) {
+                    matched_any = true;
+                    (void)gm_room_session_reactive_v2_handle_result_success_locked(session,
+                                                                                   branch,
+                                                                                   now_ms);
+                    continue;
+                }
+            }
             if (session->wait_type == GM_ROOM_SCENARIO_WAIT_ALL_DEVICE_EVENTS) {
                 const char *source_id = event_source_id(message);
                 for (uint8_t event_index = 0;

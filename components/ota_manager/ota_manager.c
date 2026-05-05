@@ -11,7 +11,9 @@
 #include "freertos/task.h"
 
 static const char *TAG = "ota_manager";
-static const TickType_t OTA_CONFIRM_DELAY_TICKS = pdMS_TO_TICKS(30000);
+static const TickType_t OTA_CONFIRM_MAX_BOOT_WAIT_TICKS = pdMS_TO_TICKS(30000);
+static const TickType_t OTA_CONFIRM_AFTER_READY_DELAY_TICKS = pdMS_TO_TICKS(1000);
+static const TickType_t OTA_CONFIRM_READY_POLL_TICKS = pdMS_TO_TICKS(100);
 static const TickType_t OTA_REBOOT_DELAY_TICKS = pdMS_TO_TICKS(1200);
 
 typedef struct {
@@ -245,20 +247,52 @@ static esp_err_t ota_start_confirm_task_locked(void)
     return ESP_OK;
 }
 
+static bool ota_confirm_wait_until_ready(bool *out_pending_verify,
+                                         bool *out_system_ready)
+{
+    TickType_t waited = 0;
+    bool pending_verify = false;
+    bool system_ready = false;
+
+    while (waited <= OTA_CONFIRM_MAX_BOOT_WAIT_TICKS) {
+        if (ota_lock(portMAX_DELAY)) {
+            pending_verify = s_ota.pending_verify;
+            system_ready = s_ota.system_ready;
+            ota_unlock();
+        }
+        if (!pending_verify || system_ready) {
+            break;
+        }
+        vTaskDelay(OTA_CONFIRM_READY_POLL_TICKS);
+        waited += OTA_CONFIRM_READY_POLL_TICKS;
+    }
+
+    if (pending_verify && system_ready) {
+        vTaskDelay(OTA_CONFIRM_AFTER_READY_DELAY_TICKS);
+        if (ota_lock(portMAX_DELAY)) {
+            pending_verify = s_ota.pending_verify;
+            system_ready = s_ota.system_ready;
+            ota_unlock();
+        }
+    }
+
+    if (out_pending_verify) {
+        *out_pending_verify = pending_verify;
+    }
+    if (out_system_ready) {
+        *out_system_ready = system_ready;
+    }
+    return pending_verify && system_ready;
+}
+
 static void ota_confirm_task(void *arg)
 {
     (void)arg;
-    vTaskDelay(OTA_CONFIRM_DELAY_TICKS);
 
     bool should_confirm = false;
     bool pending_verify = false;
     bool system_ready = false;
-    if (ota_lock(portMAX_DELAY)) {
-        pending_verify = s_ota.pending_verify;
-        system_ready = s_ota.system_ready;
-        should_confirm = pending_verify && system_ready;
-        ota_unlock();
-    }
+    should_confirm = ota_confirm_wait_until_ready(&pending_verify, &system_ready);
 
     if (!should_confirm) {
         ESP_LOGW(TAG, "skip OTA confirm: pending=%d ready=%d",

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "quest_device.h"
 
 static bool room_scenario_valid_device_command(const room_scenario_device_command_t *command)
@@ -86,6 +87,104 @@ static bool room_scenario_valid_step(const room_scenario_step_t *step)
     default:
         return false;
     }
+}
+
+static bool room_scenario_valid_reactive_trigger(const room_scenario_reactive_trigger_t *trigger)
+{
+    if (!trigger) {
+        return false;
+    }
+    switch (trigger->kind) {
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT:
+        return trigger->device_id[0] && trigger->event_id[0];
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED:
+        return trigger->flag_name[0];
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_OPERATOR_EVENT:
+        return trigger->operator_event[0];
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_RUNTIME_EVENT:
+        return trigger->runtime_event[0];
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_NONE:
+    default:
+        return false;
+    }
+}
+
+static bool room_scenario_valid_reactive_action(const room_scenario_t *scenario,
+                                                const room_scenario_reactive_action_t *action)
+{
+    if (!scenario || !action) {
+        return false;
+    }
+    switch (action->type) {
+    case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
+        return room_scenario_valid_device_command(&action->data.device_command);
+    case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP:
+        if (action->group_command_count == 0 ||
+            (size_t)action->group_command_start_index + action->group_command_count >
+                scenario->reactive_group_command_count) {
+            return false;
+        }
+        for (uint8_t i = 0; i < action->group_command_count; ++i) {
+            const room_scenario_device_command_t *command =
+                &scenario->reactive_group_commands[action->group_command_start_index + i];
+            if (!room_scenario_valid_device_command(command)) {
+                return false;
+            }
+        }
+        return true;
+    case ROOM_SCENARIO_STEP_WAIT_TIME:
+        return action->data.wait_time.duration_ms > 0;
+    case ROOM_SCENARIO_STEP_SET_FLAG:
+        return action->data.set_flag.name[0];
+    case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
+        return action->data.operator_message.message[0];
+    default:
+        return false;
+    }
+}
+
+static bool room_scenario_valid_reactive_branch_v2(const room_scenario_t *scenario,
+                                                   const room_scenario_branch_t *branch)
+{
+    if (!scenario || !branch || !room_scenario_valid_reactive_trigger(&branch->trigger) ||
+        branch->variant_count == 0 ||
+        (size_t)branch->variant_start_index + branch->variant_count >
+            scenario->reactive_variant_count) {
+        return false;
+    }
+    for (uint8_t i = 0; i < branch->guard_flag_count; ++i) {
+        if (!branch->guard_flags[i].name[0]) {
+            return false;
+        }
+    }
+    for (uint8_t i = 0; i < branch->variant_count; ++i) {
+        const room_scenario_reactive_variant_t *variant =
+            &scenario->reactive_variants[branch->variant_start_index + i];
+        if (!variant->id[0] || variant->action_count == 0 ||
+            (size_t)variant->action_start_index + variant->action_count >
+                scenario->reactive_action_count) {
+            return false;
+        }
+        for (uint8_t action_index = 0; action_index < variant->action_count; ++action_index) {
+            if (!room_scenario_valid_reactive_action(
+                    scenario,
+                    &scenario->reactive_actions[variant->action_start_index + action_index])) {
+                return false;
+            }
+        }
+    }
+    if ((size_t)branch->on_complete_action_start_index + branch->on_complete_action_count >
+        scenario->reactive_action_count) {
+        return false;
+    }
+    for (uint8_t i = 0; i < branch->on_complete_action_count; ++i) {
+        if (!room_scenario_valid_reactive_action(
+                scenario,
+                &scenario->reactive_actions[branch->on_complete_action_start_index + i])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool room_scenario_step_is_reactive_trigger(room_scenario_step_type_t type)
@@ -175,6 +274,11 @@ esp_err_t room_scenario_validate_structural(const room_scenario_t *scenario)
     if (scenario->step_count > ROOM_SCENARIO_MAX_STEPS) {
         return ESP_ERR_INVALID_SIZE;
     }
+    if (scenario->reactive_variant_count > ROOM_SCENARIO_MAX_REACTIVE_VARIANTS ||
+        scenario->reactive_action_count > ROOM_SCENARIO_MAX_REACTIVE_ACTIONS ||
+        scenario->reactive_group_command_count > ROOM_SCENARIO_MAX_REACTIVE_GROUP_COMMANDS) {
+        return ESP_ERR_INVALID_SIZE;
+    }
     if (scenario->branch_count > ROOM_SCENARIO_MAX_BRANCHES) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -194,19 +298,32 @@ esp_err_t room_scenario_validate_structural(const room_scenario_t *scenario)
             branch->type != ROOM_SCENARIO_BRANCH_REACTIVE) {
             return ESP_ERR_INVALID_ARG;
         }
+        if (branch->reentry_mode != ROOM_SCENARIO_REENTRY_IGNORE &&
+            branch->reentry_mode != ROOM_SCENARIO_REENTRY_QUEUE_ONE &&
+            branch->reentry_mode != ROOM_SCENARIO_REENTRY_RESTART &&
+            branch->reentry_mode != ROOM_SCENARIO_REENTRY_PARALLEL) {
+            return ESP_ERR_INVALID_ARG;
+        }
         if (end_index > scenario->step_count) {
             return ESP_ERR_INVALID_SIZE;
         }
         if (branch->type == ROOM_SCENARIO_BRANCH_REACTIVE) {
             const room_scenario_step_t *first_step = NULL;
-            if (!room_scenario_branch_first_step(scenario, branch, &first_step) ||
-                !room_scenario_step_is_reactive_trigger(first_step->type)) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            if (first_step->type == ROOM_SCENARIO_STEP_WAIT_FLAGS &&
-                !branch->run_once &&
-                branch->cooldown_ms == 0) {
-                return ESP_ERR_INVALID_ARG;
+            if (branch->variant_count > 0 || branch->trigger.kind != ROOM_SCENARIO_REACTIVE_TRIGGER_NONE) {
+                if (!room_scenario_valid_reactive_branch_v2(scenario, branch)) {
+                    return ESP_ERR_INVALID_ARG;
+                }
+            } else {
+                if (!room_scenario_branch_first_step(scenario, branch, &first_step) ||
+                    !room_scenario_step_is_reactive_trigger(first_step->type)) {
+                    return ESP_ERR_INVALID_ARG;
+                }
+                if (first_step->type == ROOM_SCENARIO_STEP_WAIT_FLAGS &&
+                    !branch->run_once &&
+                    branch->max_fire_count == 0 &&
+                    branch->cooldown_ms == 0) {
+                    return ESP_ERR_INVALID_ARG;
+                }
             }
         }
     }
@@ -555,6 +672,156 @@ static void validation_check_wait_all_device_events_step(const room_scenario_ste
     }
 }
 
+static void validation_check_reactive_action_v2(const room_scenario_t *scenario,
+                                                const room_scenario_reactive_action_t *action,
+                                                uint16_t branch_step_index,
+                                                room_scenario_validation_report_t *report)
+{
+    if (!scenario || !action || !report) {
+        return;
+    }
+    switch (action->type) {
+    case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
+        validation_check_device_command_payload(&action->data.device_command,
+                                                branch_step_index,
+                                                "REACTIVE_DEVICE_COMMAND",
+                                                report);
+        break;
+    case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP:
+        if (action->group_mode == ROOM_SCENARIO_COMMAND_GROUP_PARALLEL) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_WARNING,
+                                 branch_step_index,
+                                 "REACTIVE_GROUP_PARALLEL_UNSUPPORTED",
+                                 "Reactive DEVICE_COMMAND_GROUP parallel mode is reserved for future runtime support");
+        }
+        if (action->group_command_count == 0 ||
+            (size_t)action->group_command_start_index + action->group_command_count >
+                scenario->reactive_group_command_count) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_ERROR,
+                                 branch_step_index,
+                                 "REACTIVE_GROUP_COMMAND_RANGE_INVALID",
+                                 "Reactive DEVICE_COMMAND_GROUP command range is invalid");
+            return;
+        }
+        for (uint8_t i = 0; i < action->group_command_count; ++i) {
+            validation_check_device_command_payload(
+                &scenario->reactive_group_commands[action->group_command_start_index + i],
+                branch_step_index,
+                "REACTIVE_GROUP_COMMAND",
+                report);
+        }
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_TIME:
+        if (action->data.wait_time.duration_ms == 0) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_ERROR,
+                                 branch_step_index,
+                                 "REACTIVE_WAIT_TIME_ZERO",
+                                 "Reactive WAIT_TIME duration_ms must be greater than zero");
+        }
+        break;
+    case ROOM_SCENARIO_STEP_SET_FLAG:
+        if (!action->data.set_flag.name[0]) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_ERROR,
+                                 branch_step_index,
+                                 "REACTIVE_FLAG_NAME_EMPTY",
+                                 "Reactive SET_FLAG has empty flag name");
+        }
+        break;
+    case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
+        if (!action->data.operator_message.message[0]) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_ERROR,
+                                 branch_step_index,
+                                 "REACTIVE_OPERATOR_MESSAGE_EMPTY",
+                                 "Reactive SHOW_OPERATOR_MESSAGE message is empty");
+        }
+        break;
+    default:
+        validation_add_issue(report,
+                             ROOM_SCENARIO_VALIDATION_ERROR,
+                             branch_step_index,
+                             "REACTIVE_ACTION_TYPE_UNSUPPORTED",
+                             "Reactive action type is not allowed in v2");
+        break;
+    }
+}
+
+static void validation_check_reactive_branch_v2(const room_scenario_t *scenario,
+                                                const room_scenario_branch_t *branch,
+                                                room_scenario_validation_report_t *report)
+{
+    uint16_t branch_step_index = branch ? branch->step_start_index : 0;
+    if (!scenario || !branch || !report) {
+        return;
+    }
+    if (!room_scenario_valid_reactive_trigger(&branch->trigger)) {
+        validation_add_issue(report,
+                             ROOM_SCENARIO_VALIDATION_ERROR,
+                             branch_step_index,
+                             "REACTIVE_TRIGGER_INVALID",
+                             "Reactive v2 branch has invalid trigger");
+    }
+    if (branch->variant_count == 0 ||
+        (size_t)branch->variant_start_index + branch->variant_count >
+            scenario->reactive_variant_count) {
+        validation_add_issue(report,
+                             ROOM_SCENARIO_VALIDATION_ERROR,
+                             branch_step_index,
+                             "REACTIVE_VARIANTS_INVALID",
+                             "Reactive v2 branch must have at least one valid variant");
+        return;
+    }
+    for (uint8_t i = 0; i < branch->guard_flag_count; ++i) {
+        if (!branch->guard_flags[i].name[0]) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_ERROR,
+                                 branch_step_index,
+                                 "REACTIVE_GUARD_FLAG_EMPTY",
+                                 "Reactive guard flag name is empty");
+        }
+    }
+    for (uint8_t i = 0; i < branch->variant_count; ++i) {
+        const room_scenario_reactive_variant_t *variant =
+            &scenario->reactive_variants[branch->variant_start_index + i];
+        if (!variant->id[0]) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_ERROR,
+                                 branch_step_index,
+                                 "REACTIVE_VARIANT_ID_EMPTY",
+                                 "Reactive variant id is empty");
+        }
+        if (variant->action_count == 0 ||
+            (size_t)variant->action_start_index + variant->action_count >
+                scenario->reactive_action_count) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_ERROR,
+                                 branch_step_index,
+                                 "REACTIVE_VARIANT_ACTIONS_INVALID",
+                                 "Reactive variant must have at least one valid action");
+            continue;
+        }
+        for (uint8_t action_index = 0; action_index < variant->action_count; ++action_index) {
+            validation_check_reactive_action_v2(
+                scenario,
+                &scenario->reactive_actions[variant->action_start_index + action_index],
+                branch_step_index,
+                report);
+        }
+    }
+    if ((size_t)branch->on_complete_action_start_index + branch->on_complete_action_count >
+        scenario->reactive_action_count) {
+        validation_add_issue(report,
+                             ROOM_SCENARIO_VALIDATION_ERROR,
+                             branch_step_index,
+                             "REACTIVE_ON_COMPLETE_RANGE_INVALID",
+                             "Reactive on_complete action range is invalid");
+    }
+}
+
 esp_err_t room_scenario_validate(const room_scenario_t *scenario,
                                  room_scenario_validation_report_t *out)
 {
@@ -650,7 +917,9 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
                                      "REACTIVE_BRANCH_REQUIRED_IGNORED",
                                      "Reactive branch is ignored for scenario completion");
             }
-            if (!room_scenario_branch_first_step(scenario, branch, &first_step)) {
+            if (branch->variant_count > 0 || branch->trigger.kind != ROOM_SCENARIO_REACTIVE_TRIGGER_NONE) {
+                validation_check_reactive_branch_v2(scenario, branch, out);
+            } else if (!room_scenario_branch_first_step(scenario, branch, &first_step)) {
                 validation_add_issue(out,
                                      ROOM_SCENARIO_VALIDATION_ERROR,
                                      branch->step_start_index,
@@ -664,12 +933,21 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
                                      "Reactive branch first enabled step must wait for a device event or flag");
             } else if (first_step->type == ROOM_SCENARIO_STEP_WAIT_FLAGS &&
                        !branch->run_once &&
+                       branch->max_fire_count == 0 &&
                        branch->cooldown_ms == 0) {
                 validation_add_issue(out,
                                      ROOM_SCENARIO_VALIDATION_ERROR,
                                      branch->step_start_index,
                                      "REACTIVE_FLAGS_NEEDS_GUARD",
                                      "Reactive branch triggered by flags must run once or have cooldown");
+            }
+            if (branch->reentry_mode == ROOM_SCENARIO_REENTRY_RESTART ||
+                branch->reentry_mode == ROOM_SCENARIO_REENTRY_PARALLEL) {
+                validation_add_issue(out,
+                                     ROOM_SCENARIO_VALIDATION_WARNING,
+                                     branch->step_start_index,
+                                     "REACTIVE_REENTRY_UNSUPPORTED",
+                                     "Reactive branch reentry mode is reserved for future runtime support");
             }
         }
     }
@@ -802,14 +1080,24 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
 esp_err_t room_scenario_validate_by_id(const char *scenario_id,
                                        room_scenario_validation_report_t *out)
 {
-    room_scenario_t scenario = {0};
+    room_scenario_t *scenario = NULL;
     esp_err_t err = ESP_OK;
     if (!scenario_id || !scenario_id[0] || !out) {
         return ESP_ERR_INVALID_ARG;
     }
-    err = room_scenario_get(scenario_id, &scenario);
+    scenario = heap_caps_calloc(1, sizeof(*scenario), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!scenario) {
+        scenario = heap_caps_calloc(1, sizeof(*scenario), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!scenario) {
+        return ESP_ERR_NO_MEM;
+    }
+    err = room_scenario_get(scenario_id, scenario);
     if (err != ESP_OK) {
+        heap_caps_free(scenario);
         return err;
     }
-    return room_scenario_validate(&scenario, out);
+    err = room_scenario_validate(scenario, out);
+    heap_caps_free(scenario);
+    return err;
 }

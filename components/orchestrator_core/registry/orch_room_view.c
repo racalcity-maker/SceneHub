@@ -248,10 +248,15 @@ void orch_room_view_enrich_from_sessions(orch_registry_snapshot_t *snapshot)
             out_branch->active = runtime->active;
             out_branch->type = runtime->type;
             out_branch->required_for_completion = runtime->required_for_completion;
+            out_branch->priority = runtime->priority;
             out_branch->cooldown_ms = runtime->cooldown_ms;
             out_branch->cooldown_until_ms = runtime->cooldown_until_ms;
+            out_branch->max_fire_count = runtime->max_fire_count;
+            out_branch->fire_count = runtime->fire_count;
             out_branch->run_once = runtime->run_once;
             out_branch->fired_once = runtime->fired_once;
+            out_branch->reentry_mode = runtime->reentry_mode;
+            out_branch->pending_trigger = runtime->pending_trigger;
             out_branch->step_start_index = runtime->step_start_index;
             out_branch->step_count = runtime->step_count;
             out_branch->current_step_index = runtime->current_step_index;

@@ -1,416 +1,6 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
-function normalizeScenarioEditorStep(step){
-step=step||{};
-const out={
-id:step.id||'',label:step.label||'',enabled:step.enabled!==false,type:step.type||'WAIT_TIME'}
-;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms)out.duration_ms=step.duration_ms;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:cmd.params&&typeof cmd.params==='object'?cmd.params:{}}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;return out;}
-function scenarioBranchTypeValue(branch){
-const raw=String(branch&&branch.type||'normal').toLowerCase();
-return raw==='reactive'||raw==='reaction'?'reactive':'normal';
-}
-
-function defaultScenarioBranch(index,steps,type){
-const n=Number(index)||0;
-const branchType=type==='reactive'?'reactive':'normal';
-return {id:n?`branch_${n+1}`:'main',name:n?(branchType==='reactive'?`Reaction ${n+1}`:`Branch ${n+1}`):'Main',type:branchType,enabled:true,required_for_completion:branchType==='normal',cooldown_ms:0,run_once:false,steps:Array.isArray(steps)?steps:[]};
-}
-
-function normalizeScenarioBranch(branch,index){
-const base=defaultScenarioBranch(index,[]);
-const name=branch&&branch.name||base.name;
-const steps=branch&&Array.isArray(branch.steps)?branch.steps.map(normalizeScenarioEditorStep):[];
-const type=scenarioBranchTypeValue(branch||base);
-return {id:branch&&branch.id||slugifyId(name,`branch_${index+1}`),name,type,enabled:!branch||branch.enabled!==false,required_for_completion:type==='normal'&&(!branch||branch.required_for_completion!==false),cooldown_ms:Number(branch&&branch.cooldown_ms)||0,run_once:!!(branch&&branch.run_once),steps};
-}
-
-function normalizeScenarioBranches(obj){
-if(obj&&Array.isArray(obj.branches)&&obj.branches.length)return obj.branches.slice(0,8).map(normalizeScenarioBranch);
-const steps=obj&&Array.isArray(obj.steps)?obj.steps.map(normalizeScenarioEditorStep):[];
-return [defaultScenarioBranch(0,steps)];
-}
-
-function scenarioEditableJson(s,roomId){
-const obj=s?JSON.parse(JSON.stringify(s)):{
-id:'',name:'',room_id:roomId,branches:[defaultScenarioBranch(0,[])]}
-;
-obj.room_id=roomId;
-obj.branches=normalizeScenarioBranches(obj);
-delete obj.steps;
-delete obj.step_count;
-delete obj.valid;
-delete obj.validation_issue_count;
-delete obj.validation_issues;
-return obj;
-}
-
-function scenarioActiveBranchIndex(scenario){
-const branches=Array.isArray(scenario&&scenario.branches)?scenario.branches:[];
-const max=Math.max(0,branches.length-1);
-const raw=Number(scenarioEditor.active_branch);
-if(!Number.isFinite(raw))return 0;
-return Math.max(0,Math.min(max,Math.floor(raw)));
-}
-
-function scenarioActiveBranch(scenario){
-const branches=Array.isArray(scenario&&scenario.branches)?scenario.branches:[];
-if(!branches.length)return null;
-return branches[scenarioActiveBranchIndex(scenario)]||branches[0];
-}
-
-function scenarioActiveSteps(scenario){
-const branch=scenarioActiveBranch(scenario);
-if(!branch)return [];
-branch.steps=Array.isArray(branch.steps)?branch.steps:[];
-return branch.steps;
-}
-
-function scenarioBranchStepOffset(branches,branchIndex){
-let offset=0;
-(Array.isArray(branches)?branches:[]).forEach((branch,index)=>{if(index<branchIndex)offset+=(Array.isArray(branch.steps)?branch.steps.length:0);});
-return offset;
-}
-
-function scenarioTotalStepCount(branches){
-return (Array.isArray(branches)?branches:[]).reduce((sum,branch)=>sum+(Array.isArray(branch.steps)?branch.steps.length:0),0);
-}
-
-function scenarioNextStepLocalIndex(steps){
-const list=Array.isArray(steps)?steps:[];
-let maxNumber=0;
-list.forEach(step=>{
-const match=String(step&&step.id||'').match(/^step_(\d+)(?:\D|$)/);
-if(match)maxNumber=Math.max(maxNumber,Number(match[1])||0);
-});
-return Math.max(list.length,maxNumber);
-}
-
-function scenarioForEachStep(scenario,fn){
-(Array.isArray(scenario&&scenario.branches)?scenario.branches:[]).forEach((branch,branchIndex)=>{
-(Array.isArray(branch.steps)?branch.steps:[]).forEach((step,stepIndex)=>fn(step,branch,branchIndex,stepIndex));
-});
-}
-
-function scenarioKnownFlagNames(scenario){
-const names=new Set();
-scenarioForEachStep(scenario||scenarioEditorSource(),step=>{
-const type=scenarioStepTypeValue(step);
-if(type==='SET_FLAG'&&step.flag_name)names.add(step.flag_name);
-if(type==='WAIT_FLAGS'&&Array.isArray(step.flags)){
-step.flags.forEach(flag=>{const item=normalizeScenarioFlagItem(flag);if(item.flag_name)names.add(item.flag_name);});
-}
-});
-return Array.from(names).sort((a,b)=>a.localeCompare(b));
-}
-
-function renderScenarioFlagInput(value,attr){
-const selected=String(value||'');
-const flags=scenarioKnownFlagNames();
-const input=`<input ${attr||''} placeholder='Flag name, e.g. puzzle_done' value='${esc(selected)}'>`;
-if(!flags.length)return input;
-const options=[`<option value=''>Use existing flag</option>`].concat(flags.map(name=>`<option value='${esc(name)}' ${name===selected?'selected':''}>${esc(name)}</option>`)).join('');
-return `<div class='flag-picker'>${input}<select data-scenario-flag-suggest>${options}</select></div>`;
-}
-
-function scenarioStepTypeValue(s){
-const raw=String((s&&s.type)||'WAIT_TIME');
-const low=raw.toLowerCase();
-if(low==='device_command')return 'DEVICE_COMMAND';
-if(low==='device_command_group')return 'DEVICE_COMMAND_GROUP';
-if(low==='wait_time')return 'WAIT_TIME';
-if(low==='wait_device_event')return 'WAIT_DEVICE_EVENT';
-if(low==='wait_any_device_event')return 'WAIT_ANY_DEVICE_EVENT';
-if(low==='wait_all_device_events')return 'WAIT_ALL_DEVICE_EVENTS';
-if(low==='end_game'||low==='finish_game')return 'END_GAME';
-if(low==='operator_approval')return 'OPERATOR_APPROVAL';
-if(low==='show_operator_message'||low==='operator_message')return 'SHOW_OPERATOR_MESSAGE';
-if(low==='set_flag')return 'SET_FLAG';
-if(low==='wait_flags')return 'WAIT_FLAGS';
-return 'WAIT_TIME';
-}
-
-function scenarioStepIsWaitType(type){
-type=scenarioStepTypeValue({type});
-return type==='WAIT_TIME'||type==='WAIT_DEVICE_EVENT'||type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS'||type==='WAIT_FLAGS';
-}
-
-function scenarioFallbackStepSchemas(){
-const skipFields=[{key:'allow_operator_skip',type:'checkbox',label:'Allow operator skip'},{key:'operator_skip_label',type:'text',label:'Skip label'}];
-return [
-{type:'DEVICE_COMMAND',label:'Device command',fields:[{key:'device_id',type:'device_select',label:'Device',required:true},{key:'command_id',type:'device_command_select',label:'Command',depends_on:'device_id',required:true},{key:'params',type:'params_object',label:'Parameters',depends_on:'command_id'}]},
-{type:'DEVICE_COMMAND_GROUP',label:'Command group',fields:[{key:'commands',type:'command_group',label:'Commands',required:true}]},
-{type:'WAIT_DEVICE_EVENT',label:'Wait device event',fields:[{key:'device_id',type:'device_select',label:'Device',required:true},{key:'event_id',type:'device_event_select',label:'Event',depends_on:'device_id',required:true},{key:'timeout_ms',type:'optional_duration_ms',label:'Timeout'},{key:'timeout_message',type:'textarea',label:'Timeout message'},...skipFields]},
-{type:'WAIT_ANY_DEVICE_EVENT',label:'Wait any device event',fields:[{key:'events',type:'event_group',label:'Events',required:true},...skipFields]},
-{type:'WAIT_ALL_DEVICE_EVENTS',label:'Wait all device events',fields:[{key:'events',type:'event_group',label:'Events',required:true},...skipFields]},
-{type:'WAIT_TIME',label:'Wait time',fields:[{key:'duration_ms',type:'duration_ms',label:'Duration',required:true},...skipFields]},
-{type:'OPERATOR_APPROVAL',label:'Operator approval',fields:[{key:'prompt',type:'text',label:'Prompt',required:true},{key:'approve_label',type:'text',label:'Button label'}]},
-{type:'SHOW_OPERATOR_MESSAGE',label:'Show operator message',fields:[{key:'message',type:'textarea',label:'Message',required:true}]},
-{type:'SET_FLAG',label:'Set flag',fields:[{key:'flag_name',type:'text',label:'Flag',required:true},{key:'value',type:'checkbox',label:'Value',required:true}]},
-{type:'WAIT_FLAGS',label:'Wait flags',fields:[{key:'flags',type:'flag_list',label:'Flags',required:true},{key:'timeout_ms',type:'optional_duration_ms',label:'Timeout'},{key:'timeout_message',type:'textarea',label:'Timeout message'},...skipFields]},
-{type:'END_GAME',label:'End game',fields:[]}
-];
-}
-
-function scenarioStepSchemas(){
-const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
-const schemas=Array.isArray(catalog.step_schemas)?catalog.step_schemas:[];
-return schemas.length?schemas:scenarioFallbackStepSchemas();
-}
-
-function scenarioReactiveTriggerTypes(){
-return ['WAIT_DEVICE_EVENT','WAIT_ANY_DEVICE_EVENT','WAIT_ALL_DEVICE_EVENTS','WAIT_FLAGS'];
-}
-
-function scenarioReactiveActionTypes(){
-return ['DEVICE_COMMAND','DEVICE_COMMAND_GROUP','WAIT_TIME','SHOW_OPERATOR_MESSAGE','SET_FLAG'];
-}
-
-function scenarioAllowedStepTypesForBranch(branch){
-if(scenarioBranchTypeValue(branch)!=='reactive')return null;
-const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
-return steps.length?scenarioReactiveActionTypes():scenarioReactiveTriggerTypes();
-}
-
-function scenarioStepSchema(type){
-return scenarioStepSchemas().find(s=>s.type===type)||null;
-}
-
-function scenarioStepHelpText(type){
-const normalized=scenarioStepTypeValue({type});
-if(normalized==='DEVICE_COMMAND')return `Device command
-
-Use when the scenario must press one saved device action: open a lock, turn on a screen, play audio.
-
-Setup: choose a device, then choose one of its commands.
-
-During game: the command is sent and the scenario immediately goes to the next step. If the command fails, the scenario stops on this step.`;
-if(normalized==='DEVICE_COMMAND_GROUP')return `Command group
-
-Use when several commands must happen as one moment: open two drawers and turn on TV.
-
-Setup: add commands in the order they must run.
-
-During game: commands are sent one by one. Any failed command stops the scenario.`;
-if(normalized==='WAIT_DEVICE_EVENT')return `Wait device event
-
-Use when players must do one specific thing on one device: solve UID order, press a sensor, finish a local puzzle.
-
-Setup: choose the device and the event that means success.
-
-During game: the scenario waits here until this exact event arrives. Operator Next can force it forward.`;
-if(normalized==='WAIT_ANY_DEVICE_EVENT')return `Wait any device event
-
-Use when several different events can continue the game: either keypad success or operator bypass device success.
-
-Setup: add two to four device events.
-
-During game: the first matching event continues the scenario.`;
-if(normalized==='WAIT_ALL_DEVICE_EVENTS')return `Wait all device events
-
-Use when several puzzles can be solved in any order, but all of them must be done before the scenario continues.
-
-Example: wait for UID order solved, altar completed, and book placed.
-
-Setup: add every required device event.
-
-During game: each matching event is remembered. The scenario continues only after every listed event has arrived.`;
-if(normalized==='WAIT_TIME')return `Wait time
-
-Use for a simple delay between actions: wait 5 seconds after opening a drawer before starting audio.
-
-Setup: enter seconds.
-
-During game: the scenario continues automatically after the delay.`;
-if(normalized==='OPERATOR_APPROVAL')return `Operator approval
-
-Use when a human must confirm the next part: players solved a puzzle, room is safe to open, sensor is unreliable today.
-
-Setup: write the text the operator should see and the button label.
-
-During game: the scenario waits until the operator presses the button.`;
-if(normalized==='SHOW_OPERATOR_MESSAGE')return `Show operator message
-
-Use to leave a short note for the operator: send players to room 2, prepare actor, watch camera.
-
-Setup: write the message.
-
-During game: the message appears and the scenario continues.`;
-if(normalized==='SET_FLAG')return `Set flag
-
-Use to remember progress inside one scenario run.
-
-Example: after a puzzle succeeds, set puzzle_done to true. Later another step can wait for puzzle_done before continuing.
-
-Setup: write a short flag name and choose whether this step sets it to true or false.
-
-During game: the scenario stores the value and immediately continues. Flags reset when the scenario starts again.`;
-if(normalized==='WAIT_FLAGS')return `Wait flags
-
-Use when the scenario must wait until earlier steps or branches have marked their work done.
-
-Example: wait until puzzle_done is true and door_ready is true.
-
-Setup: add one or more flag names and the expected value for each.
-
-During game: all listed flags must match. Operator Next can still force the step.`;
-if(normalized==='END_GAME')return `End game
-
-Use when this branch reaches the real quest finish.
-
-Setup: no fields are required.
-
-During game: the game timer is finished and the game becomes completed. Audio is not stopped automatically; add a separate Stop audio command if you want silence.`;
-return 'This step type does not have a help text yet.';
-}
-
-function scenarioStepTypeLabel(type){
-const schema=scenarioStepSchema(type);
-return schema&&(schema.label||schema.type)||type;
-}
-
-function durationMsToSeconds(ms){
-const n=Number(ms);
-if(!Number.isFinite(n)||n<=0)return 1;
-return Math.max(1,Math.round(n/1000));
-}
-
-function durationSecondsToMs(seconds){
-const n=Number(seconds);
-if(!Number.isFinite(n)||n<=0)return 1000;
-return Math.max(1,Math.round(n*1000));
-}
-
-function waitTimeLabel(ms){
-const seconds=durationMsToSeconds(ms);
-return `Wait ${seconds} sec`;
-}
-
-function scenarioTypeOptions(type){
-const schemas=scenarioStepSchemas();
-const normal=schemas.map(s=>s.type).filter(Boolean);
-const all=normal.includes(type)?normal:[type].concat(normal);
-return all.map(t=>`<option value='${esc(t)}' ${type===t?'selected':''}>${esc(scenarioStepTypeLabel(t))}</option>`).join('');
-}
-
-function scenarioCatalogDevices(){
-const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
-const catalogDevices=Array.isArray(catalog.quest_devices)?catalog.quest_devices:[];
-if(catalogDevices.length)return catalogDevices;
-return questDevices().map(device=>({
-id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
-)).filter(device=>device.id);
-}
-
-function firstScenarioDevice(requireCommand){
-const devices=scenarioCatalogDevices();
-return devices.find(device=>!requireCommand||(Array.isArray(device.commands)&&device.commands.length))||devices[0]||null;
-}
-
-function firstCommandForDevice(device){
-return device&&Array.isArray(device.commands)&&device.commands.length?device.commands[0]:null;
-}
-
-function defaultParamsForCommand(device,command){
-const params={};
-const deviceId=device&&device.id||'';
-const commandId=command&&command.id||'';
-if(deviceId==='system_audio'&&commandId==='play'){
-params.volume=70;
-params.channel='effect';
-params.repeat=false;
-}
-return params;
-}
-
-function defaultScenarioCommandItem(){
-const device=firstScenarioDevice(true);
-const command=firstCommandForDevice(device);
-return {device_id:device&&device.id||'',command_id:command&&command.id||''};
-}
-
-function firstDeviceWithEvent(){
-const devices=scenarioCatalogDevices();
-return devices.find(device=>Array.isArray(device.events)&&device.events.length)||devices[0]||null;
-}
-
-function firstEventForDevice(device){
-return device&&Array.isArray(device.events)&&device.events.length?device.events[0]:null;
-}
-
-function defaultScenarioEventItem(){
-const device=firstDeviceWithEvent();
-const event=firstEventForDevice(device);
-return {device_id:device&&device.id||'',event_id:event&&event.id||''};
-}
-
-function scenarioDeviceName(device){
-return device&&(device.name||device.id)||'Device';
-}
-
-function scenarioRoomNameForDevice(device){
-return roomName(device&&device.room_id||scenarioEditor.room_id);
-}
-
-function newScenarioStep(index,kind){
-const n=index+1;
-if(kind==='device_command'){
-const device=firstScenarioDevice(true);
-const command=firstCommandForDevice(device);
-const room=scenarioRoomNameForDevice(device);
-const devName=scenarioDeviceName(device);
-const commandName=command&&(command.label||command.id)||'command';
-return {id:`step_${n}`,label:`${room}: ${devName} - ${commandName}`,enabled:true,type:'DEVICE_COMMAND',device_id:device&&device.id||'',command_id:command&&command.id||'',params:defaultParamsForCommand(device,command)};
-}
-if(kind==='device_command_group'){
-return {id:`step_${n}`,label:'Command group',enabled:true,type:'DEVICE_COMMAND_GROUP',commands:[defaultScenarioCommandItem()]};
-}
-if(kind==='wait_device_event'){
-const device=firstDeviceWithEvent();
-const event=firstEventForDevice(device);
-const room=scenarioRoomNameForDevice(device);
-const devName=scenarioDeviceName(device);
-const eventName=event&&(event.label||event.id)||'event';
-return {id:`step_${n}`,label:`${room}: wait ${devName} - ${eventName}`,enabled:true,type:'WAIT_DEVICE_EVENT',device_id:device&&device.id||'',event_id:event&&event.id||''};
-}
-if(kind==='wait_any_device_event'){
-return {id:`step_${n}`,label:'Wait any device event',enabled:true,type:'WAIT_ANY_DEVICE_EVENT',events:[defaultScenarioEventItem()]};
-}
-if(kind==='wait_all_device_events'){
-return {id:`step_${n}`,label:'Wait all device events',enabled:true,type:'WAIT_ALL_DEVICE_EVENTS',events:[defaultScenarioEventItem()]};
-}
-if(kind==='operator'){
-return {id:`step_${n}`,label:'Operator approval',enabled:true,type:'OPERATOR_APPROVAL',prompt:'Continue?',approve_label:'Continue'};
-}
-if(kind==='operator_message'){
-return {id:`step_${n}`,label:'Show operator message',enabled:true,type:'SHOW_OPERATOR_MESSAGE',message:'Check the room before continuing.'};
-}
-if(kind==='set_flag'){
-return {id:`step_${n}`,label:'Set flag',enabled:true,type:'SET_FLAG',flag_name:'puzzle_done',value:true};
-}
-if(kind==='wait_flags'){
-return {id:`step_${n}`,label:'Wait flags',enabled:true,type:'WAIT_FLAGS',flags:[{flag_name:'puzzle_done',value:true}]};
-}
-if(kind==='end_game'){
-return {id:`step_${n}`,label:'End game',enabled:true,type:'END_GAME'};
-}
-return {id:`step_${n}`,label:waitTimeLabel(1000),enabled:true,type:'WAIT_TIME',duration_ms:1000};
-}
-
-function newScenarioStepForType(index,type){
-const normalized=scenarioStepTypeValue({type});
-if(normalized==='DEVICE_COMMAND')return newScenarioStep(index,'device_command');
-if(normalized==='DEVICE_COMMAND_GROUP')return newScenarioStep(index,'device_command_group');
-if(normalized==='WAIT_DEVICE_EVENT')return newScenarioStep(index,'wait_device_event');
-if(normalized==='WAIT_ANY_DEVICE_EVENT')return newScenarioStep(index,'wait_any_device_event');
-if(normalized==='WAIT_ALL_DEVICE_EVENTS')return newScenarioStep(index,'wait_all_device_events');
-if(normalized==='OPERATOR_APPROVAL')return newScenarioStep(index,'operator');
-if(normalized==='SHOW_OPERATOR_MESSAGE')return newScenarioStep(index,'operator_message');
-if(normalized==='SET_FLAG')return newScenarioStep(index,'set_flag');
-if(normalized==='WAIT_FLAGS')return newScenarioStep(index,'wait_flags');
-if(normalized==='END_GAME')return newScenarioStep(index,'end_game');
-return newScenarioStep(index,'wait_time');
-}
-
 function scenarioStepPresetButtons(branch){
+if(scenarioIsReactiveV2Branch(branch))return reactiveV2PresetButtons(branch);
 const allowed=scenarioAllowedStepTypesForBranch(branch);
 const allowedSet=allowed?new Set(allowed):null;
 const schemas=scenarioStepSchemas().filter(schema=>!allowedSet||allowedSet.has(schema.type||''));
@@ -418,6 +8,135 @@ const title=allowedSet?(Array.isArray(branch&&branch.steps)&&branch.steps.length
 const hasSteps=Array.isArray(branch&&branch.steps)&&branch.steps.length>0;
 const hint=allowedSet&&!hasSteps?`<div class='row-meta scenario-reaction-hint'>Add one trigger first. Actions become available after the trigger.</div>`:'';
 return `<h2 class='section-title'>${esc(title)}</h2>${hint}<div class='scenario-step-presets'>${schemas.map(schema=>`<div class='scenario-step-preset-row'><button data-scenario-step-action='add_schema' data-scenario-step-type='${esc(schema.type||'WAIT_TIME')}'>${esc(schema.label||schema.type)}</button><button class='icon-btn' title='Show example' aria-label='Show step example' data-scenario-step-help='${esc(schema.type||'WAIT_TIME')}'>?</button></div>`).join('')}</div>`;
+}
+
+function scenarioIsReactiveV2Branch(branch){
+return scenarioBranchTypeValue(branch)==='reactive'&&(Array.isArray(branch&&branch.variants)||!!(branch&&branch.trigger));
+}
+
+function reactiveV2ActionTypes(){
+return ['DEVICE_COMMAND','WAIT_TIME','SET_FLAG','SHOW_OPERATOR_MESSAGE'];
+}
+
+function reactiveV2ActionTypeOptions(type){
+const selected=scenarioStepTypeValue({type});
+const types=reactiveV2ActionTypes();
+const all=types.includes(selected)?types:[selected].concat(types);
+return all.map(t=>`<option value='${esc(t)}' ${selected===t?'selected':''}>${esc(scenarioStepTypeLabel(t))}</option>`).join('');
+}
+
+function defaultReactiveV2Trigger(){
+const device=firstDeviceWithEvent();
+const event=firstEventForDevice(device);
+return {kind:'device_event',device_id:device&&device.id||'',event_id:event&&event.id||''};
+}
+
+function defaultReactiveV2BranchFields(){
+return {priority:0,max_fire_count:0,trigger:defaultReactiveV2Trigger(),guard_flags:[],policy:{mode:'single',cooldown_ms:0,max_fire_count:0},reentry:{mode:'ignore'},variants:[{id:'variant_1',label:'Actions',actions:[]}],result_policy:{on_done:'continue',on_fail:'fail_reaction',on_timeout:'fail_reaction'},on_complete:[]};
+}
+
+function ensureReactiveV2Branch(branch){
+if(!branch)return branch;
+const defaults=defaultReactiveV2BranchFields();
+branch.priority=Number(branch.priority)||0;
+branch.max_fire_count=Number(branch.max_fire_count)||Number(branch.policy&&branch.policy.max_fire_count)||0;
+branch.trigger=branch.trigger&&typeof branch.trigger==='object'?branch.trigger:defaults.trigger;
+branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+branch.policy=branch.policy&&typeof branch.policy==='object'?branch.policy:defaults.policy;
+branch.policy.mode=branch.policy.mode||'single';
+branch.policy.cooldown_ms=Number(branch.policy.cooldown_ms)||Number(branch.cooldown_ms)||0;
+branch.policy.max_fire_count=Number(branch.policy.max_fire_count)||branch.max_fire_count||0;
+branch.cooldown_ms=Number(branch.cooldown_ms)||Number(branch.policy.cooldown_ms)||0;
+branch.reentry=branch.reentry&&typeof branch.reentry==='object'?branch.reentry:defaults.reentry;
+branch.reentry.mode=branch.reentry.mode||'ignore';
+branch.result_policy=branch.result_policy&&typeof branch.result_policy==='object'?branch.result_policy:defaults.result_policy;
+branch.result_policy.on_done=branch.result_policy.on_done||'continue';
+branch.result_policy.on_fail=branch.result_policy.on_fail||'fail_reaction';
+branch.result_policy.on_timeout=branch.result_policy.on_timeout||'fail_reaction';
+branch.variants=Array.isArray(branch.variants)&&branch.variants.length?branch.variants:defaults.variants;
+branch.variants=branch.variants.map((variant,index)=>({id:variant&&variant.id||`variant_${index+1}`,label:variant&&variant.label||variant&&variant.name||(index===0?'Actions':`Variant ${index+1}`),actions:Array.isArray(variant&&variant.actions)?variant.actions:[]}));
+branch.on_complete=Array.isArray(branch.on_complete)?branch.on_complete:[];
+return branch;
+}
+
+function reactiveV2PresetButtons(branch){
+const variants=Array.isArray(branch&&branch.variants)?branch.variants:[];
+return `<h2 class='section-title'>Reaction</h2><div class='row-meta'>${esc(variants.length)} variant${variants.length===1?'':'s'}. Use the rule editor on the right.</div>`;
+}
+
+function renderReactiveV2Trigger(branch){
+const trigger=branch.trigger||defaultReactiveV2Trigger();
+const kind=String(trigger.kind||'device_event');
+const devices=scenarioCatalogDevices().filter(device=>Array.isArray(device.events)&&device.events.length);
+let selectedDevice=trigger.device_id||((devices[0]&&devices[0].id)||'');
+const device=scenarioDeviceById(selectedDevice)||devices[0]||null;
+if(device&&!selectedDevice)selectedDevice=device.id||'';
+const events=device&&Array.isArray(device.events)?device.events:[];
+const selectedEvent=scenarioValidEventId(device,trigger.event_id||'');
+const kindOptions=['device_event','flag_changed','operator_event','runtime_event'].map(item=>`<option value='${item}' ${kind===item?'selected':''}>${item}</option>`).join('');
+let body='';
+if(kind==='device_event'){
+const deviceControl=devices.length?`<select class='scenario-select' data-v2-trigger-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-v2-trigger-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
+const eventControl=events.length?`<select class='scenario-select' data-v2-trigger-field='event_id'>${optionList(events,selectedEvent,'Select event')}</select>`:`<input data-v2-trigger-field='event_id' placeholder='Event ID' value='${esc(trigger.event_id||selectedEvent)}'>`;
+body=`<div class='scenario-v2-inline-fields'>${deviceControl}${eventControl}</div>`;
+}else if(kind==='flag_changed'){
+body=`<div class='scenario-v2-inline-fields'>${renderScenarioFlagInput(trigger.flag_name||'',`data-v2-trigger-field='flag_name'`)}</div>`;
+}else if(kind==='operator_event'){
+body=`<div class='scenario-v2-inline-fields'><input data-v2-trigger-field='operator_event' placeholder='Operator event' value='${esc(trigger.operator_event||'')}'></div>`;
+}else{
+body=`<div class='scenario-v2-inline-fields'><input data-v2-trigger-field='runtime_event' placeholder='Runtime event' value='${esc(trigger.runtime_event||'')}'></div>`;
+}
+return `<section class='scenario-v2-rule'><div class='scenario-v2-rule-label'>When</div><div class='scenario-v2-rule-body'><div class='scenario-v2-inline-fields narrow'><select class='scenario-select' data-v2-trigger-field='kind'>${kindOptions}</select></div>${body}</div></section>`;
+}
+
+function renderReactiveV2Type(branch){
+const policy=branch.policy||{};
+const mode=String(policy.mode||'single');
+const item=(value,label,sub)=>`<label class='scenario-v2-type-option ${mode===value?'active':''}'><input data-v2-policy-field='mode' type='radio' name='reactive_v2_mode' value='${esc(value)}' ${mode===value?'checked':''}><span><strong>${esc(label)}</strong><em>${esc(sub)}</em></span></label>`;
+return `<section class='scenario-v2-type'><div class='scenario-v2-type-title'>Reaction type</div><div class='scenario-v2-type-grid'>${item('single','Same actions','Run the same action list on every trigger.')}${item('escalate','Escalate','Run level 1, then level 2, then the next levels.')}${item('rotate','Rotate','Cycle through variants on each trigger.')}${item('random','Random','Pick one variant randomly.')}</div></section>`;
+}
+
+function renderReactiveV2Policy(branch){
+const policy=branch.policy||{};
+const reentry=branch.reentry||{};
+const result=branch.result_policy||{};
+const reentryMode=String(reentry.mode||'ignore');
+const isEscalate=String(policy.mode||'single')==='escalate';
+const resultAction=value=>['continue','set_flag','fail_reaction','fail_scenario','retry'].map(item=>`<option value='${item}' ${String(value||'')===item?'selected':''}>${item}</option>`).join('');
+return `<details class='scenario-advanced scenario-v2-settings'><summary>Advanced reaction settings</summary><div class='scenario-v2-settings-grid'><label class='field-stack'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></label><label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><label class='field-stack'><span>Reentry while running</span><select data-v2-reentry-field='mode'><option value='ignore' ${reentryMode==='ignore'?'selected':''}>ignore</option><option value='queue_one' ${reentryMode==='queue_one'?'selected':''}>queue_one</option></select></label>${isEscalate?'':`<label class='field-stack'><span>Max fires</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(Number(policy.max_fire_count)||Number(branch.max_fire_count)||0)}'></label>`}<label class='field-stack'><span>Priority</span><input data-v2-branch-field='priority' type='number' step='1' value='${esc(Number(branch.priority)||0)}'></label><label class='field-stack'><span>On done</span><select data-v2-result-field='on_done'>${resultAction(result.on_done||'continue')}</select></label><label class='field-stack'><span>On fail</span><select data-v2-result-field='on_fail'>${resultAction(result.on_fail||'fail_reaction')}</select></label><label class='field-stack'><span>On timeout</span><select data-v2-result-field='on_timeout'>${resultAction(result.on_timeout||'fail_reaction')}</select></label><label class='field-stack'><span>Result flag</span>${renderScenarioFlagInput(result.timeout_flag||result.flag||'',`data-v2-result-field='timeout_flag'`)}</label></div></details>`;
+}
+
+function renderReactiveV2Guards(branch){
+const guards=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+return `<section class='scenario-v2-rule'><div class='scenario-v2-rule-label'>If</div><div class='scenario-v2-rule-body'><div class='scenario-v2-guard-list'>${guards.length?guards.map((guard,index)=>`<div class='scenario-v2-guard' data-v2-guard-item='${index}'><span class='row-meta'>Flag</span>${renderScenarioFlagInput(guard.flag||guard.flag_name||guard.name||'',`data-v2-guard-field='flag'`)}<select data-v2-guard-field='value'><option value='true' ${guard.value!==false?'selected':''}>is true</option><option value='false' ${guard.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' data-reactive-v2-action='delete_guard' data-guard-index='${index}'>&times;</button></div>`).join(''):`<div class='empty compact-empty'>No guard flags. The reaction can run whenever the trigger arrives.</div>`}</div><button data-reactive-v2-action='add_guard'>Add condition</button></div></section>`;
+}
+
+function renderReactiveV2Action(action,variantIndex,actionIndex){
+const type=scenarioStepTypeValue(action);
+const summary=scenarioStepSummaryText(action);
+return `<div class='builder-step scenario-step-row scenario-step-${scenarioStepVisualType(action)} compact-step scenario-v2-action' data-v2-action='${actionIndex}' data-variant-index='${variantIndex}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${actionIndex+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(action)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge'>${esc(scenarioStepBadgeLabel(action))}</span></div><div class='actions compact-actions'><button class='icon-btn danger' data-reactive-v2-action='delete_action' data-variant-index='${variantIndex}' data-action-index='${actionIndex}'>&times;</button></div></div><div class='scenario-step-edit'><div class='scenario-v2-action-fields'><input data-step-field='label' placeholder='Action label' value='${esc(action.label||'')}'><select data-step-field='type'>${reactiveV2ActionTypeOptions(type)}</select></div>${renderScenarioStepPayload(action,type)}</div></div>`;
+}
+
+function renderReactiveV2ActionAddButtons(variantIndex){
+return `<div class='scenario-v2-action-add'><button data-reactive-v2-action='add_action' data-action-type='DEVICE_COMMAND' data-variant-index='${variantIndex}'>Add device command</button><button data-reactive-v2-action='add_action' data-action-type='WAIT_TIME' data-variant-index='${variantIndex}'>Add wait</button><button data-reactive-v2-action='add_action' data-action-type='SET_FLAG' data-variant-index='${variantIndex}'>Add flag</button><button data-reactive-v2-action='add_action' data-action-type='SHOW_OPERATOR_MESSAGE' data-variant-index='${variantIndex}'>Add message</button></div>`;
+}
+
+function renderReactiveV2Variants(branch){
+const variants=Array.isArray(branch.variants)?branch.variants:[];
+const mode=String(branch.policy&&branch.policy.mode||'single');
+const isSingle=mode==='single';
+const isEscalate=mode==='escalate';
+const title=isEscalate?'Escalation levels':(isSingle?'Actions':'Variants');
+const addLabel=isEscalate?'Add level':'Add variant';
+const shown=isSingle?(variants.length?[variants[0]]:[{id:'variant_1',label:'Actions',actions:[]}]):variants;
+const maxFireValue=Number(branch.policy&&branch.policy.max_fire_count)||Number(branch.max_fire_count)||shown.length||1;
+const escalateControls=isEscalate?`<label class='scenario-v2-max-fire'><span>Stop after level</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(maxFireValue)}'></label>`:'';
+return `<section class='scenario-v2-rule scenario-v2-then'><div class='scenario-v2-rule-label'>Then</div><div class='scenario-v2-rule-body'><div class='scenario-v2-subtitle-row'><div class='scenario-v2-subtitle'>${esc(title)}</div>${escalateControls}</div><div class='scenario-v2-variant-list'>${shown.map((variant,index)=>{const originalIndex=isSingle?0:index;const label=isEscalate?`Level ${index+1}`:(isSingle?'Actions':`Variant ${index+1}`);const nameValue=isSingle?'Actions':(variant.label||variant.name||label);return `<div class='scenario-v2-variant' data-v2-variant='${originalIndex}'><div class='scenario-v2-variant-head'><label class='field-stack'><span>${esc(label)}</span><input data-v2-variant-field='label' placeholder='${esc(label)} label' value='${esc(nameValue)}' ${isSingle?'readonly':''}></label><div class='actions'>${isSingle?'':`<button class='danger' data-reactive-v2-action='delete_variant' data-variant-index='${originalIndex}' ${variants.length<=1?'disabled':''}>Delete ${isEscalate?'level':'variant'}</button>`}</div></div><details class='scenario-advanced compact-advanced scenario-v2-variant-id'><summary>${esc(isEscalate?'Level id':'Variant id')}</summary><div class='row'><input data-v2-variant-field='id' placeholder='Variant ID' value='${esc(variant.id||'')}'></div></details><div class='scenario-v2-action-list'>${(Array.isArray(variant.actions)?variant.actions:[]).map((action,actionIndex)=>renderReactiveV2Action(action,originalIndex,actionIndex)).join('')||`<div class='empty'>No actions yet. Add one or more actions below.</div>`}</div>${renderReactiveV2ActionAddButtons(originalIndex)}</div>`;}).join('')}</div>${isSingle?'':`<button data-reactive-v2-action='add_variant'>${esc(addLabel)}</button>`}</div></section>`;
+}
+
+function renderReactiveV2Editor(branch){
+ensureReactiveV2Branch(branch);
+return `<div class='scenario-v2-editor'>${renderReactiveV2Type(branch)}${renderReactiveV2Trigger(branch)}${renderReactiveV2Guards(branch)}${renderReactiveV2Variants(branch)}${renderReactiveV2Policy(branch)}</div>`;
 }
 
 function scenarioDeviceById(deviceId){
@@ -548,248 +267,6 @@ label.value=`Wait flags (${count})`;
 else if(type==='END_GAME'){
 label.value='End game';
 }
-}
-
-function audioFileIsWav(path){
-return /\.wav$/i.test(String(path||''));
-}
-
-function audioFileIsPlayableEffect(path){
-return /\.(wav|mp3)$/i.test(String(path||''));
-}
-
-function audioChannelValue(values){
-const raw=String(values&&values.channel||'effect').toLowerCase();
-return raw==='background'||raw==='bg'||raw==='music'?'background':'effect';
-}
-
-function renderAudioChannelParam(key,label,value){
-const selected=audioChannelValue({channel:value});
-return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'><option value='effect' ${selected==='effect'?'selected':''}>Effect / one-shot</option><option value='background' ${selected==='background'?'selected':''}>Background / music bed (WAV only)</option></select></div>`;
-}
-
-function renderAudioFileParam(key,label,value,channel){
-scheduleGMAudioFilesLoad();
-const selected=value===undefined?'':String(value||'');
-const background=String(channel||'effect')==='background';
-const files=gmAudioFileItems().filter(item=>background?audioFileIsWav(item.path):audioFileIsPlayableEffect(item.path));
-const refresh=`<button data-audio-files-refresh='1' ${gmAudioFiles.loading?'disabled':''}>${gmAudioFiles.loading?'Loading files':'Refresh files'}</button>`;
-if(files.length){
-const selectedKnown=files.some(item=>item.path===selected);
-const selectedAllowed=!selected||(background?audioFileIsWav(selected):audioFileIsPlayableEffect(selected));
-const custom=selected&&!selectedKnown?`<option value='${esc(selected)}' selected>${esc(selected)} ${selectedAllowed?'(custom)':'(not allowed for selected channel)'}</option>`:'';
-const options=files.map(item=>{
-const labelText=`${audioDirName(item.path)} / ${audioBaseName(item.path)}`;
-return `<option value='${esc(item.path)}' ${item.path===selected?'selected':''}>${esc(labelText)}</option>`;
-}).join('');
-return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'><option value='' ${selected?'':'selected'}>${esc(label||'Select audio file')}</option>${custom}${options}</select>${refresh}</div>${background?`<div class='row-meta'>Background accepts WAV only. Starting a new background replaces the previous one.</div>`:''}`;
-}
-const statusText=gmAudioFiles.error?gmAudioFiles.error:(gmAudioFiles.loading?'Scanning /sdcard for audio files...':(background?'No WAV files loaded yet':'No audio files loaded yet'));
-return `<div class='row'><input data-step-param='${esc(key)}' placeholder='${esc(label||'Audio file path')}' value='${esc(selected)}'>${refresh}</div><div class='row-meta'>${esc(statusText)}</div>`;
-}
-
-function renderCommandParams(command,params){
-const schema=command&&Array.isArray(command.params_schema)?command.params_schema:[];
-const values=params&&typeof params==='object'?params:{};
-if(!schema.length)return '';
-if(!commandSupportsScenarioParams(command)){
-return `<div class='row-meta warn-text'>Parameters are not applied to MQTT payload yet. This command publishes its saved static payload.</div>`;
-}
-return `<div class='builder-param-list'>${schema.map(param=>{
-const key=param.key||'';
-const label=param.label||key;
-let value=values[key];
-if(value===undefined&&command&&command.id==='play'&&key==='volume')value=70;
-if(value===undefined&&command&&command.id==='play'&&key==='channel')value='effect';
-if(value===undefined&&command&&command.id==='play'&&key==='repeat')value=false;
-if(command&&command.id==='play'&&key==='repeat'){
-return audioChannelValue(values)==='background'?`<label class='row-meta'><input data-step-param='${esc(key)}' type='checkbox' ${value?'checked':''} style='min-width:auto'> Repeat background track</label>`:'';
-}
-if(param.type==='checkbox')return `<label class='row-meta'><input data-step-param='${esc(key)}' type='checkbox' ${value?'checked':''} style='min-width:auto'> ${esc(label)}</label>`;
-if(command&&command.id==='play'&&key==='channel')return renderAudioChannelParam(key,label,value);
-if(param.type==='audio_file_select')return renderAudioFileParam(key,label,value,audioChannelValue(values));
-const inputType=param.type==='number'?'number':'text';
-return `<div class='row'><input data-step-param='${esc(key)}' type='${inputType}' placeholder='${esc(label)}' value='${esc(value===undefined?'':value)}'></div>`;
-}).join('')}</div>`;
-}
-
-function renderDeviceCommandPayload(step){
-const devices=scenarioCatalogDevices().filter(device=>Array.isArray(device.commands)&&device.commands.length);
-let selectedDevice=step.device_id||((devices[0]&&devices[0].id)||'');
-const device=scenarioDeviceById(selectedDevice)||devices[0]||null;
-if(device&&!selectedDevice)selectedDevice=device.id||'';
-const commands=device&&Array.isArray(device.commands)?device.commands:[];
-let selectedCommand=scenarioValidCommandId(device,step.command_id);
-const command=commands.find(cmd=>cmd.id===selectedCommand)||commands[0]||null;
-if(command&&!selectedCommand)selectedCommand=command.id||'';
-const deviceControl=devices.length?`<select class='scenario-select' data-step-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-step-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
-const commandControl=commands.length?`<select class='scenario-select' data-step-field='command_id'>${optionList(commands,selectedCommand,'Select command')}</select>`:`<input data-step-field='command_id' placeholder='Command ID' value='${esc(selectedCommand)}'>`;
-return `<div class='row'>${deviceControl}${commandControl}</div>${renderCommandParams(command,step.params)}`;
-}
-
-function renderCommandGroupControl(step){
-const commands=Array.isArray(step.commands)&&step.commands.length?step.commands:[defaultScenarioCommandItem()];
-const devices=scenarioCatalogDevices().filter(device=>Array.isArray(device.commands)&&device.commands.length);
-return `<div class='command-group-list'>${commands.map((item,index)=>{
-let selectedDevice=item.device_id||((devices[0]&&devices[0].id)||'');
-const device=scenarioDeviceById(selectedDevice)||devices[0]||null;
-if(device&&!selectedDevice)selectedDevice=device.id||'';
-const deviceCommands=device&&Array.isArray(device.commands)?device.commands:[];
-const selectedCommand=scenarioValidCommandId(device,item.command_id);
-const deviceControl=devices.length?`<select class='scenario-select' data-group-command-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-group-command-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
-const commandItems=deviceCommands.map(cmd=>({id:cmd.id,name:cmd.label||cmd.id}));
-const commandControl=deviceCommands.length?`<select class='scenario-select' data-group-command-field='command_id'>${optionList(commandItems,selectedCommand,'Select command')}</select>`:`<input data-group-command-field='command_id' placeholder='Command ID' value='${esc(selectedCommand)}'>`;
-return `<div class='command-group-item' data-command-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${commandControl}<button class='icon-btn danger' title='Remove command' aria-label='Remove command' data-scenario-step-action='group_delete' data-command-index='${index}'>&times;</button></div></div>`;
-}).join('')}<button data-scenario-step-action='group_add'>Add command</button></div>`;
-}
-
-function renderEventGroupControl(step){
-const events=Array.isArray(step.events)&&step.events.length?step.events:[defaultScenarioEventItem()];
-const devices=scenarioCatalogDevices().filter(device=>Array.isArray(device.events)&&device.events.length);
-return `<div class='command-group-list'>${events.map((item,index)=>{
-let selectedDevice=item.device_id||((devices[0]&&devices[0].id)||'');
-const device=scenarioDeviceById(selectedDevice)||devices[0]||null;
-if(device&&!selectedDevice)selectedDevice=device.id||'';
-const deviceEvents=device&&Array.isArray(device.events)?device.events:[];
-const selectedEvent=scenarioValidEventId(device,item.event_id);
-const deviceControl=devices.length?`<select class='scenario-select' data-event-group-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-event-group-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
-const eventItems=deviceEvents.map(event=>({id:event.id,name:event.label||event.id}));
-const eventControl=deviceEvents.length?`<select class='scenario-select' data-event-group-field='event_id'>${optionList(eventItems,selectedEvent,'Select event')}</select>`:`<input data-event-group-field='event_id' placeholder='Event ID' value='${esc(selectedEvent)}'>`;
-return `<div class='command-group-item' data-event-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${eventControl}<button class='icon-btn danger' title='Remove event' aria-label='Remove event' data-scenario-step-action='event_group_delete' data-event-index='${index}'>&times;</button></div></div>`;
-}).join('')}<button data-scenario-step-action='event_group_add'>Add event</button></div>`;
-}
-
-function normalizeScenarioFlagItem(item){
-return {flag_name:item&&((item.flag_name!==undefined?item.flag_name:item.name)||'')||'',value:item&&item.value===false?false:true};
-}
-
-function defaultScenarioFlagItem(){
-return {flag_name:'puzzle_done',value:true};
-}
-
-function renderFlagListControl(step){
-const flags=Array.isArray(step.flags)&&step.flags.length?step.flags.map(normalizeScenarioFlagItem):[defaultScenarioFlagItem()];
-return `<div class='command-group-list'>${flags.map((item,index)=>`<div class='command-group-item' data-flag-list-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${renderScenarioFlagInput(item.flag_name,`data-flag-list-field='flag_name'`)}<select data-flag-list-field='value'><option value='true' ${item.value!==false?'selected':''}>is true</option><option value='false' ${item.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' title='Remove flag' aria-label='Remove flag' data-scenario-step-action='flag_list_delete' data-flag-index='${index}'>&times;</button></div></div>`).join('')}<button data-scenario-step-action='flag_list_add'>Add flag</button></div>`;
-}
-
-function renderSetFlagPayload(step){
-const value=step.value===false?false:true;
-return `<div class='row compact-row'><div class='field-stack'><span>Flag name</span>${renderScenarioFlagInput(step.flag_name||'',`data-step-field='flag_name'`)}</div><label class='field-stack'><span>Set value</span><select data-step-field='value'><option value='true' ${value?'selected':''}>true / completed</option><option value='false' ${!value?'selected':''}>false / reset</option></select></label></div><div class='row-meta'>Use the same flag name in Wait flags. Flags are temporary and reset when this scenario starts again.</div>`;
-}
-
-function renderWaitDeviceEventPayload(step){
-const devices=scenarioCatalogDevices().filter(device=>Array.isArray(device.events)&&device.events.length);
-let selectedDevice=step.device_id||((devices[0]&&devices[0].id)||'');
-const device=scenarioDeviceById(selectedDevice)||devices[0]||null;
-if(device&&!selectedDevice)selectedDevice=device.id||'';
-const events=device&&Array.isArray(device.events)?device.events:[];
-let selectedEvent=scenarioValidEventId(device,step.event_id);
-const eventControl=events.length?`<select class='scenario-select' data-step-field='event_id'>${optionList(events,selectedEvent,'Select event')}</select>`:`<input data-step-field='event_id' placeholder='Event ID' value='${esc(selectedEvent)}'>`;
-const deviceControl=devices.length?`<select class='scenario-select' data-step-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-step-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
-return `<div class='row'>${deviceControl}${eventControl}</div>`;
-}
-
-function scenarioDevicesForStepType(type){
-const devices=scenarioCatalogDevices();
-if(type==='DEVICE_COMMAND'||type==='DEVICE_COMMAND_GROUP')return devices.filter(device=>Array.isArray(device.commands)&&device.commands.length);
-if(type==='WAIT_DEVICE_EVENT'||type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS')return devices.filter(device=>Array.isArray(device.events)&&device.events.length);
-return devices;
-}
-
-function scenarioSelectedDeviceForStep(type,step){
-const devices=scenarioDevicesForStepType(type);
-return scenarioDeviceById(step.device_id)||devices[0]||null;
-}
-
-function renderSchemaFieldControl(schema,field,step){
-const type=schema&&schema.type||scenarioStepTypeValue(step);
-const key=field.key||'';
-const label=field.label||key;
-const fieldType=field.type||'text';
-const selectedDevice=scenarioSelectedDeviceForStep(type,step);
-if(fieldType==='device_select'){
-const devices=scenarioDevicesForStepType(type);
-const selected=step.device_id||((selectedDevice&&selectedDevice.id)||'');
-return devices.length?`<select class='scenario-select' data-step-field='${esc(key)}'>${optionList(devices,selected,'Select device')}</select>`:`<input data-step-field='${esc(key)}' placeholder='Device ID' value='${esc(selected)}'>`;
-}
-if(fieldType==='device_command_select'){
-const commands=selectedDevice&&Array.isArray(selectedDevice.commands)?selectedDevice.commands:[];
-const selected=scenarioValidCommandId(selectedDevice,step.command_id);
-const items=commands.map(cmd=>({id:cmd.id,name:cmd.label||cmd.id}));
-return commands.length?`<select class='scenario-select' data-step-field='${esc(key)}'>${optionList(items,selected,'Select command')}</select>`:`<input data-step-field='${esc(key)}' placeholder='Command ID' value='${esc(selected)}'>`;
-}
-if(fieldType==='device_event_select'){
-const events=selectedDevice&&Array.isArray(selectedDevice.events)?selectedDevice.events:[];
-const selected=scenarioValidEventId(selectedDevice,step.event_id);
-const items=events.map(event=>({id:event.id,name:event.label||event.id}));
-return events.length?`<select class='scenario-select' data-step-field='${esc(key)}'>${optionList(items,selected,'Select event')}</select>`:`<input data-step-field='${esc(key)}' placeholder='Event ID' value='${esc(selected)}'>`;
-}
-if(fieldType==='params_object'){
-const commands=selectedDevice&&Array.isArray(selectedDevice.commands)?selectedDevice.commands:[];
-const commandId=scenarioValidCommandId(selectedDevice,step.command_id);
-const command=scenarioCommandById(selectedDevice&&selectedDevice.id,commandId);
-return renderCommandParams(command,step.params);
-}
-if(fieldType==='command_group'){
-return renderCommandGroupControl(step);
-}
-if(fieldType==='event_group'){
-return renderEventGroupControl(step);
-}
-if(fieldType==='flag_list'){
-return renderFlagListControl(step);
-}
-if(fieldType==='duration_ms'){
-return `<input data-step-field='${esc(key)}' type='number' min='1' step='1' placeholder='${esc(label)} sec' value='${esc(durationMsToSeconds(step[key]||1000))}'><span class='row-meta'>sec</span>`;
-}
-if(fieldType==='optional_duration_ms'){
-return `<input data-step-field='${esc(key)}' type='number' min='0' step='1' placeholder='${esc(label)} sec, 0 = no timeout' value='${esc(step[key]?durationMsToSeconds(step[key]):'')}'><span class='row-meta'>sec timeout</span>`;
-}
-if(fieldType==='checkbox'){
-return `<label class='row-meta'><input data-step-field='${esc(key)}' type='checkbox' ${step[key]?'checked':''} style='min-width:auto'> ${esc(label)}</label>`;
-}
-if(fieldType==='textarea'){
-return `<textarea class='scenario-textarea' rows='1' data-step-field='${esc(key)}' placeholder='${esc(label)}'>${esc(step[key]||'')}</textarea>`;
-}
-const inputType=fieldType==='number'?'number':'text';
-return `<input data-step-field='${esc(key)}' type='${inputType}' placeholder='${esc(label)}' value='${esc(step[key]||'')}'>`;
-}
-
-function renderScenarioSchemaPayload(step,type){
-const schema=scenarioStepSchema(type);
-const fields=schema&&Array.isArray(schema.fields)?schema.fields:[];
-if(!fields.length)return '';
-let row=[];
-const flush=()=>{
-if(!row.length)return '';
-const html=`<div class='row'>${row.join('')}</div>`;
-row=[];
-return html;
-};
-let out='';
-fields.forEach(field=>{
-const control=renderSchemaFieldControl(schema,field,step);
-if(!control)return;
-if((field.type||'')==='params_object'||(field.type||'')==='command_group'||(field.type||'')==='event_group'||(field.type||'')==='flag_list'){
-out+=flush()+control;
-}
-else if((field.type||'')==='checkbox'||(field.type||'')==='textarea'){
-out+=flush()+control;
-}
-else{
-row.push(control);
-if(row.length>=2)out+=flush();
-}
-});
-out+=flush();
-return out;
-}
-
-function renderScenarioStepPayload(step,type){
-if(type==='SET_FLAG')return renderSetFlagPayload(step);
-if(scenarioStepSchema(type))return renderScenarioSchemaPayload(step,type);
-if(type==='OPERATOR_APPROVAL')return `<div class='row'><input data-step-field='prompt' placeholder='Operator prompt' value='${esc(step.prompt||step.operator_prompt||'')}'><input data-step-field='approve_label' placeholder='Approve label' value='${esc(step.approve_label||step.operator_approve_label||'Continue')}'></div>`;
-return `<div class='row'><input data-step-field='duration_ms' type='number' min='1' step='1' placeholder='Duration sec' value='${esc(durationMsToSeconds(step.duration_ms||1000))}'><span class='row-meta'>sec</span></div>`;
 }
 
 function scenarioStepSummaryText(step){
@@ -976,7 +453,7 @@ const branches=Array.isArray(base&&base.branches)?base.branches:[];
 if(!branches.length)return '';
 const flow=branches.map((branch,index)=>({branch,index})).filter(item=>scenarioBranchTypeValue(item.branch)==='normal');
 const reactions=branches.map((branch,index)=>({branch,index})).filter(item=>scenarioBranchTypeValue(item.branch)==='reactive');
-const tab=item=>`<button class='scenario-branch-tab ${item.index===activeIndex?'active':''}' data-scenario-branch-action='select' data-branch-index='${item.index}'><span>${esc(item.branch.name||item.branch.id||`Branch ${item.index+1}`)}</span><em>${esc((Array.isArray(item.branch.steps)?item.branch.steps.length:0))}</em></button>`;
+const tab=item=>`<button class='scenario-branch-tab ${item.index===activeIndex?'active':''}' data-scenario-branch-action='select' data-branch-index='${item.index}'><span>${esc(item.branch.name||item.branch.id||`Branch ${item.index+1}`)}</span><em>${esc(scenarioIsReactiveV2Branch(item.branch)?(Array.isArray(item.branch.variants)?item.branch.variants.length:0):(Array.isArray(item.branch.steps)?item.branch.steps.length:0))}</em></button>`;
 return `<div class='scenario-branch-tabs grouped'><div class='scenario-branch-tab-group'><span class='row-meta'>Scenario flow</span>${flow.map(tab).join('')}<button class='scenario-branch-add' data-scenario-branch-action='add'>+ Branch</button></div><div class='scenario-branch-tab-group'><span class='row-meta'>Reactions</span>${reactions.map(tab).join('')}<button class='scenario-branch-add' data-scenario-branch-action='add_reactive'>+ Reaction</button></div></div>`;
 }
 
@@ -984,8 +461,9 @@ function renderScenarioBranchSettings(branch,index,total){
 if(!branch)return '';
 const branchIdKey=`scenario:branch:${scenarioEditor.room_id}:${branch.id||index}`;
 const type=scenarioBranchTypeValue(branch);
+const isV2=scenarioIsReactiveV2Branch(branch);
 const typeField=type==='normal'?`<div class='field-stack'><span>Type</span><select data-scenario-branch-field='type'><option value='normal' selected>Scenario flow</option><option value='reactive'>Reaction</option></select></div>`:`<input type='hidden' data-scenario-branch-field='type' value='reactive'>`;
-const controls=type==='normal'?`<label class='row-meta branch-toggle'><input data-scenario-branch-field='required_for_completion' type='checkbox' ${branch.required_for_completion!==false?'checked':''}> Required for finish</label>`:`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><div class='field-stack compact-field'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></div>`;
+const controls=type==='normal'?`<label class='row-meta branch-toggle'><input data-scenario-branch-field='required_for_completion' type='checkbox' ${branch.required_for_completion!==false?'checked':''}> Required for finish</label>`:(isV2?'':`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><div class='field-stack compact-field'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></div>`);
 return `<div class='scenario-branch-settings ${type==='reactive'?'reactive':''}'><div class='field-stack branch-name-field'><span>${type==='reactive'?'Reaction name':'Branch name'}</span><input data-scenario-branch-field='name' placeholder='${type==='reactive'?'Reaction name':'Branch name'}' value='${esc(branch.name||'')}'></div>${typeField}<label class='row-meta branch-toggle'><input data-scenario-branch-field='enabled' type='checkbox' ${branch.enabled!==false?'checked':''}> Enabled</label>${controls}<button class='danger scenario-branch-delete' data-scenario-branch-action='delete' data-branch-index='${index}' ${total<=1?'disabled':''}>Delete</button><details class='scenario-advanced compact-advanced' ${detailsAttrs(branchIdKey,false)}><summary>Branch id</summary><div class='row'><input data-scenario-branch-field='id' placeholder='Branch ID' value='${esc(branch.id||'')}'></div></details></div>`;
 }
 
@@ -1009,8 +487,14 @@ alert('A scenario can have up to 8 branches.');
 return;
 }
 const branchType=action==='add_reactive'?'reactive':'normal';
-draft.branches.push(defaultScenarioBranch(nextIndex,[],branchType));
-scenarioEditor.active_branch=nextIndex;
+const branchId=uniqueScenarioBranchId(draft.branches,branchType);
+const branch=defaultScenarioBranch(nextIndex,[],branchType);
+
+branch.id=branchId;
+branch.name=defaultScenarioBranchName(branchId,branchType);
+if(branchType==='reactive')ensureReactiveV2Branch(branch);
+draft.branches.push(branch);
+scenarioEditor.active_branch=draft.branches.length-1;
 scenarioEditor.expanded_step=-1;
 }
 else if(action==='delete'){
@@ -1018,6 +502,8 @@ const removeIndex=Number.isFinite(index)?index:scenarioActiveBranchIndex(draft);
 if(draft.branches.length<=1)return;
 if(!confirm('Delete this scenario branch?'))return;
 draft.branches.splice(removeIndex,1);
+scenarioEditor.branch_count_shrink_allowed=true;
+scenarioEditor.branch_count_shrink_floor=draft.branches.length;
 scenarioEditor.active_branch=Math.max(0,Math.min(removeIndex,draft.branches.length-1));
 scenarioEditor.expanded_step=-1;
 }
@@ -1047,29 +533,108 @@ return `<div class='builder-step scenario-step-row scenario-step-${visual} ${val
 return `<div class='builder-step scenario-step-row scenario-step-${visual} scenario-step-expanded ${validationClass} compact-step' data-scenario-step='${index}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${index+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(step)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge' title='${esc(fullType)}'>${esc(badge)}</span>${issueBadge}</div>${controls}</div>${renderScenarioInlineIssues(stepIssues)}<div class='scenario-step-edit'><div class='row compact-row'><input data-step-field='label' placeholder='Step label' value='${esc(step.label||'')}'><select data-step-field='type'>${scenarioTypeOptions(type)}</select><label class='row-meta enabled-inline'><input data-step-field='enabled' type='checkbox' ${step.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label></div>${renderScenarioStepPayload(step,type)}</div></div>`;
 }
 
+function collectReactiveActionFromElement(el,previous,index){
+const get=name=>{const n=el.querySelector(`[data-step-field='${name}']`);return n?n.value:'';};
+const type=get('type')||previous.type||'SET_FLAG';
+if(scenarioStepTypeValue(previous)!==scenarioStepTypeValue({type})){
+previous=newScenarioStepForType(index,type);
+}
+let label=get('label')||previous.label||'';
+const action={id:previous.id||slugifyId(label||`action_${index+1}`,'action'),label,type};
+if(type==='DEVICE_COMMAND'){
+action.device_id=get('device_id')||previous.device_id||'';
+const device=scenarioDeviceById(action.device_id);
+action.command_id=scenarioValidCommandId(device,get('command_id')||previous.command_id||'');
+const commandName=scenarioCommandName(action.device_id,action.command_id);
+if(!label||label===previous.label||label.indexOf(' - ')>=0){
+label=action.device_id==='system_audio'?commandName:`${scenarioRoomNameForDevice(device)}: ${scenarioDeviceName(device)} - ${commandName}`;
+action.label=label;
+}
+const command=scenarioCommandById(action.device_id,action.command_id);
+const params=commandSupportsScenarioParams(command)?{...(previous.params&&typeof previous.params==='object'?previous.params:{})}:{};
+el.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});
+if(Object.keys(params).length)action.params=params;
+}else if(type==='DEVICE_COMMAND_GROUP'){
+action.mode=previous.mode||'sequential';
+action.commands=[];
+el.querySelectorAll('[data-command-group-item]').forEach((item,itemIndex)=>{const deviceField=item.querySelector('[data-group-command-field="device_id"]');const commandField=item.querySelector('[data-group-command-field="command_id"]');const previousItem=Array.isArray(previous.commands)?(previous.commands[itemIndex]||{}):{};const deviceId=(deviceField?deviceField.value:'')||previousItem.device_id||'';const device=scenarioDeviceById(deviceId);const commandId=scenarioValidCommandId(device,(commandField?commandField.value:'')||previousItem.command_id||'');const command=scenarioCommandById(deviceId,commandId);const params=commandSupportsScenarioParams(command)?{...(previousItem.params&&typeof previousItem.params==='object'?previousItem.params:{})}:{};item.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});const out={device_id:deviceId,command_id:commandId};if(Object.keys(params).length)out.params=params;action.commands.push(out);});
+}else if(type==='WAIT_TIME'){
+action.duration_ms=get('duration_ms')?durationSecondsToMs(get('duration_ms')):(previous.duration_ms||1000);
+}else if(type==='SHOW_OPERATOR_MESSAGE'){
+action.message=get('message')||previous.message||'';
+}else if(type==='SET_FLAG'){
+const valueField=el.querySelector(`[data-step-field='value']`);
+action.flag_name=get('flag_name')||previous.flag_name||previous.flag||'';
+action.value=valueField?(valueField.type==='checkbox'?valueField.checked:valueField.value!=='false'):(previous.value!==false);
+}
+return action;
+}
+
+function collectReactiveV2BranchFromDom(branch,root){
+if(!branch||!root)return branch;
+ensureReactiveV2Branch(branch);
+const value=(selector,def='')=>{const nodes=Array.from(root.querySelectorAll(selector));if(!nodes.length)return def;const checked=nodes.find(n=>n.type==='radio'&&n.checked);const n=checked||nodes[0];return n?n.value:def;};
+branch.priority=Number(value('[data-v2-branch-field="priority"]',branch.priority))||0;
+branch.policy=branch.policy&&typeof branch.policy==='object'?branch.policy:{};
+branch.policy.mode=value('[data-v2-policy-field="mode"]',branch.policy.mode||'single')||'single';
+branch.policy.cooldown_ms=Number(branch.cooldown_ms)||Number(branch.policy.cooldown_ms)||0;
+branch.policy.max_fire_count=Math.max(0,Math.round(Number(value('[data-v2-policy-field="max_fire_count"]',branch.policy.max_fire_count||0))||0));
+branch.max_fire_count=branch.policy.max_fire_count;
+branch.reentry={mode:value('[data-v2-reentry-field="mode"]',branch.reentry&&branch.reentry.mode||'ignore')||'ignore'};
+branch.result_policy={
+on_done:value('[data-v2-result-field="on_done"]',branch.result_policy&&branch.result_policy.on_done||'continue')||'continue',
+on_fail:value('[data-v2-result-field="on_fail"]',branch.result_policy&&branch.result_policy.on_fail||'fail_reaction')||'fail_reaction',
+on_timeout:value('[data-v2-result-field="on_timeout"]',branch.result_policy&&branch.result_policy.on_timeout||'fail_reaction')||'fail_reaction'}
+;const resultFlag=value('[data-v2-result-field="timeout_flag"]',branch.result_policy&&branch.result_policy.timeout_flag||branch.result_policy&&branch.result_policy.flag||'');if(resultFlag){branch.result_policy.flag=resultFlag;branch.result_policy.timeout_flag=resultFlag;}
+const kind=value('[data-v2-trigger-field="kind"]',branch.trigger&&branch.trigger.kind||'device_event')||'device_event';
+branch.trigger={kind};
+if(kind==='device_event'){branch.trigger.device_id=value('[data-v2-trigger-field="device_id"]',branch.trigger.device_id||'');const device=scenarioDeviceById(branch.trigger.device_id);branch.trigger.event_id=scenarioValidEventId(device,value('[data-v2-trigger-field="event_id"]',branch.trigger.event_id||''));}
+else if(kind==='flag_changed')branch.trigger.flag_name=value('[data-v2-trigger-field="flag_name"]',branch.trigger.flag_name||'');
+else if(kind==='operator_event')branch.trigger.operator_event=value('[data-v2-trigger-field="operator_event"]',branch.trigger.operator_event||'');
+else if(kind==='runtime_event')branch.trigger.runtime_event=value('[data-v2-trigger-field="runtime_event"]',branch.trigger.runtime_event||'');
+branch.guard_flags=[];
+root.querySelectorAll('[data-v2-guard-item]').forEach(item=>{const name=(item.querySelector('[data-v2-guard-field="flag"]')||{}).value||'';const val=(item.querySelector('[data-v2-guard-field="value"]')||{}).value;if(name)branch.guard_flags.push({flag:name,value:val!=='false'});});
+const previousVariants=Array.isArray(branch.variants)?branch.variants.map(variant=>JSON.parse(JSON.stringify(variant))):[];
+branch.variants=[];
+root.querySelectorAll('[data-v2-variant]').forEach((variantEl,variantIndex)=>{const id=(variantEl.querySelector('[data-v2-variant-field="id"]')||{}).value||`variant_${variantIndex+1}`;const label=(variantEl.querySelector('[data-v2-variant-field="label"]')||{}).value||`Variant ${variantIndex+1}`;const previous=previousVariants[variantIndex]||{};const variant={id,label,actions:[]};variantEl.querySelectorAll('[data-v2-action]').forEach((actionEl,actionIndex)=>{const previousAction=Array.isArray(previous.actions)?(previous.actions[actionIndex]||{}):{};variant.actions.push(collectReactiveActionFromElement(actionEl,previousAction,actionIndex));});branch.variants.push(variant);});
+if(!branch.variants.length)branch.variants=defaultReactiveV2BranchFields().variants;
+branch.steps=[];
+if(!Array.isArray(branch.on_complete)||!branch.on_complete.length)delete branch.on_complete;
+return branch;
+}
+
 function scenarioEditorSource(){
 const roomId=scenarioEditor.room_id;
-if(scenarioEditor.draft&&scenarioEditor.draft.room_id===roomId)return JSON.parse(JSON.stringify(scenarioEditor.draft));
+let source=null;
+if(scenarioEditor.draft&&scenarioEditor.draft.room_id===roomId)source=JSON.parse(JSON.stringify(scenarioEditor.draft));
+else{
 const editing=roomScenarios(roomId).find(s=>s.id===scenarioEditor.scenario_id)||null;
-return scenarioEditableJson(editing,roomId);
+source=scenarioEditableJson(editing,roomId);
+}
+return scenarioRestoreMissingOriginalBranches(source);
 }
 
 function collectScenarioEditor(){
 const source=scenarioEditorSource();
 if(!Array.isArray(source.branches)||!source.branches.length)source.branches=normalizeScenarioBranches(source);
-const branchIndex=scenarioActiveBranchIndex(source);
+const editor=document.querySelector('[data-scenario-editor]');
+const renderedBranchIndex=Number(editor&&editor.dataset.activeBranchIndex);
+const branchIndex=Number.isFinite(renderedBranchIndex)
+  ? Math.max(0,Math.min(source.branches.length-1,Math.floor(renderedBranchIndex)))
+  : scenarioActiveBranchIndex(source);
 const branches=source.branches.map((branch,index)=>({
 ...normalizeScenarioBranch(branch,index),
 steps:Array.isArray(branch.steps)?branch.steps.map(step=>JSON.parse(JSON.stringify(step))):[]}
 ));
 const activeBranch=branches[branchIndex]||branches[0];
-const branchName=document.querySelector('[data-scenario-branch-field="name"]');
-const branchId=document.querySelector('[data-scenario-branch-field="id"]');
-const branchType=document.querySelector('[data-scenario-branch-field="type"]');
-const branchEnabled=document.querySelector('[data-scenario-branch-field="enabled"]');
-const branchRequired=document.querySelector('[data-scenario-branch-field="required_for_completion"]');
-const branchCooldown=document.querySelector('[data-scenario-branch-field="cooldown_sec"]');
-const branchRunOnce=document.querySelector('[data-scenario-branch-field="run_once"]');
+const root=editor||document;
+const branchName=root.querySelector('[data-scenario-branch-field="name"]');
+const branchId=root.querySelector('[data-scenario-branch-field="id"]');
+const branchType=root.querySelector('[data-scenario-branch-field="type"]');
+const branchEnabled=root.querySelector('[data-scenario-branch-field="enabled"]');
+const branchRequired=root.querySelector('[data-scenario-branch-field="required_for_completion"]');
+const branchCooldown=root.querySelector('[data-scenario-branch-field="cooldown_sec"]');
+const branchRunOnce=root.querySelector('[data-scenario-branch-field="run_once"]');
 const previousActiveSteps=activeBranch&&Array.isArray(activeBranch.steps)?activeBranch.steps.map(step=>JSON.parse(JSON.stringify(step))):[];
 if(activeBranch){
 activeBranch.name=(branchName&&branchName.value)||activeBranch.name||`Branch ${branchIndex+1}`;
@@ -1078,19 +643,27 @@ activeBranch.type=branchType?scenarioBranchTypeValue({type:branchType.value}):sc
 activeBranch.enabled=branchEnabled?branchEnabled.checked:activeBranch.enabled!==false;
 activeBranch.required_for_completion=activeBranch.type==='normal'&&(branchRequired?branchRequired.checked:activeBranch.required_for_completion!==false);
 activeBranch.cooldown_ms=activeBranch.type==='reactive'?Math.max(0,Math.round(Number(branchCooldown&&branchCooldown.value)||0))*1000:0;
+if(activeBranch.type==='reactive'&&activeBranch.policy&&typeof activeBranch.policy==='object')activeBranch.policy.cooldown_ms=activeBranch.cooldown_ms;
 activeBranch.run_once=activeBranch.type==='reactive'&&!!(branchRunOnce&&branchRunOnce.checked);
 activeBranch.steps=[];
+if(scenarioIsReactiveV2Branch(activeBranch)){
+collectReactiveV2BranchFromDom(activeBranch,root);
+}
 }
 const scenario={
-id:(document.getElementById('scenario_id')||{
-}
-).value||'',name:(document.getElementById('scenario_name')||{
-}
-).value||'',room_id:scenarioEditor.room_id,branches}
+id:(root.querySelector('#scenario_id')||{}).value||'',
+name:(root.querySelector('#scenario_name')||{}).value||'',
+room_id:scenarioEditor.room_id,
+branches}
 ;
 
-document.querySelectorAll('[data-scenario-step]').forEach((el,index)=>{
+const stepsPanel=root.querySelector('.scenario-steps-panel');
+if(!scenarioIsReactiveV2Branch(activeBranch))(stepsPanel?stepsPanel.querySelectorAll('[data-scenario-step]'):[]).forEach((el,index)=>{
 const previous=previousActiveSteps[index]?JSON.parse(JSON.stringify(previousActiveSteps[index])):{};
+if(!el.querySelector(`[data-step-field='type']`)&&previous.type){
+if(activeBranch)activeBranch.steps.push(previous);
+return;
+}
 const get=name=>{
 const n=el.querySelector(`[data-step-field='${name}']`);return n?n.value:'';}
 ;const enabled=el.querySelector(`[data-step-field='enabled']`);const type=get('type')||previous.type||'WAIT_TIME';const label=get('label')||previous.label||'';const step={
@@ -1101,7 +674,7 @@ else if(type==='DEVICE_COMMAND_GROUP'){
 const renderedItems=el.querySelectorAll('[data-command-group-item]');
 step.commands=[];
 if(!renderedItems.length&&Array.isArray(previous.commands))step.commands=previous.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:cmd.params&&typeof cmd.params==='object'?cmd.params:{}}));
-renderedItems.forEach((item,itemIndex)=>{const deviceField=item.querySelector('[data-group-command-field="device_id"]');const commandField=item.querySelector('[data-group-command-field="command_id"]');const previousItem=Array.isArray(previous.commands)?(previous.commands[itemIndex]||{}):{};step.commands.push({device_id:(deviceField?deviceField.value:'')||previousItem.device_id||'',command_id:(commandField?commandField.value:'')||previousItem.command_id||''});});}
+renderedItems.forEach((item,itemIndex)=>{const deviceField=item.querySelector('[data-group-command-field="device_id"]');const commandField=item.querySelector('[data-group-command-field="command_id"]');const previousItem=Array.isArray(previous.commands)?(previous.commands[itemIndex]||{}):{};const deviceId=(deviceField?deviceField.value:'')||previousItem.device_id||'';const commandId=(commandField?commandField.value:'')||previousItem.command_id||'';const command=scenarioCommandById(deviceId,commandId);const params=commandSupportsScenarioParams(command)?{...(previousItem.params&&typeof previousItem.params==='object'?previousItem.params:{})}:{};item.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});if(deviceId==='system_audio'&&commandId==='play'&&params.channel!=='background')params.repeat=false;const out={device_id:deviceId,command_id:commandId};if(Object.keys(params).length)out.params=params;step.commands.push(out);});}
 else if(type==='WAIT_DEVICE_EVENT'){
 step.device_id=get('device_id')||previous.device_id||'';step.event_id=get('event_id')||previous.event_id||'';
 const timeout=get('timeout_ms');step.timeout_ms=timeout!==''?durationSecondsToMs(timeout):0;
@@ -1254,6 +827,60 @@ skipNextScenarioDomSync();
 render();
 }
 
+function applyReactiveV2Action(action,variantIndex,actionIndex,actionType){
+const draft=collectScenarioEditor();
+const branch=scenarioActiveBranch(draft);
+if(!scenarioIsReactiveV2Branch(branch))return;
+ensureReactiveV2Branch(branch);
+variantIndex=Number.isFinite(Number(variantIndex))?Number(variantIndex):0;
+actionIndex=Number.isFinite(Number(actionIndex))?Number(actionIndex):0;
+if(action==='add_guard'){
+branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+branch.guard_flags.push({flag:'puzzle_done',value:true});
+}else if(action==='delete_guard'){
+branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+branch.guard_flags.splice(actionIndex,1);
+}else if(action==='add_variant'){
+branch.variants=Array.isArray(branch.variants)?branch.variants:[];
+const n=branch.variants.length+1;
+const mode=String(branch.policy&&branch.policy.mode||'single');
+branch.variants.push({id:`variant_${n}`,label:mode==='escalate'?`Level ${n}`:`Variant ${n}`,actions:[]});
+}else if(action==='delete_variant'){
+branch.variants=Array.isArray(branch.variants)?branch.variants:[];
+if(branch.variants.length>1)branch.variants.splice(variantIndex,1);
+}else if(action==='add_action'){
+const variant=branch.variants[variantIndex];
+if(variant){
+variant.actions=Array.isArray(variant.actions)?variant.actions:[];
+variant.actions.push(newScenarioStepForType(variant.actions.length,actionType||'DEVICE_COMMAND'));
+}
+}else if(action==='delete_action'){
+const variant=branch.variants[variantIndex];
+if(variant){
+variant.actions=Array.isArray(variant.actions)?variant.actions:[];
+variant.actions.splice(actionIndex,1);
+}
+}else if(action==='group_add'||action==='group_delete'){
+const variant=branch.variants[variantIndex];
+const item=variant&&Array.isArray(variant.actions)?variant.actions[actionIndex]:null;
+if(item&&scenarioStepTypeValue(item)==='DEVICE_COMMAND_GROUP'){
+item.commands=Array.isArray(item.commands)?item.commands:[];
+if(action==='group_add'){
+item.commands.push(defaultScenarioCommandItem());
+}else{
+const commandIndex=Number.isFinite(Number(actionType))?Number(actionType):0;
+item.commands.splice(commandIndex,1);
+if(!item.commands.length)item.commands.push(defaultScenarioCommandItem());
+}
+}
+}
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
+skipNextScenarioDomSync();
+render();
+}
+
 function renderScenariosAdminView(){
 setPage('Scenarios','Room scenario editor');
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
@@ -1265,7 +892,10 @@ const roomId=scenarioEditor.room_id;
 const scenarios=roomScenarios(roomId);
 const editing=scenarios.find(s=>s.id===scenarioEditor.scenario_id)||null;
 const editorOpen=!!(scenarioEditor.open||editing||scenarioEditor.dirty);
-const base=(scenarioEditor.draft&&scenarioEditor.draft.room_id===roomId)?scenarioEditor.draft:scenarioEditableJson(editing,roomId);
+if(editing&&!scenarioEditor.original_scenario){
+scenarioEditor.original_scenario=scenarioEditableJson(editing,roomId);
+}
+const base=editorOpen?scenarioEditorSource():scenarioEditableJson(editing,roomId);
 if(!Array.isArray(base.branches)||!base.branches.length)base.branches=normalizeScenarioBranches(base);
 const activeBranchIndex=scenarioActiveBranchIndex(base);
 scenarioEditor.active_branch=activeBranchIndex;
@@ -1283,7 +913,11 @@ const rows=scenarios.length?scenarios.map(s=>`<div class='row-card'><div class='
 const scenarioIdKey=`scenario:id:${roomId}:${base.id||'new'}`;
 const jsonKey=`scenario:json:${roomId}:${base.id||'new'}`;
 const emptyStepsText=scenarioBranchTypeValue(activeBranch)==='reactive'?'Add a trigger first. This reaction will listen for it, then run the actions you add after it.':'No steps yet';
-const editorHtml=editorOpen?`<div class='card scenario-editor-card'><div class='scenario-editor-head'><div><h2 class='section-title'>${editing?'Edit scenario':'New scenario'}${scenarioEditor.dirty?' *':''}</h2><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'><button data-scenario-validate='1'>Validate</button><button data-scenario-save='1'>Save</button></div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(scenarioIdKey,false)}><summary>Scenario id</summary><div class='row'><input id='scenario_id' placeholder='Scenario ID' value='${esc(base.id||'')}'></div></details>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout'><aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside><section class='scenario-steps-panel'><h2 class='section-title'>Steps: ${esc(activeBranch&&activeBranch.name||'Branch')}</h2><div>${activeSteps.length?activeSteps.map((step,i)=>renderScenarioStepEditor(step,i,activeSteps.length,Number(scenarioEditor.expanded_step)===i,issuesByStep[i]||[])).join(''):`<div class='empty'>${esc(emptyStepsText)}</div>`}</div></section></div><details style='margin-top:10px' ${detailsAttrs(jsonKey,false)}><summary class='row-meta'>Debug JSON</summary><textarea id='scenario_json' class='builder-json' readonly>${esc(json)}</textarea></details></div>`:`<div class='card empty'><h2 class='section-title'>Scenario editor</h2><div class='row-meta'>Select a scenario or create a new one.</div></div>`;
+const activeBranchIsV2=scenarioIsReactiveV2Branch(activeBranch);
+const branchEditorBody=activeBranchIsV2
+?renderReactiveV2Editor(activeBranch)
+:`<section class='scenario-steps-panel'><h2 class='section-title'>Steps: ${esc(activeBranch&&activeBranch.name||'Branch')}</h2><div>${activeSteps.length?activeSteps.map((step,i)=>renderScenarioStepEditor(step,i,activeSteps.length,Number(scenarioEditor.expanded_step)===i,issuesByStep[i]||[])).join(''):`<div class='empty'>${esc(emptyStepsText)}</div>`}</div></section>`;
+const editorHtml=editorOpen?`<div class='card scenario-editor-card' data-scenario-editor='1' data-active-branch-index='${activeBranchIndex}'><div class='scenario-editor-head'><div><h2 class='section-title'>${editing?'Edit scenario':'New scenario'}${scenarioEditor.dirty?' *':''}</h2><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'><button data-scenario-validate='1'>Validate</button><button data-scenario-save='1'>Save</button></div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(scenarioIdKey,false)}><summary>Scenario id</summary><div class='row'><input id='scenario_id' placeholder='Scenario ID' value='${esc(base.id||'')}'></div></details>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout ${activeBranchIsV2?'scenario-editor-layout-v2':''}'>${activeBranchIsV2?'':`<aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside>`}${branchEditorBody}</div><details style='margin-top:10px' ${detailsAttrs(jsonKey,false)}><summary class='row-meta'>Debug JSON</summary><textarea id='scenario_json' class='builder-json' readonly>${esc(json)}</textarea></details></div>`:`<div class='card empty'><h2 class='section-title'>Scenario editor</h2><div class='row-meta'>Select a scenario or create a new one.</div></div>`;
 return `<div class='scenario-room-bar'><div><span class='row-meta'>Room</span><select class='scenario-select' data-scenario-room-select>${rooms.map(r=>`<option value='${esc(r.room_id)}' ${
 r.room_id===roomId?'selected':''}
 >${

@@ -302,6 +302,21 @@ Reactive branch UI target:
   `disabled`;
 - do not mix reactive branches into the main completion/progress row.
 
+Reactive Branch v2 editor status:
+
+- New reactive branches created by the structured builder use the Reactive
+  Branch v2 model.
+- The old first-step-as-trigger reactive branch model is not a product target
+  for new scenarios.
+- The backend runtime and JSON contract already support Reactive Branch v2
+  fields: `trigger`, `guard_flags`, `policy`, `reentry`, `variants`,
+  `result_policy` and `on_complete`.
+- The dedicated v2 editor exposes branch-level controls for trigger, guards,
+  policy, reentry, result policy and variants/actions instead of using the
+  legacy first-step-as-trigger model.
+- The builder must continue preserving v2 fields when loading/saving a
+  scenario so existing v2 JSON is not downgraded or destroyed by an edit.
+
 ## Profiles
 
 Admin-only.
@@ -346,8 +361,8 @@ Universal quest device workflow:
 1. Create or edit a Quest Device.
 2. Select the physical smart client.
 3. Press `Get config`.
-4. Quest Orchestrator sends `describe_interface` to the physical client.
-5. If a valid `quest_interface` is returned, admin confirms import.
+4. SceneHub sends `describe_interface` to the physical client.
+5. If a valid `device_description` is returned, admin confirms import.
 6. Imported `commands[]` become manual buttons and `DEVICE_COMMAND` options.
 7. Imported `events[]` become `WAIT_DEVICE_EVENT` options.
 

@@ -1,11 +1,12 @@
 # Architecture
 
-`Quest Orchestrator` is an ESP32-S3 quest orchestration hub. It provides the operator
-panel, room runtime, device monitoring, scenario execution, game modes, audio
-control and persistent JSON configuration.
+SceneHub is an ESP32-S3 local orchestration hub for quest rooms, interactive
+exhibits and show-control installations. It provides the operator panel, room
+runtime, device monitoring, scenario execution, game modes, audio control and
+persistent JSON configuration.
 
 `mqtt_core` is only the local MQTT broker module. Product-facing docs and UI
-should use `Quest Orchestrator` / `GM Panel` for the whole system.
+should use `SceneHub` / `GM Panel` for the whole system.
 
 ## Product Model
 
@@ -53,6 +54,7 @@ device state comes from `quest_device` and `device_control_ingest`.
 | `quest_device` | File-backed Quest Device store and command/event capability model |
 | `device_control_ingest` | Control-contract telemetry ingest for observed physical clients |
 | `room_scenario` | Scenario model, validation, JSON import/export |
+| `command_executor` | Command dispatch boundary for MQTT devices, system audio and future hardware IO |
 | `gm_game_profile` | Game Mode model, validation, JSON import/export |
 | `gm_core` | Room session runtime, timer, game start/stop/reset, scenario execution |
 | `orchestrator_core` | GM read model, health aggregation, audit and timeline |
@@ -75,7 +77,7 @@ Game start:
 
 Scenario execution:
 
-- `DEVICE_COMMAND` sends one saved Quest Device command.
+- `DEVICE_COMMAND` sends one saved Quest Device command through `command_executor`.
 - `DEVICE_COMMAND_GROUP` sends several saved commands in order.
 - `WAIT_TIME` resumes from the tick handler.
 - `WAIT_DEVICE_EVENT`, `WAIT_ANY_DEVICE_EVENT` and `WAIT_ALL_DEVICE_EVENTS`
@@ -124,23 +126,55 @@ Branch JSON is edited as:
       "name": "Wrong card reaction",
       "type": "reactive",
       "enabled": true,
-      "cooldown_ms": 3000,
-      "run_once": false,
-      "steps": []
+      "trigger": {
+        "kind": "device_event",
+        "device_id": "uid_gate",
+        "event_id": "sequence_invalid"
+      },
+      "guard_flags": [],
+      "policy": {
+        "mode": "escalate",
+        "cooldown_ms": 3000,
+        "max_fire_count": 0
+      },
+      "reentry": {
+        "mode": "ignore"
+      },
+      "variants": [
+        {
+          "id": "level_1",
+          "label": "Level 1",
+          "actions": []
+        }
+      ],
+      "result_policy": {
+        "on_done": "continue",
+        "on_fail": "fail_reaction",
+        "on_timeout": "fail_reaction"
+      }
     }
   ]
 }
 ```
 
-Internally the C model stores one flat step array plus branch ranges to avoid
-duplicating step memory.
+Internally the C model stores normal steps and Reactive Branch v2 action
+variants in bounded arrays to keep runtime snapshots predictable on ESP32-S3.
 
-Reactive branches are not a second scenario engine. They are one-trigger
-reaction loops inside the same scenario snapshot. A reactive branch waits for
-one trigger/listen step, runs a short action chain, then returns to listening.
-Use several reactive branches for several different triggers. Reactive branches
-do not participate in `required_for_completion`, do not block the main flow and
-do not finish the game.
+Reactive branches are not a second scenario engine. Reactive Branch v2 uses:
+
+```text
+trigger -> guard_flags -> policy -> selected variant -> actions -> result_policy
+```
+
+A reaction listens for a trigger, checks guards, selects a variant with
+`single`, `rotate`, `random` or `escalate`, runs sequential actions, then
+returns to listening or cooldown. Use several reactive branches for several
+different triggers. Reactive branches do not participate in
+`required_for_completion`, do not block the main flow and do not finish the game.
+
+Result-required reaction commands use `command_executor`. `accepted` keeps the
+action pending; terminal `done` advances the action; `failed`, `rejected` and
+`timeout` follow the branch result policy.
 
 Reactive branches use the same game-run flag store as normal branches. This is
 intentional: a reaction may execute `SET_FLAG secret_path_unlocked=true`, and a
@@ -191,6 +225,11 @@ events, manual buttons and optional interface discovery import.
 `gm_core` has a dedicated FreeRTOS queue that stores `event_bus_message_t`
 values directly. The GM session event handler does not allocate/free heap memory
 per event.
+
+Command side effects are separated from scenario state progression by
+`command_executor`. Runtime decides that a command should run; the executor
+resolves the backend, creates request ids, tracks pending result-required
+commands and emits normalized command-result events.
 
 ## Device Health
 

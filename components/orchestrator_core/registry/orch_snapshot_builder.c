@@ -33,6 +33,7 @@ esp_err_t orch_snapshot_builder_build_uncached(orch_registry_snapshot_t *out)
 {
     quest_device_t *devices = NULL;
     size_t count = 0;
+    size_t capacity = 0;
     esp_err_t err = ESP_OK;
 
     if (!out) {
@@ -48,17 +49,33 @@ esp_err_t orch_snapshot_builder_build_uncached(orch_registry_snapshot_t *out)
                       (room_scenario_generation() << 2) ^
                       (gm_game_profile_generation() << 3);
 
-    devices = orch_snapshot_alloc(sizeof(*devices) * ORCH_REGISTRY_MAX_DEVICES);
+    err = quest_device_list(NULL, 0, &count, false);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
+        return err;
+    }
+    capacity = count;
+    if (capacity > ORCH_REGISTRY_MAX_DEVICES) {
+        capacity = ORCH_REGISTRY_MAX_DEVICES;
+    }
+    if (capacity == 0) {
+        orch_room_view_collect_rooms(out);
+        orch_room_view_enrich_from_sessions(out);
+        orch_room_scenario_view_collect_all(out);
+        orch_issue_builder_collect_system(out);
+        orch_issue_builder_collect_rooms(out);
+        return ESP_OK;
+    }
+    devices = orch_snapshot_alloc(sizeof(*devices) * capacity);
     if (!devices) {
         return ESP_ERR_NO_MEM;
     }
-    err = quest_device_list(devices, ORCH_REGISTRY_MAX_DEVICES, &count, false);
+    err = quest_device_list(devices, capacity, &count, false);
     if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
         heap_caps_free(devices);
         return err;
     }
-    if (count > ORCH_REGISTRY_MAX_DEVICES) {
-        count = ORCH_REGISTRY_MAX_DEVICES;
+    if (count > capacity) {
+        count = capacity;
     }
     out->device_count = (uint8_t)count;
     for (uint8_t i = 0; i < out->device_count; ++i) {

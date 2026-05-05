@@ -2,12 +2,13 @@
 
 #include <string.h>
 
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 #include "event_bus.h"
 
-static orch_registry_snapshot_t *s_cached_snapshot = NULL;
+EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_cached_snapshot;
 static SemaphoreHandle_t s_cache_mutex = NULL;
 static portMUX_TYPE s_cache_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE s_cache_invalidate_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -148,25 +149,18 @@ static esp_err_t orch_cache_ensure_snapshot_locked(void)
         }
     }
 
-    if (!s_cached_snapshot) {
-        s_cached_snapshot = orch_snapshot_alloc(sizeof(*s_cached_snapshot));
-        if (!s_cached_snapshot) {
-            return ESP_ERR_NO_MEM;
-        }
-    }
-
-    err = orch_snapshot_builder_build_uncached(s_cached_snapshot);
+    err = orch_snapshot_builder_build_uncached(&s_cached_snapshot);
     if (err != ESP_OK) {
         s_cache_valid = false;
         return err;
     }
-    s_cache_source_generation = s_cached_snapshot->generation;
+    s_cache_source_generation = s_cached_snapshot.generation;
     s_cache_ingest_generation = ingest_generation;
     s_cache_gm_generation = gm_generation;
     s_cache_built_at_ms = orch_now_ms();
     s_cache_version++;
-    s_cached_snapshot->cache_version = s_cache_version;
-    s_cached_snapshot->snapshot_built_at_ms = s_cache_built_at_ms;
+    s_cached_snapshot.cache_version = s_cache_version;
+    s_cached_snapshot.snapshot_built_at_ms = s_cache_built_at_ms;
     s_cache_valid = true;
     return ESP_OK;
 }
@@ -183,7 +177,7 @@ esp_err_t orchestrator_registry_build_snapshot(orch_registry_snapshot_t *out)
     }
     err = orch_cache_ensure_snapshot_locked();
     if (err == ESP_OK) {
-        *out = *s_cached_snapshot;
+        *out = s_cached_snapshot;
     }
     orch_cache_unlock();
     return err;
@@ -212,7 +206,7 @@ esp_err_t orchestrator_registry_get_device(const char *device_id, orch_device_en
     }
     err = orch_cache_ensure_snapshot_locked();
     if (err == ESP_OK) {
-        err = orch_device_view_get_device(s_cached_snapshot, device_id, out);
+        err = orch_device_view_get_device(&s_cached_snapshot, device_id, out);
     }
     orch_cache_unlock();
     return err;
@@ -234,7 +228,7 @@ esp_err_t orchestrator_registry_list_room_scenarios(const char *room_id,
     }
     err = orch_cache_ensure_snapshot_locked();
     if (err == ESP_OK) {
-        err = orch_room_scenario_view_list(s_cached_snapshot,
+        err = orch_room_scenario_view_list(&s_cached_snapshot,
                                            room_id,
                                            out_scenarios,
                                            max_scenarios,

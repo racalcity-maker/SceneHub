@@ -16,15 +16,23 @@ const get=k=>row.querySelector(`[data-quest-command-field="${k}"]`);
 const label=(get('label')&&get('label').value||'').trim();
 const rawCmdId=(get('id')&&get('id').value||'').trim();
 const cmdId=rawCmdId||slugifyId(label,'command');
-const topic=(get('topic')&&get('topic').value||'').trim();
-const payload=(get('payload')&&get('payload').value||'');
-const kind=(get('kind')&&get('kind').value||'mqtt_publish').trim()||'mqtt_publish';
-const buttonEnabled=!!(get('button_enabled')&&get('button_enabled').checked);
-const dangerous=!!(get('dangerous')&&get('dangerous').checked);
+const command=(get('command')&&get('command').value||'').trim();
+const capability=(get('capability')&&get('capability').value||'').trim()||(command.split('.')[0]||'');
+const defaultArgsText=(get('default_args')&&get('default_args').value||'').trim();
+const defaultArgs=defaultArgsText?JSON.parse(defaultArgsText):undefined;
+const timeoutMs=Math.max(1,Number(get('timeout_ms')&&get('timeout_ms').value||3000)||3000);
+const manualAllowed=!!(get('manual_allowed')&&get('manual_allowed').checked);
+const scenarioAllowed=!!(get('scenario_allowed')&&get('scenario_allowed').checked);
+const requiresConfirmation=!!(get('requires_confirmation')&&get('requires_confirmation').checked);
+const resultRequired=!!(get('result_required')&&get('result_required').checked);
+const dangerLevel=(get('danger_level')&&get('danger_level').value||'normal').trim()||'normal';
 const existing=baseCommands.find(c=>(c.id||'')===(rawCmdId||cmdId))||baseCommands[Number(row.dataset.questCommand)]||{};
-const paramsSchema=Array.isArray(existing.params_schema)?existing.params_schema:[];
-if(label||rawCmdId||topic||payload){
-commands.push({id:cmdId,label:label||cmdId,kind,topic,payload,button_enabled:buttonEnabled,dangerous,params_schema:paramsSchema});
+const argsSchema=Array.isArray(existing.args_schema)?existing.args_schema:[];
+if(label||rawCmdId||command){
+const policy={manual_allowed:manualAllowed,scenario_allowed:scenarioAllowed,requires_confirmation:requiresConfirmation,result_required:resultRequired,timeout_ms:timeoutMs,danger_level:dangerLevel};
+const cmd={id:cmdId,label:label||cmdId,capability,command,policy,args_schema:argsSchema};
+if(defaultArgs)cmd.default_args=defaultArgs;
+commands.push(cmd);
 }
 });
 const events=[];
@@ -33,11 +41,14 @@ const get=k=>row.querySelector(`[data-quest-event-field="${k}"]`);
 const label=(get('label')&&get('label').value||'').trim();
 const rawEventId=(get('id')&&get('id').value||'').trim();
 const eventId=rawEventId||slugifyId(label,'event');
-const topic=(get('topic')&&get('topic').value||'').trim();
-const payload=(get('payload')&&get('payload').value||'');
-const eventType=(get('event_type')&&get('event_type').value||eventId).trim()||eventId;
-if(label||rawEventId||topic||payload){
-events.push({id:eventId,label:label||eventId,topic,payload,event_type:eventType});
+const eventName=(get('event')&&get('event').value||'').trim();
+const capability=(get('capability')&&get('capability').value||'').trim()||(eventName.split('.')[0]||'');
+const matchText=(get('match')&&get('match').value||'').trim();
+const match=matchText?JSON.parse(matchText):undefined;
+if(label||rawEventId||eventName){
+const event={id:eventId,label:label||eventId,capability,event:eventName};
+if(match)event.match=match;
+events.push(event);
 }
 });
 if(strict&&(!name||!clientId))throw new Error('Fill device name and physical client ID');
@@ -57,27 +68,36 @@ return {key,label,type,optional:!!(item&&item.optional)};
 function normalizeDiscoveredCommand(item,index){
 const label=String(item&&item.label||item&&item.name||item&&item.id||`Command ${index+1}`).trim();
 const id=String(item&&item.id||slugifyId(label,'command')).trim();
+const command=String(item&&item.command||'').trim();
+const policy=item&&item.policy&&typeof item.policy==='object'?item.policy:{};
 return {
 id,
 label:label||id,
-kind:String(item&&item.kind||'mqtt_publish').trim()||'mqtt_publish',
-topic:String(item&&item.topic||'').trim(),
-payload:String(item&&item.payload||''),
-button_enabled:item&&item.button_enabled===false?false:true,
-dangerous:!!(item&&item.dangerous),
-params_schema:normalizeQuestParamSchema(item&&item.params_schema)
+capability:String(item&&item.capability||command.split('.')[0]||'').trim(),
+command,
+default_args:item&&item.default_args&&typeof item.default_args==='object'?item.default_args:undefined,
+policy:{
+manual_allowed:policy.manual_allowed===false?false:true,
+scenario_allowed:policy.scenario_allowed===false?false:true,
+requires_confirmation:!!policy.requires_confirmation,
+result_required:policy.result_required===false?false:true,
+timeout_ms:Number(policy.timeout_ms)||3000,
+danger_level:String(policy.danger_level||'normal')
+},
+args_schema:normalizeQuestParamSchema(item&&item.args_schema)
 };
 }
 
 function normalizeDiscoveredEvent(item,index){
 const label=String(item&&item.label||item&&item.name||item&&item.id||`Event ${index+1}`).trim();
 const id=String(item&&item.id||slugifyId(label,'event')).trim();
+const eventName=String(item&&item.event||'').trim()||id;
 return {
 id,
 label:label||id,
-topic:String(item&&item.topic||'').trim(),
-payload:String(item&&item.payload||''),
-event_type:String(item&&item.event_type||id).trim()||id
+capability:String(item&&item.capability||eventName.split('.')[0]||'').trim(),
+event:eventName,
+match:item&&item.match&&typeof item.match==='object'?item.match:undefined
 };
 }
 
@@ -85,8 +105,8 @@ function questDeviceFromDiscoveredInterface(clientId,iface){
 const base=collectQuestDeviceEditor(false);
 const name=(base.name||iface&&iface.name||iface&&iface.label||clientId||'Quest device').trim();
 const id=(base.id||questDeviceEditor.device_id||slugifyId(name,'device')).trim();
-const commands=(Array.isArray(iface&&iface.commands)?iface.commands:[]).map(normalizeDiscoveredCommand).filter(c=>c.id);
-const events=(Array.isArray(iface&&iface.events)?iface.events:[]).map(normalizeDiscoveredEvent).filter(ev=>ev.id);
+const commands=(Array.isArray(iface&&iface.commands)?iface.commands:[]).map(normalizeDiscoveredCommand).filter(c=>c.id&&c.command);
+const events=(Array.isArray(iface&&iface.events)?iface.events:[]).map(normalizeDiscoveredEvent).filter(ev=>ev.id&&ev.event);
 return {
 id,
 client_id:clientId,
@@ -112,11 +132,11 @@ if(!res.ok){
 const msg=body&&(body.message||body.error||body.code);
 throw new Error(msg||('HTTP '+res.status));
 }
-const iface=body&&body.quest_interface;
-if(!iface||typeof iface!=='object')throw new Error('Device returned no quest_interface');
+const iface=body&&body.device_description;
+if(!iface||typeof iface!=='object')throw new Error('Device returned no device_description');
 const device=questDeviceFromDiscoveredInterface(clientId,iface);
 questDeviceEditor.draft=current;
-questDeviceEditor.discovery={client_id:clientId,quest_interface:iface,device};
+questDeviceEditor.discovery={client_id:clientId,device_description:iface,device};
 setGMStatus('Config received','gm-ok');
 render();
 }
@@ -144,7 +164,7 @@ questDeviceEditor.draft=collectQuestDeviceEditor(false);
 function addQuestDeviceCommand(){
 setQuestDeviceDraftFromEditor();
 questDeviceEditor.draft.commands=Array.isArray(questDeviceEditor.draft.commands)?questDeviceEditor.draft.commands:[];
-questDeviceEditor.draft.commands.push({id:'',label:'',kind:'mqtt_publish',topic:'',payload:'',button_enabled:true,dangerous:false,params_schema:[]});
+questDeviceEditor.draft.commands.push({id:'',label:'',capability:'',command:'',policy:{manual_allowed:true,scenario_allowed:true,requires_confirmation:false,result_required:true,timeout_ms:3000,danger_level:'normal'},args_schema:[]});
 markQuestDeviceDirty();
 render();
 }
@@ -152,7 +172,7 @@ render();
 function addQuestDeviceEvent(){
 setQuestDeviceDraftFromEditor();
 questDeviceEditor.draft.events=Array.isArray(questDeviceEditor.draft.events)?questDeviceEditor.draft.events:[];
-questDeviceEditor.draft.events.push({id:'',label:'',topic:'',payload:'',event_type:''});
+questDeviceEditor.draft.events.push({id:'',label:'',capability:'',event:''});
 markQuestDeviceDirty();
 render();
 }
@@ -284,6 +304,12 @@ throw new Error('Scenario JSON is invalid');
 if(scenario&&!scenario.id&&scenario.name)scenario.id=slugifyId(scenario.name,'scenario');
 if(!scenario||!scenario.name)throw new Error('Scenario name is required');
 scenario.room_id=scenarioEditor.room_id;
+const existing=roomScenarios(scenario.room_id).find(item=>(item.id||'')===(scenario.id||''))||null;
+if(existing&&Array.isArray(existing.branches)&&Array.isArray(scenario.branches)&&
+existing.branches.length>scenario.branches.length&&
+(!scenarioEditor.branch_count_shrink_allowed||(Number(scenarioEditor.branch_count_shrink_floor)||0)>scenario.branches.length)){
+throw new Error(`Refusing to save incomplete scenario: editor has ${scenario.branches.length} branches, saved scenario has ${existing.branches.length}. Refresh and try again; use Delete on a branch when you really want to remove it.`);
+}
 if(!Array.isArray(scenario.branches)||!scenario.branches.length){
 if(!Array.isArray(scenario.steps))scenario.steps=[];
 }
@@ -464,7 +490,7 @@ throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 currentRoomScenarioId[roomId]=scenarioId;
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Scenario selected','gm-ok');
 }
 
@@ -481,6 +507,6 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Scenario updated','gm-ok');
 }

@@ -38,6 +38,7 @@ esp_err_t gm_room_scenario_editor_catalog_handler(httpd_req_t *req);
 esp_err_t gm_room_scenario_validate_handler(httpd_req_t *req);
 esp_err_t gm_room_scenario_save_handler(httpd_req_t *req);
 esp_err_t gm_room_scenario_delete_handler(httpd_req_t *req);
+esp_err_t gm_room_runtime_state_handler(httpd_req_t *req);
 esp_err_t gm_room_scenario_start_handler(httpd_req_t *req);
 esp_err_t gm_room_scenario_stop_handler(httpd_req_t *req);
 esp_err_t gm_room_scenario_next_handler(httpd_req_t *req);

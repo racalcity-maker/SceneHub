@@ -3,7 +3,6 @@
 
 #include <string.h>
 
-#include "audio_player.h"
 #include "esp_heap_caps.h"
 #include "gm_game_profile.h"
 #include "quest_common_utils.h"
@@ -303,7 +302,7 @@ esp_err_t gm_room_session_game_reset(const char *room_id, uint64_t now_ms)
         }
         duration_ms = session->timer.duration_ms;
         heap_caps_free(session);
-        audio_player_stop();
+        gm_room_session_stop_audio();
         return gm_room_session_reset(room_id, duration_ms, now_ms);
     }
     duration_ms = session->timer.duration_ms;
@@ -312,6 +311,6 @@ esp_err_t gm_room_session_game_reset(const char *room_id, uint64_t now_ms)
     if (err != ESP_OK) {
         return err;
     }
-    audio_player_stop();
+    gm_room_session_stop_audio();
     return gm_room_session_reset(room_id, duration_ms, now_ms);
 }

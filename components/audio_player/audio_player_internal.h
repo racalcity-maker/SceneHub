@@ -88,6 +88,8 @@ esp_err_t audio_player_mixer_start(void);
 void audio_player_mixer_start_stream(audio_mixer_channel_t channel);
 void audio_player_mixer_finish_stream(audio_mixer_channel_t channel);
 void audio_player_mixer_stop_stream(audio_mixer_channel_t channel);
+void audio_player_mixer_fade_out_stream(audio_mixer_channel_t channel, int duration_ms);
+bool audio_player_mixer_fade_out_active(audio_mixer_channel_t channel);
 void audio_player_mixer_stop_all(void);
 bool audio_player_mixer_stream_active(audio_mixer_channel_t channel);
 size_t audio_player_mixer_write(audio_mixer_channel_t channel, const void *data, size_t len);

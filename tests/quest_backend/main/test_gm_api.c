@@ -194,8 +194,14 @@ static void test_gm_api_device_command_run_validates_device_command(void)
     device.command_count = 1;
     api_copy(device.commands[0].id, sizeof(device.commands[0].id), "open");
     api_copy(device.commands[0].label, sizeof(device.commands[0].label), "Open");
-    api_copy(device.commands[0].topic, sizeof(device.commands[0].topic), "quest/relay/cmd");
-    api_copy(device.commands[0].payload, sizeof(device.commands[0].payload), "open");
+    api_copy(device.commands[0].capability, sizeof(device.commands[0].capability), "relay");
+    api_copy(device.commands[0].command, sizeof(device.commands[0].command), "relay.pulse");
+    device.commands[0].manual_allowed = true;
+    device.commands[0].scenario_allowed = true;
+    device.commands[0].requires_confirmation = false;
+    device.commands[0].result_required = true;
+    device.commands[0].timeout_ms = QUEST_DEVICE_COMMAND_TIMEOUT_DEFAULT_MS;
+    api_copy(device.commands[0].danger_level, sizeof(device.commands[0].danger_level), "normal");
     TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&device));
 
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, gm_api_device_command_run(NULL, "open", NULL));

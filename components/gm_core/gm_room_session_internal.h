@@ -16,11 +16,21 @@
 extern gm_room_session_t g_gm_room_sessions[GM_SESSION_MAX_ROOMS];
 extern QueueHandle_t s_event_queue;
 
+typedef struct {
+    bool result_required;
+    uint32_t timeout_ms;
+    char request_id[48];
+    char source_id[ROOM_SCENARIO_EVENT_SOURCE_ID_MAX_LEN];
+    char command[48];
+} gm_room_session_command_dispatch_t;
+
 void *gm_room_session_heap_alloc(size_t size);
 esp_err_t gm_room_session_execute_quest_device_command_internal(
     const room_scenario_device_command_t *step_command,
     char *error,
-    size_t error_size);
+    size_t error_size,
+    gm_room_session_command_dispatch_t *out_dispatch);
+void gm_room_session_stop_audio(void);
 
 gm_room_session_t *alloc_session_locked(const char *room_id);
 gm_room_session_t *find_session_mutable_locked(const char *room_id);
@@ -56,10 +66,49 @@ void gm_room_session_scenario_branch_save_from_session(
 void gm_room_session_scenario_update_summary_from_branches_locked(gm_room_session_t *session);
 uint64_t gm_room_session_now_ms(void);
 uint32_t gm_room_session_scenario_now_ms(void);
+void scenario_branch_clear_wait_fields(gm_room_scenario_branch_runtime_t *branch);
+esp_err_t scenario_enter_wait_device_event_locked(gm_room_session_t *session,
+                                                  const room_scenario_wait_device_event_t *wait,
+                                                  uint32_t now_ms);
+esp_err_t scenario_enter_wait_any_device_event_locked(
+    gm_room_session_t *session,
+    const room_scenario_wait_any_device_event_t *wait_any,
+    uint32_t now_ms);
+esp_err_t scenario_enter_wait_all_device_events_locked(
+    gm_room_session_t *session,
+    const room_scenario_wait_all_device_events_t *wait_all,
+    uint32_t now_ms);
+esp_err_t scenario_enter_wait_flags_locked(gm_room_session_t *session,
+                                           const room_scenario_wait_flags_t *wait_flags,
+                                           uint32_t now_ms);
+void scenario_enter_wait_command_result_locked(
+    gm_room_session_t *session,
+    const gm_room_session_command_dispatch_t *dispatch,
+    uint32_t now_ms);
 esp_err_t gm_room_session_execute_branch_locked(gm_room_session_t *session,
                                                 gm_room_scenario_branch_runtime_t *branch,
                                                 uint32_t now_ms,
                                                 uint8_t budget);
+bool gm_room_session_branch_is_reactive_v2(const gm_room_session_t *session,
+                                           const gm_room_scenario_branch_runtime_t *branch);
+bool gm_room_session_reactive_v2_matches_event(const gm_room_session_t *session,
+                                               const gm_room_scenario_branch_runtime_t *branch,
+                                               const event_bus_message_t *message);
+esp_err_t gm_room_session_reactive_v2_fire_locked(gm_room_session_t *session,
+                                                  gm_room_scenario_branch_runtime_t *branch,
+                                                  uint32_t now_ms);
+esp_err_t gm_room_session_reactive_v2_continue_locked(gm_room_session_t *session,
+                                                      gm_room_scenario_branch_runtime_t *branch,
+                                                      uint32_t now_ms);
+esp_err_t gm_room_session_reactive_v2_handle_result_success_locked(
+    gm_room_session_t *session,
+    gm_room_scenario_branch_runtime_t *branch,
+    uint32_t now_ms);
+esp_err_t gm_room_session_reactive_v2_handle_result_failure_locked(
+    gm_room_session_t *session,
+    gm_room_scenario_branch_runtime_t *branch,
+    const char *status,
+    uint32_t now_ms);
 
 void gm_room_session_event_handler(const event_bus_message_t *message);
 void gm_room_session_event_task(void *ctx);

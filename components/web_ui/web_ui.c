@@ -178,6 +178,7 @@ static esp_err_t register_httpd_routes(void)
         {.uri = "/api/gm/room/scenario/validate", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_room_scenario_validate_handler},
         {.uri = "/api/gm/room/scenario/save", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_room_scenario_save_handler},
         {.uri = "/api/gm/room/scenario/delete", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_room_scenario_delete_handler},
+        {.uri = "/api/gm/room/runtime", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_room_runtime_state_handler},
         {.uri = "/api/gm/room/scenario/start", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_room_scenario_start_handler},
         {.uri = "/api/gm/room/scenario/stop", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_room_scenario_stop_handler},
         {.uri = "/api/gm/room/scenario/next", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_room_scenario_next_handler},

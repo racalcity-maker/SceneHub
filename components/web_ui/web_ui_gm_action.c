@@ -4,9 +4,29 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "esp_log.h"
+#include "esp_timer.h"
 #include "gm_control.h"
 #include "orchestrator_registry.h"
 #include "web_ui_utils.h"
+
+static const char *TAG = "web_ui_gm_action";
+
+static int64_t gm_action_perf_start(void)
+{
+    return esp_timer_get_time();
+}
+
+static void gm_action_perf_log(const char *label, int64_t start_us, const char *room_id, const char *action_id)
+{
+    int64_t dt_ms = (esp_timer_get_time() - start_us) / 1000;
+    ESP_LOGW(TAG,
+             "PERF %s room=%s action=%s took %lld ms",
+             label ? label : "room action",
+             room_id ? room_id : "",
+             action_id ? action_id : "",
+             dt_ms);
+}
 
 static bool gm_action_read_query_value(httpd_req_t *req, const char *key, char *out, size_t out_size)
 {
@@ -56,6 +76,7 @@ static esp_err_t gm_action_send_ok(httpd_req_t *req, const char *room_id, const 
 static esp_err_t gm_room_game_action_query_handler(httpd_req_t *req, const char *action_id)
 {
     char room_id[QUEST_ROOM_ID_MAX_LEN] = {0};
+    int64_t t0 = gm_action_perf_start();
     esp_err_t err = ESP_OK;
     if (!gm_action_read_query_value(req, "room_id", room_id, sizeof(room_id)) || !room_id[0]) {
         return gm_action_send_error(req, "400 Bad Request", "invalid_request", "", action_id);
@@ -63,6 +84,7 @@ static esp_err_t gm_room_game_action_query_handler(httpd_req_t *req, const char 
     err = gm_control_execute_room_action_with_source("http", room_id, action_id);
     if (err == ESP_OK) {
         orchestrator_registry_invalidate();
+        gm_action_perf_log("POST room game action", t0, room_id, action_id);
         return gm_action_send_ok(req, room_id, action_id);
     }
     if (err == GM_CTRL_ERR_ROOM_NOT_FOUND) {

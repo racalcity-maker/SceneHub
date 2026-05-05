@@ -15,6 +15,7 @@
 
 #define AUDIO_QUEUE_LEN 4
 #define AUDIO_READER_STOP_TIMEOUT_MS 500
+#define AUDIO_BACKGROUND_FADE_OUT_MS 2500
 #define AUDIO_RUNTIME_TASK_STACK 8192
 #define AUDIO_READER_BG_STACK 8192
 #define AUDIO_READER_FX_STACK 8192
@@ -83,6 +84,7 @@ static void runtime_unlock(void)
     }
 }
 
+
 static void runtime_set_state(audio_runtime_state_t state)
 {
     audio_player_status_set_runtime_state(state);
@@ -91,6 +93,39 @@ static void runtime_set_state(audio_runtime_state_t state)
         runtime_unlock();
     } else {
         s_runtime_state = state;
+    }
+}
+
+static bool channel_has_reader(audio_player_channel_t channel)
+{
+    bool has_reader = false;
+
+    channel = normalize_channel(channel);
+
+    if (runtime_lock()) {
+        has_reader = s_channels[channel].task != NULL && !s_channels[channel].done;
+        runtime_unlock();
+    }
+
+    return has_reader;
+}
+
+static void wait_background_fade_out(void)
+{
+    TickType_t start = xTaskGetTickCount();
+    TickType_t timeout = pdMS_TO_TICKS(AUDIO_BACKGROUND_FADE_OUT_MS + 250);
+
+    audio_player_mixer_fade_out_stream(
+        AUDIO_MIXER_CHANNEL_BACKGROUND,
+        AUDIO_BACKGROUND_FADE_OUT_MS
+    );
+
+    while (audio_player_mixer_fade_out_active(AUDIO_MIXER_CHANNEL_BACKGROUND)) {
+        if ((xTaskGetTickCount() - start) > timeout) {
+            break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -206,6 +241,11 @@ static void handle_resume(void)
 static void handle_stop_channel(audio_player_channel_t channel)
 {
     channel = normalize_channel(channel);
+
+    if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND && channel_has_reader(channel)) {
+        wait_background_fade_out();
+    }
+
     (void)stop_reader(channel);
     if (channel == AUDIO_PLAYER_CHANNEL_EFFECT) {
         runtime_set_effect_active_path(NULL);
@@ -246,6 +286,10 @@ static void handle_play(const audio_cmd_t *cmd)
         error_monitor_report_audio_fault();
         runtime_set_state(AUDIO_RUNTIME_ERROR);
         return;
+    }
+
+    if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND && channel_has_reader(channel)) {
+        wait_background_fade_out();
     }
 
     if (!stop_reader(channel)) {
