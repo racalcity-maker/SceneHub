@@ -22,7 +22,7 @@ scheduleGMAudioFilesLoad();
 const selected=value===undefined?'':String(value||'');
 const background=String(channel||'effect')==='background';
 const files=gmAudioFileItems().filter(item=>background?audioFileIsWav(item.path):audioFileIsPlayableEffect(item.path));
-const refresh=`<button data-audio-files-refresh='1' ${gmAudioFiles.loading?'disabled':''}>${gmAudioFiles.loading?'Loading files':'Refresh files'}</button>`;
+const refresh=uiButton({label:gmAudioFiles.loading?'Loading files':'Refresh files',action:'audio.files.refresh',disabled:gmAudioFiles.loading});
 if(files.length){
 const selectedKnown=files.some(item=>item.path===selected);
 const selectedAllowed=!selected||(background?audioFileIsWav(selected):audioFileIsPlayableEffect(selected));
@@ -87,8 +87,8 @@ const deviceControl=devices.length?`<select class='scenario-select' data-group-c
 const commandItems=deviceCommands.map(cmd=>({id:cmd.id,name:cmd.label||cmd.id}));
 const commandControl=deviceCommands.length?`<select class='scenario-select' data-group-command-field='command_id'>${optionList(commandItems,selectedCommand,'Select command')}</select>`:`<input data-group-command-field='command_id' placeholder='Command ID' value='${esc(selectedCommand)}'>`;
 const paramsHtml=renderCommandParams(command,item.params);
-return `<div class='command-group-item' data-command-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${commandControl}<button class='icon-btn danger' title='Remove command' aria-label='Remove command' data-scenario-step-action='group_delete' data-command-index='${index}'>&times;</button></div>${paramsHtml}</div>`;
-}).join('')}<button data-scenario-step-action='group_add'>Add command</button></div>`;
+return `<div class='command-group-item' data-command-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${commandControl}<button class='icon-btn danger' title='Remove command' aria-label='Remove command' data-action='scenario.step' data-op='group_delete' data-command-index='${index}'>&times;</button></div>${paramsHtml}</div>`;
+}).join('')}<button data-action='scenario.step' data-op='group_add'>Add command</button></div>`;
 }
 
 function renderEventGroupControl(step){
@@ -103,8 +103,8 @@ const selectedEvent=scenarioValidEventId(device,item.event_id);
 const deviceControl=devices.length?`<select class='scenario-select' data-event-group-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-event-group-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
 const eventItems=deviceEvents.map(event=>({id:event.id,name:event.label||event.id}));
 const eventControl=deviceEvents.length?`<select class='scenario-select' data-event-group-field='event_id'>${optionList(eventItems,selectedEvent,'Select event')}</select>`:`<input data-event-group-field='event_id' placeholder='Event ID' value='${esc(selectedEvent)}'>`;
-return `<div class='command-group-item' data-event-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${eventControl}<button class='icon-btn danger' title='Remove event' aria-label='Remove event' data-scenario-step-action='event_group_delete' data-event-index='${index}'>&times;</button></div></div>`;
-}).join('')}<button data-scenario-step-action='event_group_add'>Add event</button></div>`;
+return `<div class='command-group-item' data-event-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${eventControl}<button class='icon-btn danger' title='Remove event' aria-label='Remove event' data-action='scenario.step' data-op='event_group_delete' data-event-index='${index}'>&times;</button></div></div>`;
+}).join('')}<button data-action='scenario.step' data-op='event_group_add'>Add event</button></div>`;
 }
 
 function normalizeScenarioFlagItem(item){
@@ -117,7 +117,7 @@ return {flag_name:'puzzle_done',value:true};
 
 function renderFlagListControl(step){
 const flags=Array.isArray(step.flags)&&step.flags.length?step.flags.map(normalizeScenarioFlagItem):[defaultScenarioFlagItem()];
-return `<div class='command-group-list'>${flags.map((item,index)=>`<div class='command-group-item' data-flag-list-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${renderScenarioFlagInput(item.flag_name,`data-flag-list-field='flag_name'`)}<select data-flag-list-field='value'><option value='true' ${item.value!==false?'selected':''}>is true</option><option value='false' ${item.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' title='Remove flag' aria-label='Remove flag' data-scenario-step-action='flag_list_delete' data-flag-index='${index}'>&times;</button></div></div>`).join('')}<button data-scenario-step-action='flag_list_add'>Add flag</button></div>`;
+return `<div class='command-group-list'>${flags.map((item,index)=>`<div class='command-group-item' data-flag-list-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${renderScenarioFlagInput(item.flag_name,`data-flag-list-field='flag_name'`)}<select data-flag-list-field='value'><option value='true' ${item.value!==false?'selected':''}>is true</option><option value='false' ${item.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' title='Remove flag' aria-label='Remove flag' data-action='scenario.step' data-op='flag_list_delete' data-flag-index='${index}'>&times;</button></div></div>`).join('')}<button data-action='scenario.step' data-op='flag_list_add'>Add flag</button></div>`;
 }
 
 function renderSetFlagPayload(step){

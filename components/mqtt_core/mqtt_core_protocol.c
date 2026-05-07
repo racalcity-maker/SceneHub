@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "esp_heap_caps.h"
 #include "esp_random.h"
 #include "esp_system.h"
 
@@ -224,7 +223,7 @@ int handle_unsubscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len)
     return send_unsuback(sess->sock, pid);
 }
 
-int handle_publish(mqtt_session_t *sess, uint8_t header, const uint8_t *buf, size_t len)
+int handle_publish(mqtt_session_t *sess, uint8_t header, uint8_t *buf, size_t len)
 {
     size_t off = 0;
     if (len < 2) {
@@ -258,20 +257,11 @@ int handle_publish(mqtt_session_t *sess, uint8_t header, const uint8_t *buf, siz
     if (payload_len >= MQTT_MAX_PAYLOAD) {
         payload_len = MQTT_MAX_PAYLOAD - 1;
     }
-    char *payload = heap_caps_malloc(payload_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!payload) {
-        payload = heap_caps_malloc(payload_len + 1, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    if (!payload) {
-        ESP_LOGE(TAG, "payload buffer alloc failed (%zu)", payload_len + 1);
-        return -1;
-    }
-    memcpy(payload, buf + off, payload_len);
-    payload[payload_len] = 0;
+    buf[off + payload_len] = 0;
+    char *payload = (char *)(buf + off);
 
     mqtt_core_inject_message(topic, payload);
     publish_to_subscribers(topic, payload, qos, retain, NULL);
-    heap_caps_free(payload);
 
     if (qos == 1) {
         send_puback(sess->sock, pid);

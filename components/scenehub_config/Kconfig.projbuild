@@ -51,6 +51,15 @@ config SCENEHUB_MQTT_MAX_CLIENTS
         Number of concurrent MQTT sessions the embedded broker accepts.
         Higher values increase PSRAM usage.
 
+config SCENEHUB_GM_RUNTIME_TICK_MS
+    int "GM scenario runtime tick interval ms"
+    default 100
+    range 50 1000
+    help
+        Periodic runtime loop interval for room scenarios. This drives wait
+        timers, wait flags, command timeouts and reactive runtime progress
+        independently from Web UI polling.
+
 config SCENEHUB_SETUP_AP_PASSWORD
     string "Setup AP password"
     default "12345678"
@@ -80,5 +89,227 @@ config SCENEHUB_WEB_AUTH_RESET_GPIO
         When set to a valid GPIO number, holding this pin LOW for
         ~10 seconds resets the Web UI credentials back to the defaults.
         Set to -1 to disable the hardware reset feature.
+
+config SCENEHUB_RELAY1_GPIO
+    int "System relay 1 GPIO"
+    default 15
+    help
+        GPIO used by system relay channel 1. Set to -1 to disable this channel.
+
+config SCENEHUB_RELAY2_GPIO
+    int "System relay 2 GPIO"
+    default 16
+    help
+        GPIO used by system relay channel 2. Set to -1 to disable this channel.
+
+config SCENEHUB_RELAY3_GPIO
+    int "System relay 3 GPIO"
+    default 17
+    help
+        GPIO used by system relay channel 3. Set to -1 to disable this channel.
+
+config SCENEHUB_RELAY4_GPIO
+    int "System relay 4 GPIO"
+    default 18
+    help
+        GPIO used by system relay channel 4. Set to -1 to disable this channel.
+
+config SCENEHUB_RELAY_ACTIVE_LOW
+    bool "System relay module active low"
+    default y
+    help
+        Enable when the relay module inputs turn ON at LOW level. Safe OFF will
+        be HIGH for all relay channels. Disable for active-high relay modules.
+
+config SCENEHUB_RELAY_MAX_PULSE_MS
+    int "System relay max pulse duration ms"
+    default 60000
+    range 10 600000
+    help
+        Maximum accepted pulse duration for system relay commands. Larger
+        values are rejected by the command executor.
+
+config SCENEHUB_MOSFET1_GPIO
+    int "System MOSFET 1 GPIO"
+    default -1
+    help
+        GPIO used by system MOSFET/PWM channel 1. Set to -1 to disable this channel.
+
+config SCENEHUB_MOSFET2_GPIO
+    int "System MOSFET 2 GPIO"
+    default -1
+    help
+        GPIO used by system MOSFET/PWM channel 2. Set to -1 to disable this channel.
+
+config SCENEHUB_MOSFET3_GPIO
+    int "System MOSFET 3 GPIO"
+    default -1
+    help
+        GPIO used by system MOSFET/PWM channel 3. Set to -1 to disable this channel.
+
+config SCENEHUB_MOSFET4_GPIO
+    int "System MOSFET 4 GPIO"
+    default -1
+    help
+        GPIO used by system MOSFET/PWM channel 4. Set to -1 to disable this channel.
+
+config SCENEHUB_MOSFET_PWM_FREQ_HZ
+    int "System MOSFET PWM frequency"
+    default 1000
+    range 100 40000
+    help
+        LEDC PWM frequency for system MOSFET channels.
+
+config SCENEHUB_MOSFET_MAX_PULSE_MS
+    int "System MOSFET max pulse duration ms"
+    default 60000
+    range 10 600000
+    help
+        Maximum accepted pulse duration for system MOSFET commands. Larger
+        values are rejected by the command executor.
+
+config SCENEHUB_MOSFET_MAX_FADE_MS
+    int "System MOSFET max fade duration ms"
+    default 60000
+    range 0 600000
+    help
+        Maximum accepted fade duration for system MOSFET commands. Set to 0
+        only if instant fades are the only allowed fade command.
+
+config SCENEHUB_INPUT1_GPIO
+    int "System input 1 GPIO"
+    default -1
+    help
+        GPIO used by system digital input channel 1. Set to -1 to disable.
+
+config SCENEHUB_INPUT2_GPIO
+    int "System input 2 GPIO"
+    default -1
+    help
+        GPIO used by system digital input channel 2. Set to -1 to disable.
+
+config SCENEHUB_INPUT3_GPIO
+    int "System input 3 GPIO"
+    default -1
+    help
+        GPIO used by system digital input channel 3. Set to -1 to disable.
+
+config SCENEHUB_INPUT4_GPIO
+    int "System input 4 GPIO"
+    default -1
+    help
+        GPIO used by system digital input channel 4. Set to -1 to disable.
+
+config SCENEHUB_INPUT_ACTIVE_LOW
+    bool "System inputs are active low"
+    default y
+    help
+        Enable when a closed/pressed/active input reads LOW. Disable when
+        active input reads HIGH.
+
+config SCENEHUB_INPUT_PULLUP
+    bool "Enable system input pull-up"
+    default y
+    help
+        Enable internal pull-up for system digital inputs.
+
+config SCENEHUB_INPUT_PULLDOWN
+    bool "Enable system input pull-down"
+    default n
+    help
+        Enable internal pull-down for system digital inputs. Do not enable
+        together with pull-up unless the board design intentionally needs it.
+
+config SCENEHUB_INPUT_DEBOUNCE_MS
+    int "System input debounce ms"
+    default 30
+    range 1 1000
+    help
+        Stable time required before a system digital input change is accepted.
+
+config SCENEHUB_GPIO1_GPIO
+    int "Universal GPIO 1 pin"
+    default -1
+    help
+        GPIO used by universal GPIO channel 1. Set to -1 to disable.
+
+config SCENEHUB_GPIO2_GPIO
+    int "Universal GPIO 2 pin"
+    default -1
+    help
+        GPIO used by universal GPIO channel 2. Set to -1 to disable.
+
+config SCENEHUB_GPIO3_GPIO
+    int "Universal GPIO 3 pin"
+    default -1
+    help
+        GPIO used by universal GPIO channel 3. Set to -1 to disable.
+
+config SCENEHUB_GPIO4_GPIO
+    int "Universal GPIO 4 pin"
+    default -1
+    help
+        GPIO used by universal GPIO channel 4. Set to -1 to disable.
+
+config SCENEHUB_GPIO1_MODE
+    int "Universal GPIO 1 mode"
+    default 0
+    range 0 2
+    help
+        0 = disabled, 1 = digital input, 2 = digital output.
+
+config SCENEHUB_GPIO2_MODE
+    int "Universal GPIO 2 mode"
+    default 0
+    range 0 2
+    help
+        0 = disabled, 1 = digital input, 2 = digital output.
+
+config SCENEHUB_GPIO3_MODE
+    int "Universal GPIO 3 mode"
+    default 0
+    range 0 2
+    help
+        0 = disabled, 1 = digital input, 2 = digital output.
+
+config SCENEHUB_GPIO4_MODE
+    int "Universal GPIO 4 mode"
+    default 0
+    range 0 2
+    help
+        0 = disabled, 1 = digital input, 2 = digital output.
+
+config SCENEHUB_GPIO_ACTIVE_LOW
+    bool "Universal GPIO active low"
+    default n
+    help
+        Applies to universal GPIO logical active state. For output mode, active
+        true writes LOW when enabled. For input mode, LOW is active when enabled.
+
+config SCENEHUB_GPIO_PULLUP
+    bool "Enable universal GPIO input pull-up"
+    default n
+    help
+        Enable internal pull-up for universal GPIO channels configured as input.
+
+config SCENEHUB_GPIO_PULLDOWN
+    bool "Enable universal GPIO input pull-down"
+    default n
+    help
+        Enable internal pull-down for universal GPIO channels configured as input.
+
+config SCENEHUB_GPIO_DEBOUNCE_MS
+    int "Universal GPIO input debounce ms"
+    default 30
+    range 1 1000
+    help
+        Stable time required before a universal GPIO input change is accepted.
+
+config SCENEHUB_GPIO_MAX_PULSE_MS
+    int "Universal GPIO max pulse duration ms"
+    default 60000
+    range 10 600000
+    help
+        Maximum accepted pulse duration for universal GPIO output commands.
 
 endmenu

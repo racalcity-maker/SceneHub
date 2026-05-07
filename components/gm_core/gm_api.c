@@ -4,21 +4,76 @@
 
 #include "audio_player.h"
 #include "cJSON.h"
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
+#include "esp_log.h"
 #include "esp_timer.h"
+#include "event_bus.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "gm_game_profile.h"
 #include "quest_common_utils.h"
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
 
-static void *gm_api_alloc(size_t size)
+static const char *TAG = "gm_api";
+
+static EXT_RAM_BSS_ATTR gm_room_session_t s_api_session;
+static EXT_RAM_BSS_ATTR room_scenario_t s_api_prepare_scenario;
+static EXT_RAM_BSS_ATTR gm_game_profile_t s_api_prepare_profile;
+static EXT_RAM_BSS_ATTR quest_device_command_t s_api_prepare_command;
+static EXT_RAM_BSS_ATTR char s_api_prepare_profile_id[GM_GAME_PROFILE_ID_MAX_LEN];
+static SemaphoreHandle_t s_api_scratch_mutex = NULL;
+static SemaphoreHandle_t s_api_prepare_mutex = NULL;
+static StaticSemaphore_t s_api_scratch_mutex_storage;
+static StaticSemaphore_t s_api_prepare_mutex_storage;
+static portMUX_TYPE s_api_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_api_prepare_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_api_prepare_generation = 0;
+static bool s_api_prepare_job_active = false;
+
+static esp_err_t gm_api_scratch_lock(void)
 {
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!s_api_scratch_mutex) {
+        portENTER_CRITICAL(&s_api_scratch_mutex_init_lock);
+        if (!s_api_scratch_mutex) {
+            s_api_scratch_mutex = xSemaphoreCreateMutexStatic(&s_api_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_api_scratch_mutex_init_lock);
+        if (!s_api_scratch_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
     }
-    return ptr;
+    return (xSemaphoreTake(s_api_scratch_mutex, portMAX_DELAY) == pdTRUE) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void gm_api_scratch_unlock(void)
+{
+    if (s_api_scratch_mutex) {
+        xSemaphoreGive(s_api_scratch_mutex);
+    }
+}
+
+static esp_err_t gm_api_prepare_lock(void)
+{
+    if (!s_api_prepare_mutex) {
+        portENTER_CRITICAL(&s_api_prepare_mutex_init_lock);
+        if (!s_api_prepare_mutex) {
+            s_api_prepare_mutex = xSemaphoreCreateMutexStatic(&s_api_prepare_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_api_prepare_mutex_init_lock);
+        if (!s_api_prepare_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return (xSemaphoreTake(s_api_prepare_mutex, portMAX_DELAY) == pdTRUE) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void gm_api_prepare_unlock(void)
+{
+    if (s_api_prepare_mutex) {
+        xSemaphoreGive(s_api_prepare_mutex);
+    }
 }
 
 static uint64_t gm_api_now_ms(void)
@@ -43,80 +98,224 @@ static esp_err_t gm_api_require_room(const char *room_id)
 static void gm_api_prepare_audio_args_json(const char *args_json)
 {
     cJSON *root = NULL;
-    cJSON *file = NULL;
+    const cJSON *file = NULL;
     if (!args_json || !args_json[0]) {
         return;
     }
     root = cJSON_Parse(args_json);
-    if (!root) {
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
         return;
     }
-    file = cJSON_GetObjectItem(root, "file");
+    file = cJSON_GetObjectItemCaseSensitive(root, "file");
     if (cJSON_IsString(file) && file->valuestring && file->valuestring[0]) {
         (void)audio_player_prepare_path(file->valuestring, NULL);
     }
     cJSON_Delete(root);
 }
 
-static void gm_api_prepare_audio_command(const char *device_id,
-                                         const char *command_id,
-                                         const char *params_json)
+static void gm_api_prepare_audio_command_fields(const char *device_id,
+                                                const char *command_id,
+                                                const char *params_json)
 {
-    quest_device_command_t command = {0};
-    if (!device_id || !command_id || strcmp(device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) != 0) {
+    char command_name[QUEST_DEVICE_COMMAND_NAME_MAX_LEN] = {0};
+    char default_args_json[QUEST_DEVICE_DEFAULT_ARGS_JSON_MAX_LEN] = {0};
+    esp_err_t err = ESP_OK;
+    if (!device_id || strcmp(device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) != 0 ||
+        !command_id || !command_id[0]) {
         return;
     }
-    if (quest_device_get_command(device_id, command_id, &command) != ESP_OK) {
+    if (gm_api_prepare_lock() != ESP_OK) {
         return;
     }
-    if (strcmp(command.command, "audio.play") != 0) {
+    memset(&s_api_prepare_command, 0, sizeof(s_api_prepare_command));
+    err = quest_device_get_command(device_id, command_id, &s_api_prepare_command);
+    if (err == ESP_OK) {
+        quest_str_copy(command_name, sizeof(command_name), s_api_prepare_command.command);
+        quest_str_copy(default_args_json, sizeof(default_args_json), s_api_prepare_command.default_args_json);
+    }
+    gm_api_prepare_unlock();
+    if (err != ESP_OK) {
         return;
     }
-    gm_api_prepare_audio_args_json(command.default_args_json);
+    if (strcmp(command_name, "audio.play") != 0) {
+        return;
+    }
+    gm_api_prepare_audio_args_json(default_args_json);
     gm_api_prepare_audio_args_json(params_json);
 }
 
-static void gm_api_prepare_profile_assets(const char *profile_id)
+static void gm_api_prepare_audio_command(const room_scenario_device_command_t *command_ref)
 {
-    gm_game_profile_t profile = {0};
-    room_scenario_t *scenario = NULL;
-    if (!profile_id || !profile_id[0]) {
+    if (!command_ref) {
         return;
     }
-    if (gm_game_profile_get(profile_id, &profile) != ESP_OK || !profile.scenario_id[0]) {
-        return;
+    gm_api_prepare_audio_command_fields(command_ref->device_id,
+                                        command_ref->command_id,
+                                        command_ref->params_json);
+}
+
+static bool gm_api_prepare_generation_matches(uint32_t generation)
+{
+    bool matches = false;
+    if (gm_api_prepare_lock() != ESP_OK) {
+        return false;
     }
-    scenario = gm_api_alloc(sizeof(*scenario));
+    matches = generation == s_api_prepare_generation;
+    gm_api_prepare_unlock();
+    return matches;
+}
+
+static void gm_api_prepare_scenario_audio_assets(const room_scenario_t *scenario,
+                                                 uint32_t generation)
+{
     if (!scenario) {
-        return;
-    }
-    if (room_scenario_get(profile.scenario_id, scenario) != ESP_OK) {
-        heap_caps_free(scenario);
         return;
     }
     for (size_t i = 0; i < scenario->step_count; ++i) {
         const room_scenario_step_t *step = &scenario->steps[i];
+        if (!gm_api_prepare_generation_matches(generation)) {
+            return;
+        }
         if (!step->enabled) {
             continue;
         }
         if (step->type == ROOM_SCENARIO_STEP_DEVICE_COMMAND) {
-            gm_api_prepare_audio_command(step->data.device_command.device_id,
-                                         step->data.device_command.command_id,
-                                         step->data.device_command.params_json);
+            gm_api_prepare_audio_command(&step->data.device_command);
         } else if (step->type == ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP) {
             for (uint8_t j = 0; j < step->data.device_command_group.command_count; ++j) {
-                gm_api_prepare_audio_command(step->data.device_command_group.commands[j].device_id,
-                                             step->data.device_command_group.commands[j].command_id,
-                                             NULL);
+                gm_api_prepare_audio_command_fields(step->data.device_command_group.commands[j].device_id,
+                                                    step->data.device_command_group.commands[j].command_id,
+                                                    step->data.device_command_group.commands[j].params_json);
             }
         }
     }
-    heap_caps_free(scenario);
+    for (size_t i = 0; i < scenario->reactive_action_count; ++i) {
+        const room_scenario_reactive_action_t *action = &scenario->reactive_actions[i];
+        if (!gm_api_prepare_generation_matches(generation)) {
+            return;
+        }
+        if (action->type == ROOM_SCENARIO_STEP_DEVICE_COMMAND) {
+            gm_api_prepare_audio_command(&action->data.device_command);
+        } else if (action->type == ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP) {
+            size_t start = action->group_command_start_index;
+            size_t end = start + action->group_command_count;
+            if (end > scenario->reactive_group_command_count) {
+                continue;
+            }
+            for (size_t j = start; j < end; ++j) {
+                gm_api_prepare_audio_command(&scenario->reactive_group_commands[j]);
+            }
+        }
+    }
+}
+
+static void gm_api_prepare_profile_assets_now(const char *profile_id,
+                                              uint32_t generation)
+{
+    room_scenario_t *scenario = &s_api_prepare_scenario;
+    char scenario_id[GM_GAME_PROFILE_SCENARIO_ID_MAX_LEN] = {0};
+    esp_err_t err = ESP_OK;
+    if (!profile_id || !profile_id[0]) {
+        return;
+    }
+    if (gm_api_prepare_lock() != ESP_OK) {
+        return;
+    }
+    memset(&s_api_prepare_profile, 0, sizeof(s_api_prepare_profile));
+    err = gm_game_profile_get(profile_id, &s_api_prepare_profile);
+    if (err == ESP_OK) {
+        quest_str_copy(scenario_id, sizeof(scenario_id), s_api_prepare_profile.scenario_id);
+    }
+    gm_api_prepare_unlock();
+    if (err != ESP_OK || !scenario_id[0]) {
+        return;
+    }
+    if (!gm_api_prepare_generation_matches(generation)) {
+        return;
+    }
+
+    if (gm_api_prepare_lock() != ESP_OK) {
+        return;
+    }
+    memset(scenario, 0, sizeof(*scenario));
+    err = room_scenario_get(scenario_id, scenario);
+    gm_api_prepare_unlock();
+    if (err == ESP_OK) {
+        gm_api_prepare_scenario_audio_assets(scenario, generation);
+    }
+}
+
+static void gm_api_prepare_profile_assets_job(void *ctx)
+{
+    (void)ctx;
+    for (;;) {
+        char profile_id[GM_GAME_PROFILE_ID_MAX_LEN] = {0};
+        uint32_t generation = 0;
+
+        if (gm_api_prepare_lock() != ESP_OK) {
+            return;
+        }
+        generation = s_api_prepare_generation;
+        quest_str_copy(profile_id, sizeof(profile_id), s_api_prepare_profile_id);
+        gm_api_prepare_unlock();
+
+        gm_api_prepare_profile_assets_now(profile_id, generation);
+
+        if (gm_api_prepare_lock() != ESP_OK) {
+            return;
+        }
+        if (generation == s_api_prepare_generation) {
+            s_api_prepare_job_active = false;
+            gm_api_prepare_unlock();
+            return;
+        }
+        gm_api_prepare_unlock();
+    }
+}
+
+static void gm_api_schedule_profile_asset_warmup(const char *profile_id)
+{
+    bool should_post = false;
+    if (!profile_id || !profile_id[0]) {
+        return;
+    }
+    if (gm_api_prepare_lock() != ESP_OK) {
+        return;
+    }
+    quest_str_copy(s_api_prepare_profile_id, sizeof(s_api_prepare_profile_id), profile_id);
+    ++s_api_prepare_generation;
+    if (!s_api_prepare_job_active) {
+        s_api_prepare_job_active = true;
+        should_post = true;
+    }
+    gm_api_prepare_unlock();
+
+    if (should_post) {
+        esp_err_t err = event_bus_post_job(gm_api_prepare_profile_assets_job, NULL, 0);
+        if (err != ESP_OK) {
+            if (gm_api_prepare_lock() == ESP_OK) {
+                s_api_prepare_job_active = false;
+                gm_api_prepare_unlock();
+            }
+            ESP_LOGW(TAG, "profile asset warmup job post failed: %s", esp_err_to_name(err));
+        }
+    }
+}
+
+static void gm_api_cancel_profile_asset_warmup(void)
+{
+    if (gm_api_prepare_lock() != ESP_OK) {
+        return;
+    }
+    s_api_prepare_profile_id[0] = '\0';
+    ++s_api_prepare_generation;
+    gm_api_prepare_unlock();
 }
 
 esp_err_t gm_api_get_room_state(const char *room_id, gm_room_state_view_t *out)
 {
-    gm_room_session_t *session = NULL;
+    gm_room_session_t *session = &s_api_session;
     esp_err_t err;
     if (!out) {
         return ESP_ERR_INVALID_ARG;
@@ -132,17 +331,16 @@ esp_err_t gm_api_get_room_state(const char *room_id, gm_room_state_view_t *out)
     out->timer_state = GM_TIMER_IDLE;
     quest_str_copy(out->room_id, sizeof(out->room_id), room_id);
 
-    session = gm_api_alloc(sizeof(*session));
-    if (!session) {
-        return ESP_ERR_NO_MEM;
-    }
+    err = gm_api_scratch_lock();
+    if (err != ESP_OK) return err;
+    memset(session, 0, sizeof(*session));
     err = gm_room_session_get(room_id, session);
     if (err == ESP_ERR_NOT_FOUND) {
-        heap_caps_free(session);
+        gm_api_scratch_unlock();
         return ESP_OK;
     }
     if (err != ESP_OK) {
-        heap_caps_free(session);
+        gm_api_scratch_unlock();
         return err;
     }
 
@@ -215,7 +413,7 @@ esp_err_t gm_api_get_room_state(const char *room_id, gm_room_state_view_t *out)
     quest_str_copy(out->scenario_last_error,
                 sizeof(out->scenario_last_error),
                 session->scenario_last_error);
-    heap_caps_free(session);
+    gm_api_scratch_unlock();
     return ESP_OK;
 }
 
@@ -266,23 +464,22 @@ esp_err_t gm_api_timer_resume(const char *room_id)
 
 esp_err_t gm_api_timer_reset(const char *room_id, bool has_duration, uint32_t duration_ms)
 {
-    gm_room_session_t *session = NULL;
+    gm_room_session_t *session = &s_api_session;
     esp_err_t err = gm_api_require_room(room_id);
     if (err != ESP_OK) {
         return err;
     }
     if (!has_duration) {
-        session = gm_api_alloc(sizeof(*session));
-        if (!session) {
-            return ESP_ERR_NO_MEM;
-        }
+        err = gm_api_scratch_lock();
+        if (err != ESP_OK) return err;
+        memset(session, 0, sizeof(*session));
         err = gm_room_session_get(room_id, session);
         if (err != ESP_OK) {
-            heap_caps_free(session);
+            gm_api_scratch_unlock();
             return err;
         }
         duration_ms = session->timer.duration_ms;
-        heap_caps_free(session);
+        gm_api_scratch_unlock();
     }
     return gm_room_session_reset(room_id, duration_ms, gm_api_now_ms());
 }
@@ -322,7 +519,7 @@ esp_err_t gm_api_select_profile(const char *room_id, const char *profile_id)
     }
     err = gm_room_session_select_profile(room_id, profile_id);
     if (err == ESP_OK) {
-        gm_api_prepare_profile_assets(profile_id);
+        gm_api_schedule_profile_asset_warmup(profile_id);
     }
     return err;
 }
@@ -369,6 +566,7 @@ esp_err_t gm_api_scenario_start(const char *room_id)
     if (err != ESP_OK) {
         return err;
     }
+    gm_api_cancel_profile_asset_warmup();
     return gm_room_session_scenario_start(room_id);
 }
 

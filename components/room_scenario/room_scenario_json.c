@@ -552,6 +552,9 @@ static esp_err_t room_scenario_import_branches_json(const cJSON *branches,
             if (err != ESP_OK) {
                 return err;
             }
+            if (branch->policy_mode == ROOM_SCENARIO_REACTIVE_POLICY_SINGLE) {
+                branch->max_fire_count = branch->run_once ? 1 : 0;
+            }
             branch->step_count = 0;
         } else {
             steps = cJSON_GetObjectItemCaseSensitive(branch_obj, "steps");

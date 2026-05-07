@@ -209,7 +209,7 @@ esp_err_t gm_room_profiles_handler(httpd_req_t *req)
             heap_caps_free(profiles);
             return gm_profile_send_error(req, err);
         }
-        cJSON_AddBoolToObject(item, "valid", gm_game_profile_validate(&profiles[i]) == ESP_OK);
+        cJSON_AddBoolToObject(item, "valid", gm_game_profile_validate_reference(&profiles[i]) == ESP_OK);
         cJSON_AddItemToArray(items, item);
     }
     cJSON_AddItemToObject(root, "profiles", items);
@@ -268,7 +268,7 @@ esp_err_t gm_room_profile_save_handler(httpd_req_t *req)
     }
     err = gm_game_profile_from_json(gm_profile_payload_object(root), &profile);
     if (err == ESP_OK) {
-        err = gm_game_profile_validate(&profile);
+        err = gm_game_profile_validate_reference(&profile);
     }
     if (err == ESP_OK) {
         err = gm_game_profile_upsert_and_save(&profile);

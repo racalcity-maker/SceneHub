@@ -25,7 +25,7 @@
 typedef struct {
     bool in_use;
     char topic[MQTT_MAX_TOPIC];
-    char *payload;
+    char payload[MQTT_MAX_PAYLOAD];
     size_t payload_len;
     uint8_t qos;
 } retain_entry_t;
@@ -60,6 +60,7 @@ typedef struct {
 extern mqtt_session_t *s_sessions;
 extern StackType_t *s_session_stacks[MQTT_MAX_CLIENTS];
 extern StaticTask_t *s_session_tcbs[MQTT_MAX_CLIENTS];
+extern uint8_t *s_session_rx_bufs[MQTT_MAX_CLIENTS];
 extern uint8_t *s_session_tx_bufs[MQTT_MAX_CLIENTS];
 extern retain_entry_t *s_retain;
 extern SemaphoreHandle_t s_lock;
@@ -79,6 +80,7 @@ mqtt_session_t *find_session_by_client_id(const char *client_id);
 void free_session(mqtt_session_t *s);
 void sweep_idle_sessions(void);
 bool ensure_session_task_storage(size_t idx);
+uint8_t *ensure_session_rx_buffer(size_t idx);
 uint8_t *ensure_session_tx_buffer(size_t idx);
 bool ensure_accept_task_storage(void);
 int64_t now_ms(void);
@@ -119,4 +121,4 @@ int send_publish_packet(mqtt_session_t *sess,
 int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len);
 int handle_subscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len);
 int handle_unsubscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len);
-int handle_publish(mqtt_session_t *sess, uint8_t header, const uint8_t *buf, size_t len);
+int handle_publish(mqtt_session_t *sess, uint8_t header, uint8_t *buf, size_t len);

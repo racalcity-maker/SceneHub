@@ -4,7 +4,10 @@
 
 #include "cJSON.h"
 #include "device_control_ingest.h"
+#include "esp_attr.h"
 #include "event_bus.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "gm_game_profile.h"
 #include "gm_room_session.h"
 #include "orchestrator_audit.h"
@@ -16,6 +19,10 @@
 #include "service_status.h"
 #include "web_ui_handlers.h"
 #include "web_ui_utils.h"
+
+#ifndef CONFIG_SCENEHUB_GM_RUNTIME_TICK_MS
+#define CONFIG_SCENEHUB_GM_RUNTIME_TICK_MS 100
+#endif
 
 #define HTTP_TEST_BODY_MAX 4096
 
@@ -29,6 +36,7 @@ static char s_http_response[HTTP_TEST_BODY_MAX];
 static char s_http_status[64];
 static char s_http_type[64];
 static httpd_err_code_t s_http_error;
+EXT_RAM_BSS_ATTR static room_scenario_t s_handler_scenario;
 
 static void wh_copy(char *dst, size_t dst_len, const char *src)
 {
@@ -53,6 +61,32 @@ static esp_err_t fake_resp_send(httpd_req_t *req, const char *body, ssize_t body
         memcpy(s_http_response, body, len);
     }
     s_http_response[len] = '\0';
+    return ESP_OK;
+}
+
+static esp_err_t fake_resp_send_chunk(httpd_req_t *req, const char *body, ssize_t body_len)
+{
+    size_t used = strlen(s_http_response);
+    size_t len = 0;
+    (void)req;
+    if (!body) {
+        return ESP_OK;
+    }
+    if (body_len == HTTPD_RESP_USE_STRLEN) {
+        len = strlen(body);
+    } else if (body_len > 0) {
+        len = (size_t)body_len;
+    }
+    if (used >= sizeof(s_http_response) - 1) {
+        return ESP_OK;
+    }
+    if (len > sizeof(s_http_response) - 1 - used) {
+        len = sizeof(s_http_response) - 1 - used;
+    }
+    if (len > 0) {
+        memcpy(s_http_response + used, body, len);
+    }
+    s_http_response[used + len] = '\0';
     return ESP_OK;
 }
 
@@ -194,10 +228,70 @@ static cJSON *http_test_parse_response(void)
     return root;
 }
 
+static void handler_assert_room_runtime_contract(cJSON *root)
+{
+    static const char *required_fields[] = {
+        "ok",
+        "runtime_schema_version",
+        "room_id",
+        "session_present",
+        "session_state",
+        "timer_state",
+        "timer_duration_ms",
+        "timer_remaining_ms",
+        "hint_active",
+        "hint_sent_count",
+        "hint_message",
+        "selected_profile_id",
+        "selected_profile_name",
+        "selected_profile_scenario_id",
+        "selected_profile_duration_ms",
+        "selected_scenario_id",
+        "selected_scenario_name",
+        "running_scenario_id",
+        "running_scenario_name",
+        "running_scenario_generation",
+        "scenario_runtime_state",
+        "scenario_current_step_index",
+        "scenario_wait_type",
+        "scenario_wait_until_ms",
+        "scenario_wait_started_at_ms",
+        "scenario_wait_event_type",
+        "scenario_wait_source_id",
+        "scenario_wait_events",
+        "scenario_wait_event_count",
+        "scenario_wait_flags",
+        "scenario_wait_flag_count",
+        "scenario_wait_operator_prompt",
+        "scenario_wait_operator_label",
+        "scenario_wait_operator_skip_allowed",
+        "scenario_wait_operator_skip_label",
+        "scenario_operator_message",
+        "scenario_flags",
+        "scenario_flag_count",
+        "scenario_branches",
+        "scenario_branch_count",
+        "scenario_last_error",
+        "asset_prepare_state",
+        "asset_audio_total",
+        "asset_audio_ready",
+        "asset_audio_missing",
+        "asset_audio_bad",
+        "asset_audio_unsupported",
+        "asset_audio_io_error",
+        "asset_audio_unknown",
+    };
+    TEST_ASSERT_NOT_NULL(root);
+    for (size_t i = 0; i < sizeof(required_fields) / sizeof(required_fields[0]); ++i) {
+        TEST_ASSERT_NOT_NULL_MESSAGE(cJSON_GetObjectItem(root, required_fields[i]), required_fields[i]);
+    }
+}
+
 static void http_test_install_adapter(void)
 {
     memset(&s_http_adapter, 0, sizeof(s_http_adapter));
     s_http_adapter.resp_send = fake_resp_send;
+    s_http_adapter.resp_send_chunk = fake_resp_send_chunk;
     s_http_adapter.resp_send_err = fake_resp_send_err;
     s_http_adapter.resp_set_status = fake_resp_set_status;
     s_http_adapter.resp_set_type = fake_resp_set_type;
@@ -243,6 +337,40 @@ static void handler_add_room(const char *room_id)
     TEST_ASSERT_EQUAL(ESP_OK, room_catalog_upsert(&room));
 }
 
+static room_scenario_step_t *handler_add_step(room_scenario_t *scenario,
+                                              const char *id,
+                                              const char *label,
+                                              room_scenario_step_type_t type)
+{
+    room_scenario_step_t *step = NULL;
+    TEST_ASSERT_NOT_NULL(scenario);
+    TEST_ASSERT_TRUE(scenario->step_count < ROOM_SCENARIO_MAX_STEPS);
+    step = &scenario->steps[scenario->step_count++];
+    memset(step, 0, sizeof(*step));
+    wh_copy(step->id, sizeof(step->id), id);
+    wh_copy(step->label, sizeof(step->label), label);
+    step->enabled = true;
+    step->type = type;
+    return step;
+}
+
+static bool handler_response_has_flag(cJSON *root, const char *name, bool expected_value)
+{
+    cJSON *flags = cJSON_GetObjectItem(root, "scenario_flags");
+    cJSON *flag = NULL;
+    cJSON_ArrayForEach(flag, flags) {
+        cJSON *name_item = cJSON_GetObjectItem(flag, "name");
+        cJSON *value_item = cJSON_GetObjectItem(flag, "value");
+        if (cJSON_IsString(name_item) &&
+            strcmp(name_item->valuestring, name) == 0 &&
+            ((expected_value && cJSON_IsTrue(value_item)) ||
+             (!expected_value && cJSON_IsFalse(value_item)))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void test_web_ui_handler_timer_start_validates_query_and_returns_accepted_json(void)
 {
     cJSON *root = NULL;
@@ -278,11 +406,104 @@ static void test_web_ui_handler_room_runtime_returns_timer_state_json(void)
     TEST_ASSERT_EQUAL(ESP_OK, gm_room_runtime_state_handler(&s_http_req));
     TEST_ASSERT_EQUAL_STRING("application/json", s_http_type);
     root = http_test_parse_response();
+    handler_assert_room_runtime_contract(root);
     TEST_ASSERT_EQUAL_STRING("room_a", cJSON_GetObjectItem(root, "room_id")->valuestring);
+    TEST_ASSERT_EQUAL(1, cJSON_GetObjectItem(root, "runtime_schema_version")->valueint);
+    TEST_ASSERT_TRUE(cJSON_IsTrue(cJSON_GetObjectItem(root, "session_present")));
     TEST_ASSERT_EQUAL_STRING("running", cJSON_GetObjectItem(root, "session_state")->valuestring);
     TEST_ASSERT_EQUAL_STRING("running", cJSON_GetObjectItem(root, "timer_state")->valuestring);
     TEST_ASSERT_EQUAL(60000, cJSON_GetObjectItem(root, "timer_duration_ms")->valueint);
     TEST_ASSERT_EQUAL_STRING("none", cJSON_GetObjectItem(root, "asset_prepare_state")->valuestring);
+    cJSON_Delete(root);
+}
+
+static void test_web_ui_handler_room_runtime_returns_idle_for_room_without_session(void)
+{
+    cJSON *root = NULL;
+
+    handler_bootstrap();
+    handler_add_room("room_a");
+
+    http_test_reset_request("room_id=room_a", NULL);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_runtime_state_handler(&s_http_req));
+    TEST_ASSERT_EQUAL_STRING("application/json", s_http_type);
+    root = http_test_parse_response();
+    handler_assert_room_runtime_contract(root);
+    TEST_ASSERT_EQUAL_STRING("room_a", cJSON_GetObjectItem(root, "room_id")->valuestring);
+    TEST_ASSERT_EQUAL(1, cJSON_GetObjectItem(root, "runtime_schema_version")->valueint);
+    TEST_ASSERT_TRUE(cJSON_IsFalse(cJSON_GetObjectItem(root, "session_present")));
+    TEST_ASSERT_EQUAL_STRING("idle", cJSON_GetObjectItem(root, "session_state")->valuestring);
+    TEST_ASSERT_EQUAL_STRING("idle", cJSON_GetObjectItem(root, "timer_state")->valuestring);
+    TEST_ASSERT_EQUAL_STRING("idle", cJSON_GetObjectItem(root, "scenario_runtime_state")->valuestring);
+    cJSON_Delete(root);
+}
+
+static void test_web_ui_handler_room_runtime_ticks_wait_flags_without_gm_state_refresh(void)
+{
+    room_scenario_step_t *step = NULL;
+    cJSON *root = NULL;
+
+    handler_bootstrap();
+    handler_add_room("room_a");
+
+    memset(&s_handler_scenario, 0, sizeof(s_handler_scenario));
+    wh_copy(s_handler_scenario.id, sizeof(s_handler_scenario.id), "scenario_flags");
+    wh_copy(s_handler_scenario.name, sizeof(s_handler_scenario.name), "Scenario Flags");
+    wh_copy(s_handler_scenario.room_id, sizeof(s_handler_scenario.room_id), "room_a");
+
+    s_handler_scenario.branch_count = 2;
+    wh_copy(s_handler_scenario.branches[0].id, sizeof(s_handler_scenario.branches[0].id), "main");
+    wh_copy(s_handler_scenario.branches[0].name, sizeof(s_handler_scenario.branches[0].name), "Main");
+    s_handler_scenario.branches[0].type = ROOM_SCENARIO_BRANCH_NORMAL;
+    s_handler_scenario.branches[0].enabled = true;
+    s_handler_scenario.branches[0].required_for_completion = true;
+    s_handler_scenario.branches[0].step_start_index = 0;
+    s_handler_scenario.branches[0].step_count = 3;
+
+    wh_copy(s_handler_scenario.branches[1].id, sizeof(s_handler_scenario.branches[1].id), "branch_2");
+    wh_copy(s_handler_scenario.branches[1].name, sizeof(s_handler_scenario.branches[1].name), "Branch 2");
+    s_handler_scenario.branches[1].type = ROOM_SCENARIO_BRANCH_NORMAL;
+    s_handler_scenario.branches[1].enabled = true;
+    s_handler_scenario.branches[1].required_for_completion = true;
+    s_handler_scenario.branches[1].step_start_index = 3;
+    s_handler_scenario.branches[1].step_count = 3;
+
+    step = handler_add_step(&s_handler_scenario, "main_gate", "Operator approval", ROOM_SCENARIO_STEP_OPERATOR_APPROVAL);
+    wh_copy(step->data.operator_approval.prompt, sizeof(step->data.operator_approval.prompt), "Continue?");
+    wh_copy(step->data.operator_approval.approve_label, sizeof(step->data.operator_approval.approve_label), "Continue");
+    step = handler_add_step(&s_handler_scenario, "main_flag", "Set done1", ROOM_SCENARIO_STEP_SET_FLAG);
+    wh_copy(step->data.set_flag.name, sizeof(step->data.set_flag.name), "done1");
+    step->data.set_flag.value = true;
+    step = handler_add_step(&s_handler_scenario, "main_stop", "Main stop", ROOM_SCENARIO_STEP_OPERATOR_APPROVAL);
+    wh_copy(step->data.operator_approval.prompt, sizeof(step->data.operator_approval.prompt), "Stop?");
+    wh_copy(step->data.operator_approval.approve_label, sizeof(step->data.operator_approval.approve_label), "Continue");
+
+    step = handler_add_step(&s_handler_scenario, "branch_wait", "Wait done1", ROOM_SCENARIO_STEP_WAIT_FLAGS);
+    step->data.wait_flags.flag_count = 1;
+    wh_copy(step->data.wait_flags.flags[0].name, sizeof(step->data.wait_flags.flags[0].name), "done1");
+    step->data.wait_flags.flags[0].value = true;
+    step = handler_add_step(&s_handler_scenario, "branch_flag", "Set done2", ROOM_SCENARIO_STEP_SET_FLAG);
+    wh_copy(step->data.set_flag.name, sizeof(step->data.set_flag.name), "done2");
+    step->data.set_flag.value = true;
+    step = handler_add_step(&s_handler_scenario, "branch_stop", "Branch stop", ROOM_SCENARIO_STEP_OPERATOR_APPROVAL);
+    wh_copy(step->data.operator_approval.prompt, sizeof(step->data.operator_approval.prompt), "Branch?");
+    wh_copy(step->data.operator_approval.approve_label, sizeof(step->data.operator_approval.approve_label), "Continue");
+
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(&s_handler_scenario));
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_select_scenario("room_a", "scenario_flags"));
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_scenario_start("room_a"));
+
+    http_test_reset_request("room_id=room_a", NULL);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_scenario_approve_handler(&s_http_req));
+
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_SCENEHUB_GM_RUNTIME_TICK_MS + 20));
+
+    http_test_reset_request("room_id=room_a", NULL);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_runtime_state_handler(&s_http_req));
+    TEST_ASSERT_EQUAL_STRING("application/json", s_http_type);
+    root = http_test_parse_response();
+    TEST_ASSERT_TRUE(handler_response_has_flag(root, "done1", true));
+    TEST_ASSERT_TRUE(handler_response_has_flag(root, "done2", true));
     cJSON_Delete(root);
 }
 
@@ -416,6 +637,8 @@ void register_web_ui_handler_tests(void)
 {
     RUN_TEST(test_web_ui_handler_timer_start_validates_query_and_returns_accepted_json);
     RUN_TEST(test_web_ui_handler_room_runtime_returns_timer_state_json);
+    RUN_TEST(test_web_ui_handler_room_runtime_returns_idle_for_room_without_session);
+    RUN_TEST(test_web_ui_handler_room_runtime_ticks_wait_flags_without_gm_state_refresh);
     RUN_TEST(test_web_ui_handler_gm_state_returns_stable_json_shape);
     RUN_TEST(test_web_ui_handler_scenario_validate_rejects_bad_body_and_reports_valid_json);
     RUN_TEST(test_web_ui_handler_game_action_maps_missing_room_to_json_error);

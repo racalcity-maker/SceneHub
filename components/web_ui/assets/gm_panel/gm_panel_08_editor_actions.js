@@ -123,9 +123,7 @@ const current=collectQuestDeviceEditor(false);
 const clientId=(current.client_id||'').trim();
 if(!clientId)throw new Error('Select physical client');
 setGMStatus('Requesting device config...');
-const res=await gmFetch('/api/gm/device/describe-interface',{
-method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:clientId})}
-);
+const res=await api.device.describeInterface(clientId);
 let body=null;
 try{body=await res.json();}catch(err){}
 if(!res.ok){
@@ -196,12 +194,8 @@ if(!isAdmin())throw new Error('Admin role required');
 const device=collectQuestDeviceEditor(true);
 if(!device.commands.length&&!device.events.length)throw new Error('Add at least one command or event');
 setGMStatus('Saving device...');
-const res=await gmFetch('/api/gm/device/save',{
-method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device})}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.device.save(device);
+await gmExpectOk(res);
 questDeviceEditor.device_id=device.id;
 questDeviceEditor.open=true;
 clearQuestDeviceDirty();
@@ -210,17 +204,13 @@ if(typeof window.__gmRefreshManualSidebar==='function')await window.__gmRefreshM
 setGMStatus('Device saved','gm-ok');
 }
 
-async function deleteQuestDeviceEditor(deviceId){
+async function deleteQuestDeviceEditor(deviceId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!deviceId)return;
-if(!confirm(`Delete device ${deviceId}?`))return;
+if(!confirmHandled&&!confirm(`Delete device ${deviceId}?`))return;
 setGMStatus('Deleting device...');
-const res=await gmFetch('/api/gm/device/delete',{
-method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:deviceId})}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.device.delete(deviceId);
+await gmExpectOk(res);
 if(questDeviceEditor.device_id===deviceId){
 questDeviceEditor.device_id='';
 questDeviceEditor.open=false;
@@ -246,16 +236,8 @@ const profile={
 id,name,room_id:profileEditor.room_id,scenario_id:scenarioId,duration_ms:Math.round(minutes*60000),hint_pack_id:hintPack,audio_pack_id:audioPack,enabled}
 ;
 setGMStatus('Saving game mode...');
-const res=await gmFetch('/api/gm/room/profile/save',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-profile}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.profileSave({profile});
+await gmExpectOk(res);
 profileEditor.profile_id=id;
 profileEditor.open=true;
 clearProfileDirty();
@@ -263,21 +245,13 @@ await loadGM(true,true);
 setGMStatus('Game mode saved','gm-ok');
 }
 
-async function deleteProfileEditor(profileId){
+async function deleteProfileEditor(profileId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!profileId)return;
-if(!confirm(`Delete game mode ${profileId}?`))return;
+if(!confirmHandled&&!confirm(`Delete game mode ${profileId}?`))return;
 setGMStatus('Deleting game mode...');
-const res=await gmFetch('/api/gm/room/profile/delete',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-profile_id:profileId}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.profileDelete(profileId);
+await gmExpectOk(res);
 if(profileEditor.profile_id===profileId){
 profileEditor.profile_id='';
 profileEditor.open=false;
@@ -333,16 +307,8 @@ render();
 return localReport;
 }
 setGMStatus('Validating scenario...');
-const res=await gmFetch('/api/gm/room/scenario/validate',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-scenario:draft}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.scenarioValidate(draft);
+await gmExpectOk(res);
 const report=await res.json();
 scenarioEditor.validation_report=report;
 scenarioEditor.draft=draft;
@@ -376,16 +342,8 @@ render();
 return;
 }
 setGMStatus('Saving scenario...');
-const res=await gmFetch('/api/gm/room/scenario/save',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-scenario}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.scenarioSave(scenario);
+await gmExpectOk(res);
 scenarioEditor.scenario_id=scenario.id;
 scenarioEditor.open=true;
 clearScenarioDirty();
@@ -393,21 +351,13 @@ await loadGM(true,true);
 setGMStatus('Scenario saved','gm-ok');
 }
 
-async function deleteScenarioEditor(scenarioId){
+async function deleteScenarioEditor(scenarioId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!scenarioId)return;
-if(!confirm(`Delete scenario ${scenarioId}?`))return;
+if(!confirmHandled&&!confirm(`Delete scenario ${scenarioId}?`))return;
 setGMStatus('Deleting scenario...');
-const res=await gmFetch('/api/gm/room/scenario/delete',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-scenario_id:scenarioId}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.scenarioDelete(scenarioId);
+await gmExpectOk(res);
 if(scenarioEditor.scenario_id===scenarioId){
 scenarioEditor.scenario_id='';
 scenarioEditor.open=false;
@@ -423,11 +373,7 @@ if(!input||!input.files||!input.files[0])throw new Error('Select JSON file');
 const text=await input.files[0].text();
 JSON.parse(text);
 setGMStatus(`Importing ${label}...`);
-const res=await gmFetch(url,{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:text}
-);
+const res=await api.storage.importJson(url,text);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
@@ -438,9 +384,7 @@ setGMStatus(`${label} imported`,'gm-ok');
 
 async function postStorageCommand(url,label){
 setGMStatus(`${label}...`);
-const res=await gmFetch(url,{
-method:'POST'}
-);
+const res=await api.storage.post(url);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
@@ -452,57 +396,45 @@ setGMStatus(`${label} done`,'gm-ok');
 async function runStorageAction(action){
 if(!isAdmin())throw new Error('Admin role required');
 if(action==='scenario_export'){
-window.location='/api/gm/room/scenarios/export';
+window.location=api.storage.exportUrl('scenario');
 return;
 }
 if(action==='device_export'){
-window.location='/api/gm/devices/export';
+window.location=api.storage.exportUrl('device');
 return;
 }
 if(action==='profile_export'){
-window.location='/api/gm/profiles/export';
+window.location=api.storage.exportUrl('profile');
 return;
 }
 if(action==='device_import')return importStorageJson('storage_devices_file','/api/gm/devices/import','Devices');
 if(action==='scenario_import')return importStorageJson('storage_scenarios_file','/api/gm/room/scenarios/import','Scenarios');
 if(action==='profile_import')return importStorageJson('storage_profiles_file','/api/gm/profiles/import','Game modes');
-if(action==='device_save')return postStorageCommand('/api/gm/devices/save','Save devices');
-if(action==='device_load')return postStorageCommand('/api/gm/devices/load','Load devices');
-if(action==='scenario_save')return postStorageCommand('/api/gm/room/scenarios/save','Save scenarios');
-if(action==='scenario_load')return postStorageCommand('/api/gm/room/scenarios/load','Load scenarios');
-if(action==='profile_save')return postStorageCommand('/api/gm/profiles/save','Save game modes');
-if(action==='profile_load')return postStorageCommand('/api/gm/profiles/load','Load game modes');
+if(action==='device_save')return postStorageCommand(api.storage.commandUrl('device','save'),'Save devices');
+if(action==='device_load')return postStorageCommand(api.storage.commandUrl('device','load'),'Load devices');
+if(action==='scenario_save')return postStorageCommand(api.storage.commandUrl('scenario','save'),'Save scenarios');
+if(action==='scenario_load')return postStorageCommand(api.storage.commandUrl('scenario','load'),'Load scenarios');
+if(action==='profile_save')return postStorageCommand(api.storage.commandUrl('profile','save'),'Save game modes');
+if(action==='profile_load')return postStorageCommand(api.storage.commandUrl('profile','load'),'Load game modes');
 throw new Error('Unsupported storage action');
 }
 
 async function selectRoomScenario(roomId,scenarioId){
 if(!roomId||!scenarioId)throw new Error('Scenario selection is incomplete');
 setGMStatus('Selecting scenario...');
-const res=await gmFetch('/api/gm/room/scenario/select',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-room_id:roomId,scenario_id:scenarioId}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.scenarioSelect({room_id:roomId,scenario_id:scenarioId});
+await gmExpectOk(res);
 currentRoomScenarioId[roomId]=scenarioId;
 clearTransientFieldDirty();
 await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Scenario selected','gm-ok');
 }
 
-async function runRoomScenarioRuntime(action,roomId,branchId){
+async function runRoomScenarioRuntime(action,roomId,branchId,confirmHandled){
 if(!roomId||!action)throw new Error('Scenario command is incomplete');
-if(action==='next'&&!confirm(branchId?'Force complete this branch wait?':'Force complete current scenario wait?'))return;
+if(!confirmHandled&&action==='next'&&!confirm(branchId?'Force complete this branch wait?':'Force complete current scenario wait?'))return;
 setGMStatus('Updating scenario...');
-let url=`/api/gm/room/scenario/${encodeURIComponent(action)}?room_id=${encodeURIComponent(roomId)}`;
-if(branchId)url+=`&branch_id=${encodeURIComponent(branchId)}`;
-const res=await gmFetch(url,{
-method:'POST'}
-);
+const res=await api.room.scenarioRuntime(roomId,action,branchId);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }

@@ -75,21 +75,28 @@ int send_connack(int sock, uint8_t rc)
 
 int send_suback(mqtt_session_t *sess, uint16_t pid, uint8_t *qos, size_t count)
 {
-    size_t slot = session_index(sess);
-    uint8_t *buf = ensure_session_tx_buffer(slot);
-    if (!buf) {
-        ESP_LOGE(TAG, "suback buffer alloc failed");
+    if (!sess || !qos || count > MQTT_MAX_SUBS) {
         return -1;
     }
+
+    uint8_t buf[1 + 4 + 2 + MQTT_MAX_SUBS];
+    size_t rem_len = 2 + count;
+    uint8_t rem_enc[4];
+    size_t rem_enc_len = encode_remaining_length(rem_enc, rem_len);
+    if (rem_enc_len == 0 || (1 + rem_enc_len + rem_len) > sizeof(buf)) {
+        ESP_LOGW(TAG, "suback packet exceeds buffer (%zu)", count);
+        return -1;
+    }
+
     size_t idx = 0;
     buf[idx++] = 0x90;
-    size_t rem_idx = idx++;
+    memcpy(&buf[idx], rem_enc, rem_enc_len);
+    idx += rem_enc_len;
     buf[idx++] = (uint8_t)(pid >> 8);
     buf[idx++] = (uint8_t)(pid & 0xFF);
     for (size_t i = 0; i < count; ++i) {
         buf[idx++] = qos[i];
     }
-    buf[rem_idx] = (uint8_t)(idx - 2);
     return send_all(sess->sock, buf, idx);
 }
 

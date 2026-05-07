@@ -20,11 +20,12 @@ typedef struct {
 
 EXT_RAM_BSS_ATTR static command_executor_pending_t s_pending[COMMAND_EXECUTOR_MAX_PENDING];
 static SemaphoreHandle_t s_pending_lock = NULL;
+static StaticSemaphore_t s_pending_lock_storage;
 
 static esp_err_t ce_pending_lock_init(void)
 {
     if (!s_pending_lock) {
-        s_pending_lock = xSemaphoreCreateMutex();
+        s_pending_lock = xSemaphoreCreateMutexStatic(&s_pending_lock_storage);
         if (!s_pending_lock) {
             return ESP_ERR_NO_MEM;
         }

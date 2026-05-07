@@ -10,6 +10,7 @@
 
 EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_cached_snapshot;
 static SemaphoreHandle_t s_cache_mutex = NULL;
+static StaticSemaphore_t s_cache_mutex_storage;
 static portMUX_TYPE s_cache_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE s_cache_invalidate_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_cache_source_generation = 0;
@@ -30,7 +31,7 @@ static esp_err_t orch_cache_ensure_mutex(void)
     }
     portENTER_CRITICAL(&s_cache_mutex_init_lock);
     if (!s_cache_mutex) {
-        s_cache_mutex = xSemaphoreCreateMutex();
+        s_cache_mutex = xSemaphoreCreateMutexStatic(&s_cache_mutex_storage);
     }
     portEXIT_CRITICAL(&s_cache_mutex_init_lock);
     return s_cache_mutex ? ESP_OK : ESP_ERR_NO_MEM;
@@ -122,7 +123,6 @@ static esp_err_t orch_cache_ensure_snapshot_locked(void)
 {
     uint32_t source_generation = 0;
     uint32_t ingest_generation = device_control_ingest_generation();
-    gm_room_session_scenario_tick();
     uint32_t gm_generation = gm_room_session_generation();
     uint64_t now_ms = orch_now_ms();
     bool expired = false;

@@ -162,21 +162,21 @@ static esp_err_t room_scenario_store_save_to_path_locked(const char *path)
     len = strlen(printed);
     file = fopen(tmp_path, "wb");
     if (!file) {
-        free(printed);
+        cJSON_free(printed);
         return ESP_FAIL;
     }
     if (len > 0 && fwrite(printed, 1, len, file) != len) {
         fclose(file);
-        free(printed);
+        cJSON_free(printed);
         unlink(tmp_path);
         return ESP_FAIL;
     }
     if (fclose(file) != 0) {
-        free(printed);
+        cJSON_free(printed);
         unlink(tmp_path);
         return ESP_FAIL;
     }
-    free(printed);
+    cJSON_free(printed);
     unlink(path);
     if (rename(tmp_path, path) != 0) {
         unlink(tmp_path);

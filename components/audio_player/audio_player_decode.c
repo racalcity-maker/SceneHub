@@ -1,11 +1,10 @@
 #include "audio_player_internal.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "event_bus.h"
 #include "helix_mp3_wrapper.h"
@@ -18,8 +17,11 @@
 #define AUDIO_CHANNELS    2
 #define AUDIO_WAV_EDGE_FADE_MS 24
 #define AUDIO_WAV_EDGE_FADE_FRAMES ((AUDIO_SAMPLE_RATE * AUDIO_WAV_EDGE_FADE_MS) / 1000)
+#define AUDIO_WAV_DECODE_FRAMES 512
 
 static const char *TAG = "audio_player";
+static EXT_RAM_BSS_ATTR int16_t s_wav_in_buf[AUDIO_MIXER_CHANNEL_COUNT][AUDIO_WAV_DECODE_FRAMES * AUDIO_CHANNELS];
+static EXT_RAM_BSS_ATTR int16_t s_wav_out_buf[AUDIO_MIXER_CHANNEL_COUNT][AUDIO_WAV_DECODE_FRAMES * AUDIO_CHANNELS];
 
 static void post_audio_finished(const char *path)
 {
@@ -290,14 +292,12 @@ static bool decode_wav_to_output(FILE *f,
                                  uint32_t data_size,
                                  size_t initial_bytes_done)
 {
-    const size_t in_buf_frames = 512;
-    int16_t *in_buf = heap_caps_malloc(in_buf_frames * info->channels * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    int16_t *out_buf = heap_caps_malloc(in_buf_frames * AUDIO_CHANNELS * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!in_buf || !out_buf) {
-        ESP_LOGE(TAG, "no mem for wav decode");
-        if (in_buf) heap_caps_free(in_buf);
-        if (out_buf) heap_caps_free(out_buf);
-        error_monitor_report_audio_fault();
+    const size_t in_buf_frames = AUDIO_WAV_DECODE_FRAMES;
+    audio_mixer_channel_t mixer_ch = ctx && ctx->cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
+        AUDIO_MIXER_CHANNEL_BACKGROUND : AUDIO_MIXER_CHANNEL_EFFECT;
+    int16_t *in_buf = s_wav_in_buf[mixer_ch];
+    int16_t *out_buf = s_wav_out_buf[mixer_ch];
+    if (!info || info->channels == 0 || info->channels > AUDIO_CHANNELS) {
         return false;
     }
 
@@ -341,8 +341,6 @@ static bool decode_wav_to_output(FILE *f,
             );
         }
         size_t out_bytes = out_frames * AUDIO_CHANNELS * sizeof(int16_t);
-        audio_mixer_channel_t mixer_ch = ctx->cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
-            AUDIO_MIXER_CHANNEL_BACKGROUND : AUDIO_MIXER_CHANNEL_EFFECT;
         size_t written = audio_player_mixer_write(mixer_ch, out_buf, out_bytes);
         if (written == 0 && audio_player_reader_stop_requested(ctx)) {
             break;
@@ -369,8 +367,6 @@ static bool decode_wav_to_output(FILE *f,
         }
     }
 
-    heap_caps_free(in_buf);
-    heap_caps_free(out_buf);
     return true;
 }
 
@@ -389,7 +385,6 @@ void audio_player_reader_task(void *param)
             post_audio_finished(cmd.path);
         }
         audio_player_runtime_reader_finished(ctx);
-        audio_player_runtime_destroy_reader_ctx(ctx);
         vTaskDelete(NULL);
         return;
     }
@@ -512,6 +507,5 @@ void audio_player_reader_task(void *param)
         post_audio_finished(cmd.path);
     }
     audio_player_runtime_reader_finished(ctx);
-    audio_player_runtime_destroy_reader_ctx(ctx);
     vTaskDelete(NULL);
 }

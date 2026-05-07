@@ -4,11 +4,12 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "esp_attr.h"
 #include "esp_timer.h"
 
 #define AUDIO_ASSET_CACHE_MAX 48
 
-static audio_player_asset_info_t s_audio_asset_cache[AUDIO_ASSET_CACHE_MAX];
+static EXT_RAM_BSS_ATTR audio_player_asset_info_t s_audio_asset_cache[AUDIO_ASSET_CACHE_MAX];
 static size_t s_audio_asset_cache_count;
 static size_t s_audio_asset_cache_next;
 

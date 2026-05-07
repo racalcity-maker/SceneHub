@@ -3,17 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "scenehub_command_result.h"
-
-static void *orch_issue_alloc(size_t size)
-{
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return ptr;
-}
 
 void orch_issue_builder_add_issue(orch_registry_snapshot_t *snapshot,
                                   orch_issue_scope_t scope,
@@ -59,22 +49,31 @@ void orch_issue_builder_collect_system(orch_registry_snapshot_t *snapshot)
     }
     for (uint8_t i = 0; i < snapshot->service_count; ++i) {
         const orch_service_entry_t *service = &snapshot->services[i];
-        if (service->health != ORCH_HEALTH_DEGRADED) {
+        if (service->health == ORCH_HEALTH_OK) {
             continue;
         }
         char title[ORCH_REGISTRY_ISSUE_TITLE_MAX_LEN] = {0};
         char details[ORCH_REGISTRY_ISSUE_DETAILS_MAX_LEN] = {0};
-        snprintf(title, sizeof(title), "%s degraded", service->service_id);
-        snprintf(details,
-                 sizeof(details),
-                 "Service %s did not initialize or start cleanly.",
-                 service->service_id);
+        bool fault = service->health == ORCH_HEALTH_FAULT;
+        snprintf(title, sizeof(title), "%s %s", service->service_id, fault ? "fault" : "degraded");
+        if (service->last_error != ESP_OK) {
+            snprintf(details,
+                     sizeof(details),
+                     "Service %s reported error %d.",
+                     service->service_id,
+                     (int)service->last_error);
+        } else {
+            snprintf(details,
+                     sizeof(details),
+                     "Service %s did not initialize or start cleanly.",
+                     service->service_id);
+        }
         orch_issue_builder_add_issue(snapshot,
                                      ORCH_ISSUE_SCOPE_SYSTEM,
-                                     ORCH_ISSUE_SEVERITY_WARNING,
+                                     fault ? ORCH_ISSUE_SEVERITY_ERROR : ORCH_ISSUE_SEVERITY_WARNING,
                                      "",
                                      "",
-                                     "service_degraded",
+                                     fault ? "service_fault" : "service_degraded",
                                      title,
                                      details);
     }
@@ -86,7 +85,7 @@ void orch_issue_builder_collect_devices(orch_registry_snapshot_t *snapshot)
     if (!snapshot) {
         return;
     }
-    ingest = orch_issue_alloc(sizeof(*ingest));
+    ingest = orch_scratch_ingest();
     for (uint8_t i = 0; i < snapshot->device_count; ++i) {
         const orch_device_entry_t *device = &snapshot->devices[i];
         if (device->connectivity == ORCH_CONNECTIVITY_OFFLINE) {
@@ -135,7 +134,6 @@ void orch_issue_builder_collect_devices(orch_registry_snapshot_t *snapshot)
             }
         }
     }
-    heap_caps_free(ingest);
 }
 
 void orch_issue_builder_collect_rooms(orch_registry_snapshot_t *snapshot)

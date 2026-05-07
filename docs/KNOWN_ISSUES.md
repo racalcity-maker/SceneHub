@@ -1,13 +1,20 @@
 # Known Issues
 
-## Audio output can turn into loud noise around OTA confirmation
+No active release-blocking known issues are currently tracked here.
 
-Observed on 2026-05-06: playback can become harsh noise/scrape around the log line `ota_manager: OTA image confirmed`. Restarting the device clears the issue and playback works normally afterwards.
+## Resolved
 
-Current status: mitigated by moving OTA confirmation earlier. OTA confirm now waits for `system_ready`, then confirms after a short stabilization delay instead of waiting a fixed 30 seconds after boot. A direct I2S/DAC reset around OTA confirmation was considered too intrusive and should not be used as the primary fix.
+### Audio output could turn into loud noise around OTA confirmation
 
-Notes for investigation:
+Observed on 2026-05-06: playback could become harsh noise/scrape around the
+log line `ota_manager: OTA image confirmed`. Restarting the device cleared the
+issue.
 
-- Check if the issue is caused by flash/cache stalls during `esp_ota_mark_app_valid_cancel_rollback()`.
-- Capture logs around `audio_player_output`, mixer writes, and OTA confirmation if it reproduces.
-- Preferred fix direction: confirm earlier before room audio starts, without resetting the DAC/I2S output as a side effect.
+Status: resolved/mitigated. OTA confirmation now waits for `system_ready`, then
+confirms after a short stabilization delay instead of waiting a fixed 30 seconds
+after boot. The audio player was also hardened against timing interruptions by
+keeping output writes frame-aligned, handling partial writes, writing silence
+when needed, and resetting output on detected bad I2S write state.
+
+A direct DAC/I2S reset around OTA confirmation was intentionally not used as the
+primary fix.

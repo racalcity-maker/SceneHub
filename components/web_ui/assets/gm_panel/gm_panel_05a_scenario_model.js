@@ -393,6 +393,9 @@ return device&&Array.isArray(device.commands)&&device.commands.length?device.com
 }
 
 function defaultParamsForCommand(device,command){
+if(command&&command.default_args&&typeof command.default_args==='object'){
+return JSON.parse(JSON.stringify(command.default_args));
+}
 const params={};
 const deviceId=device&&device.id||'';
 const commandId=command&&command.id||'';

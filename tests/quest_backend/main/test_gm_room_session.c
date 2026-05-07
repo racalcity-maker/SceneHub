@@ -706,6 +706,7 @@ static void test_reactive_v2_device_event_runs_variant_actions(void)
     test_copy(branch->guard_flags[0].name, sizeof(branch->guard_flags[0].name), "freeze.active");
     branch->guard_flags[0].value = true;
     branch->policy_mode = ROOM_SCENARIO_REACTIVE_POLICY_SINGLE;
+    branch->run_once = true;
     branch->max_fire_count = 1;
     branch->variant_start_index = 0;
     branch->variant_count = 1;
@@ -842,6 +843,7 @@ static void test_reactive_v2_flag_changed_trigger_runs_variant(void)
     branch = &s_scenario.branches[1];
     branch->trigger.kind = ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED;
     test_copy(branch->trigger.flag_name, sizeof(branch->trigger.flag_name), "room.ready");
+    branch->run_once = true;
     branch->max_fire_count = 1;
     branch->variant_start_index = 0;
     branch->variant_count = 1;
@@ -889,6 +891,7 @@ static void test_reactive_v2_timeout_result_policy_sets_flag(void)
     test_copy(branch->trigger.event_id, sizeof(branch->trigger.event_id), "motion.detected");
     branch->result_on_timeout = ROOM_SCENARIO_REACTIVE_RESULT_SET_FLAG;
     test_copy(branch->result_flag, sizeof(branch->result_flag), "rx.timeout");
+    branch->run_once = true;
     branch->max_fire_count = 1;
     branch->variant_start_index = 0;
     branch->variant_count = 1;
@@ -945,6 +948,7 @@ static void test_reactive_v2_done_result_policy_sets_flag(void)
     test_copy(branch->trigger.event_id, sizeof(branch->trigger.event_id), "motion.detected");
     branch->result_on_done = ROOM_SCENARIO_REACTIVE_RESULT_SET_FLAG;
     test_copy(branch->result_flag, sizeof(branch->result_flag), "rx.done");
+    branch->run_once = true;
     branch->max_fire_count = 1;
     branch->variant_start_index = 0;
     branch->variant_count = 1;
@@ -975,6 +979,70 @@ static void test_reactive_v2_done_result_policy_sets_flag(void)
     get_session("room_a");
     TEST_ASSERT_TRUE(find_flag(&s_session, "rx.done") >= 0);
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_DONE, s_session.branch_runtimes[1].scenario_state);
+}
+
+static void test_reactive_v2_single_can_repeat_ignores_stale_max_fire_count(void)
+{
+    room_scenario_step_t *step = NULL;
+    room_scenario_branch_t *branch = NULL;
+    room_scenario_reactive_variant_t *variant = NULL;
+    room_scenario_reactive_action_t *action = NULL;
+    char request_id[48] = {0};
+
+    session_test_bootstrap();
+    add_room("room_a");
+    add_device_with_events();
+    init_scenario(&s_scenario, "scenario_rx_v2_repeat", "room_a", "Reactive v2 repeat result");
+
+    step = add_step(&s_scenario, "main_wait", "Main wait", ROOM_SCENARIO_STEP_WAIT_TIME);
+    step->data.wait_time.duration_ms = 60000;
+    set_branch(&s_scenario, 0, "main", "Main", ROOM_SCENARIO_BRANCH_NORMAL, 0, 1);
+
+    set_branch(&s_scenario, 1, "rx_repeat", "Repeat reaction", ROOM_SCENARIO_BRANCH_REACTIVE, 1, 0);
+    branch = &s_scenario.branches[1];
+    branch->trigger.kind = ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT;
+    test_copy(branch->trigger.device_id, sizeof(branch->trigger.device_id), "motion");
+    test_copy(branch->trigger.event_id, sizeof(branch->trigger.event_id), "motion.detected");
+    branch->policy_mode = ROOM_SCENARIO_REACTIVE_POLICY_SINGLE;
+    branch->run_once = false;
+    branch->max_fire_count = 1;
+    branch->variant_start_index = 0;
+    branch->variant_count = 1;
+
+    s_scenario.reactive_variant_count = 1;
+    variant = &s_scenario.reactive_variants[0];
+    test_copy(variant->id, sizeof(variant->id), "command");
+    variant->action_start_index = 0;
+    variant->action_count = 1;
+
+    s_scenario.reactive_action_count = 1;
+    action = &s_scenario.reactive_actions[0];
+    action->type = ROOM_SCENARIO_STEP_DEVICE_COMMAND;
+    test_copy(action->data.device_command.device_id,
+              sizeof(action->data.device_command.device_id),
+              "relay");
+    test_copy(action->data.device_command.command_id,
+              sizeof(action->data.device_command.command_id),
+              "pulse");
+
+    add_and_start_selected_scenario("room_a");
+    get_session("room_a");
+    TEST_ASSERT_EQUAL_UINT32(0, s_session.branch_runtimes[1].max_fire_count);
+
+    TEST_ASSERT_EQUAL(ESP_OK, post_device_control_event_expect("motion", "motion.detected"));
+    get_session("room_a");
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT, s_session.branch_runtimes[1].wait_type);
+    test_copy(request_id, sizeof(request_id), s_session.branch_runtimes[1].wait_event_type);
+
+    post_command_result(request_id, "done");
+    get_session("room_a");
+    TEST_ASSERT_EQUAL_UINT32(1, s_session.branch_runtimes[1].fire_count);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_session.branch_runtimes[1].scenario_state);
+
+    TEST_ASSERT_EQUAL(ESP_OK, post_device_control_event_expect("motion", "motion.detected"));
+    get_session("room_a");
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT, s_session.branch_runtimes[1].wait_type);
+    TEST_ASSERT_NOT_EQUAL(0, strcmp(request_id, s_session.branch_runtimes[1].wait_event_type));
 }
 
 static void test_reactive_v2_fail_result_policy_fails_scenario_and_clears_wait(void)
@@ -1055,7 +1123,6 @@ static void test_reactive_v2_queue_one_replays_after_active_reaction(void)
     test_copy(branch->trigger.device_id, sizeof(branch->trigger.device_id), "motion");
     test_copy(branch->trigger.event_id, sizeof(branch->trigger.event_id), "motion.detected");
     branch->reentry_mode = ROOM_SCENARIO_REENTRY_QUEUE_ONE;
-    branch->max_fire_count = 2;
     branch->variant_start_index = 0;
     branch->variant_count = 1;
 
@@ -1081,15 +1148,8 @@ static void test_reactive_v2_queue_one_replays_after_active_reaction(void)
     gm_room_session_scenario_tick();
     get_session("room_a");
     TEST_ASSERT_FALSE(s_session.branch_runtimes[1].pending_trigger);
-    TEST_ASSERT_EQUAL_UINT32(1, s_session.branch_runtimes[1].fire_count);
-    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_session.branch_runtimes[1].scenario_state);
-    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_TIME, s_session.branch_runtimes[1].wait_type);
-
-    vTaskDelay(pdMS_TO_TICKS(5));
-    gm_room_session_scenario_tick();
-    get_session("room_a");
     TEST_ASSERT_EQUAL_UINT32(2, s_session.branch_runtimes[1].fire_count);
-    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_DONE, s_session.branch_runtimes[1].scenario_state);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_session.branch_runtimes[1].scenario_state);
 }
 
 static void test_reactive_v2_cooldown_starts_at_fire_and_suppresses_trigger(void)
@@ -1286,6 +1346,7 @@ static void test_reactive_v2_on_complete_sets_flag_and_message(void)
     branch->trigger.kind = ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT;
     test_copy(branch->trigger.device_id, sizeof(branch->trigger.device_id), "motion");
     test_copy(branch->trigger.event_id, sizeof(branch->trigger.event_id), "motion.detected");
+    branch->run_once = true;
     branch->max_fire_count = 1;
     branch->variant_start_index = 0;
     branch->variant_count = 1;
@@ -1341,6 +1402,7 @@ static void test_reactive_v2_operator_and_runtime_triggers_run_variants(void)
     branch = &s_scenario.branches[1];
     branch->trigger.kind = ROOM_SCENARIO_REACTIVE_TRIGGER_OPERATOR_EVENT;
     test_copy(branch->trigger.operator_event, sizeof(branch->trigger.operator_event), "panic");
+    branch->run_once = true;
     branch->max_fire_count = 1;
     branch->variant_start_index = 0;
     branch->variant_count = 1;
@@ -1349,6 +1411,7 @@ static void test_reactive_v2_operator_and_runtime_triggers_run_variants(void)
     branch = &s_scenario.branches[2];
     branch->trigger.kind = ROOM_SCENARIO_REACTIVE_TRIGGER_RUNTIME_EVENT;
     test_copy(branch->trigger.runtime_event, sizeof(branch->trigger.runtime_event), "timer.expired");
+    branch->run_once = true;
     branch->max_fire_count = 1;
     branch->variant_start_index = 1;
     branch->variant_count = 1;
@@ -1407,6 +1470,7 @@ static void test_reactive_v2_sequential_command_group_runs_and_completes(void)
     branch->trigger.kind = ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT;
     test_copy(branch->trigger.device_id, sizeof(branch->trigger.device_id), "motion");
     test_copy(branch->trigger.event_id, sizeof(branch->trigger.event_id), "motion.detected");
+    branch->run_once = true;
     branch->max_fire_count = 1;
     branch->variant_start_index = 0;
     branch->variant_count = 1;
@@ -1927,6 +1991,7 @@ void register_gm_room_session_tests(void)
     RUN_TEST(test_reactive_v2_flag_changed_trigger_runs_variant);
     RUN_TEST(test_reactive_v2_timeout_result_policy_sets_flag);
     RUN_TEST(test_reactive_v2_done_result_policy_sets_flag);
+    RUN_TEST(test_reactive_v2_single_can_repeat_ignores_stale_max_fire_count);
     RUN_TEST(test_reactive_v2_fail_result_policy_fails_scenario_and_clears_wait);
     RUN_TEST(test_reactive_v2_queue_one_replays_after_active_reaction);
     RUN_TEST(test_reactive_v2_cooldown_starts_at_fire_and_suppresses_trigger);

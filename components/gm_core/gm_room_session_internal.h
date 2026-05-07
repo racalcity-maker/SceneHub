@@ -12,6 +12,7 @@
 
 #define GM_ROOM_SESSION_EVENT_QUEUE_LEN 32
 #define GM_ROOM_SESSION_EVENT_TASK_STACK 12288
+#define GM_ROOM_SESSION_RUNTIME_TASK_STACK 16384
 
 extern gm_room_session_t g_gm_room_sessions[GM_SESSION_MAX_ROOMS];
 extern QueueHandle_t s_event_queue;
@@ -112,3 +113,4 @@ esp_err_t gm_room_session_reactive_v2_handle_result_failure_locked(
 
 void gm_room_session_event_handler(const event_bus_message_t *message);
 void gm_room_session_event_task(void *ctx);
+void gm_room_session_runtime_task(void *ctx);

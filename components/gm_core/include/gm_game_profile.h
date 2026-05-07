@@ -44,6 +44,7 @@ esp_err_t gm_game_profile_delete_and_save(const char *profile_id);
 esp_err_t gm_game_profile_clear(void);
 uint32_t gm_game_profile_generation(void);
 esp_err_t gm_game_profile_validate(const gm_game_profile_t *profile);
+esp_err_t gm_game_profile_validate_reference(const gm_game_profile_t *profile);
 
 esp_err_t gm_game_profile_to_json(const gm_game_profile_t *profile, cJSON *out);
 esp_err_t gm_game_profile_from_json(const cJSON *json, gm_game_profile_t *out);

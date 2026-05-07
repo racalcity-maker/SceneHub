@@ -3,7 +3,6 @@
 #include <errno.h>
 
 #include "esp_log.h"
-#include "esp_heap_caps.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
 
@@ -27,12 +26,10 @@ static void handle_client(void *param)
 {
     mqtt_session_t *sess = (mqtt_session_t *)param;
     uint8_t header = 0;
-    uint8_t *pkt = heap_caps_malloc(MQTT_MAX_PACKET, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    size_t slot = session_index(sess);
+    uint8_t *pkt = ensure_session_rx_buffer(slot);
     if (!pkt) {
-        pkt = heap_caps_malloc(MQTT_MAX_PACKET, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    if (!pkt) {
-        ESP_LOGE(TAG, "failed to allocate mqtt rx packet buffer");
+        ESP_LOGE(TAG, "failed to allocate mqtt rx packet buffer for slot %u", (unsigned)slot);
         goto cleanup;
     }
 
@@ -43,6 +40,7 @@ static void handle_client(void *param)
     if (recv_all(sess->sock, pkt, rem) < 0) {
         goto cleanup;
     }
+    pkt[rem] = 0;
     if ((header >> 4) != 1 || handle_connect(sess, pkt, rem) != 0) {
         send_connack(sess->sock, 0x02);
         goto cleanup;
@@ -78,6 +76,7 @@ static void handle_client(void *param)
         if (recv_all(sess->sock, pkt, rem) < 0) {
             break;
         }
+        pkt[rem] = 0;
         sess->last_rx_ms = now_ms();
         uint8_t type = header >> 4;
         switch (type) {
@@ -119,9 +118,6 @@ static void handle_client(void *param)
     }
 
 cleanup:
-    if (pkt) {
-        heap_caps_free(pkt);
-    }
     send_will_if_needed(sess);
     lock();
     free_session(sess);

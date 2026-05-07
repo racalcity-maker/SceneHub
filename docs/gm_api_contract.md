@@ -699,20 +699,26 @@ Flat scenarios may use a top-level `steps[]` array. New branched scenarios shoul
 
 Branch fields:
 
-- `type`: optional today; planned values are `normal` and `reactive`. Missing
-  `type` is treated as `normal` for compatibility with existing scenario JSON.
+- `type`: `normal` or `reactive`. Missing `type` is treated as `normal` for
+  compatibility with existing scenario JSON.
 - `required_for_completion`: valid only for `normal` branches.
-- `cooldown_ms`: planned for `reactive` branches. After a reaction fires, the
+- `cooldown_ms`: valid for `reactive` branches. After a reaction fires, the
   branch ignores matching events until cooldown expires.
-- `run_once`: planned for `reactive` branches. If true, the reaction disables
+- `run_once`: valid for `reactive` branches. If true, the reaction disables
   itself after the first successful run.
+- `policy.mode`: `single`, `rotate`, `random`, or `escalate`.
+- `policy.max_fire_count`: `0` means unlimited. For `Same actions`, `Can repeat`
+  saves `0`; `Run once` saves `1`.
+- `trigger`, `guard_flags`, `variants`, `result_policy` describe Reactive
+  Branch v2 reactions.
 
 Reactive branch contract:
 
 - one reactive branch represents one reaction;
 - different triggers should be modeled as different reactive branches;
-- a reactive branch starts in `listening`, executes its action chain when the
-  trigger matches, then returns to `listening` unless `run_once` is true;
+- a reactive branch starts in `listening`, executes the selected variant actions
+  when the trigger matches, then returns to `listening` or `cooldown` unless
+  `run_once` or `max_fire_count` completes it;
 - reactive branches share the same game-run flag store as normal branches;
 - reactive branches may execute `SET_FLAG`, allowing normal branches to wait on
   those flags through `WAIT_FLAGS`;
@@ -720,6 +726,8 @@ Reactive branch contract:
   Panel;
 - reactive branches do not block `END_GAME`, do not finish the game and do not
   count toward quest completion.
+- result-required reactive commands advance only on terminal `done`; `accepted`
+  keeps the action pending.
 
 Step payloads:
 
@@ -806,7 +814,7 @@ Current room scenario limits:
 }
 ```
 
-`END_GAME` finishes the game timer and marks the game complete. It does not stop audio automatically; use a separate `DEVICE_COMMAND` to `system_audio.stop` when silence is required.
+`END_GAME` finishes the game timer and marks the game complete. It does not stop audio automatically; use a separate `DEVICE_COMMAND` to `system_audio.stop` when silence is required. It also does not force local relay/MOSFET/GPIO safe-off; use explicit `system_relay`, `system_mosfet` or `system_gpio` commands for finale cleanup.
 
 Runtime responses include branch progress when a scenario is running:
 
@@ -1152,9 +1160,9 @@ Success response:
 
 `start_game` requires a selected profile. It reloads/validates the profile and scenario, applies profile duration, starts the timer and starts room scenario runtime.
 
-`stop_game` stops scenario runtime and finishes the timer/session.
+`stop_game` stops scenario runtime, finishes the timer/session, stops audio and forces built-in relay/MOSFET/GPIO outputs to safe/off after the GM session lock is released.
 
-`reset_game` resets scenario runtime and timer duration. If a profile is selected, the profile duration is re-applied.
+`reset_game` resets scenario runtime and timer duration, stops audio and forces built-in relay/MOSFET/GPIO outputs to safe/off after the GM session lock is released. If a profile is selected, the profile duration is re-applied.
 
 ## Timer Runtime
 

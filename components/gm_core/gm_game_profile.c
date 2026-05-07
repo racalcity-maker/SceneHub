@@ -26,6 +26,8 @@ typedef struct {
 EXT_RAM_BSS_ATTR static gm_game_profile_slot_t s_profiles[GM_GAME_PROFILE_MAX_PROFILES];
 static SemaphoreHandle_t s_lock = NULL;
 static SemaphoreHandle_t s_persist_lock = NULL;
+static StaticSemaphore_t s_lock_storage;
+static StaticSemaphore_t s_persist_lock_storage;
 static portMUX_TYPE s_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_generation = 0;
 
@@ -48,7 +50,7 @@ static esp_err_t gm_game_profile_ensure_lock(void)
     }
     portENTER_CRITICAL(&s_init_lock);
     if (!s_lock) {
-        s_lock = xSemaphoreCreateMutex();
+        s_lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
     }
     portEXIT_CRITICAL(&s_init_lock);
     return s_lock ? ESP_OK : ESP_ERR_NO_MEM;
@@ -61,7 +63,7 @@ static esp_err_t gm_game_profile_ensure_persist_lock(void)
     }
     portENTER_CRITICAL(&s_init_lock);
     if (!s_persist_lock) {
-        s_persist_lock = xSemaphoreCreateMutex();
+        s_persist_lock = xSemaphoreCreateMutexStatic(&s_persist_lock_storage);
     }
     portEXIT_CRITICAL(&s_init_lock);
     return s_persist_lock ? ESP_OK : ESP_ERR_NO_MEM;
@@ -425,6 +427,17 @@ esp_err_t gm_game_profile_validate(const gm_game_profile_t *profile)
     return err;
 }
 
+esp_err_t gm_game_profile_validate_reference(const gm_game_profile_t *profile)
+{
+    if (!gm_game_profile_valid(profile)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!room_catalog_exists(profile->room_id)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    return room_scenario_exists_in_room(profile->scenario_id, profile->room_id);
+}
+
 esp_err_t gm_game_profile_to_json(const gm_game_profile_t *profile, cJSON *out)
 {
     if (!gm_game_profile_valid(profile) || !cJSON_IsObject(out)) {
@@ -656,21 +669,21 @@ static esp_err_t gm_game_profile_save_to_path_locked(const char *path)
     len = strlen(printed);
     file = fopen(tmp_path, "wb");
     if (!file) {
-        free(printed);
+        cJSON_free(printed);
         return ESP_FAIL;
     }
     if (len > 0 && fwrite(printed, 1, len, file) != len) {
         fclose(file);
-        free(printed);
+        cJSON_free(printed);
         unlink(tmp_path);
         return ESP_FAIL;
     }
     if (fclose(file) != 0) {
-        free(printed);
+        cJSON_free(printed);
         unlink(tmp_path);
         return ESP_FAIL;
     }
-    free(printed);
+    cJSON_free(printed);
     unlink(path);
     if (rename(tmp_path, path) != 0) {
         unlink(tmp_path);

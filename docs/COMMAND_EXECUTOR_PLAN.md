@@ -26,10 +26,12 @@ Command executor:
 
 - SceneHub-native MQTT quest devices.
 - Built-in `system_audio`.
+- Built-in `system_relay`.
+- Built-in `system_mosfet`.
 
 Planned:
 
-- local `hardware_io`;
+- more local `hardware_io` targets such as universal GPIO/input;
 - Universal IO Node over the same MQTT contract;
 - optional RS485 transport later.
 
@@ -43,7 +45,7 @@ Planned:
 
 ## Implemented
 
-- `components/command_executor` owns MQTT/system-audio command dispatch.
+- `components/command_executor` owns MQTT, system-audio, system-relay and system-mosfet command dispatch.
 - `gm_core` calls the executor instead of directly executing MQTT/audio side effects for scenario commands.
 - Manual/API command paths use the executor policy gate.
 - Device-control ingest normalizes result statuses before runtime consumes them.
@@ -53,22 +55,23 @@ Planned:
 - `DEVICE_COMMAND_GROUP` passes per-command params for non-result-required commands.
 - `DEVICE_COMMAND_GROUP` rejects result-required commands until batch result aggregation exists.
 - GM session lifecycle audio cleanup goes through executor-backed `system_audio` stop.
+- Local relay/MOSFET commands route through `hardware_io`; current local relay
+  pulse and MOSFET fade/pulse continue locally after scenario dispatch because
+  these system commands are not result-required.
 
 ## Remaining
 
-### Hardware IO Backend
+### Hardware IO Expansion
 
-Add local system devices:
+Base relay/MOSFET/input/GPIO targets are implemented. Remaining local hardware targets:
 
-- `system_relay`
-- `system_mosfet`
-- `system_gpio`
 - optional `system_led`
+
+MQTT retained-message payloads now use fixed retained-table storage instead of
+allocating/freeing a payload buffer for each retained update.
 
 Expected command behavior:
 
-- relay pulse returns `done` after the pulse completes;
-- MOSFET fade may return `accepted` then `done`;
 - invalid channel returns `rejected`;
 - timeout/failure emits terminal result.
 
@@ -96,4 +99,3 @@ Do not add these through the executor:
 - complex retry policy UI;
 - ESP-NOW transport;
 - RS485 transport before the base hardware IO path is stable.
-

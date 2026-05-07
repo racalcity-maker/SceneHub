@@ -3,8 +3,40 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "quest_device.h"
+
+static EXT_RAM_BSS_ATTR quest_device_t s_validation_device;
+static EXT_RAM_BSS_ATTR quest_device_command_t s_validation_command;
+static EXT_RAM_BSS_ATTR quest_device_event_t s_validation_event;
+static SemaphoreHandle_t s_validation_scratch_mutex = NULL;
+static StaticSemaphore_t s_validation_scratch_mutex_storage;
+static portMUX_TYPE s_validation_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_err_t validation_scratch_lock(void)
+{
+    if (!s_validation_scratch_mutex) {
+        portENTER_CRITICAL(&s_validation_scratch_mutex_init_lock);
+        if (!s_validation_scratch_mutex) {
+            s_validation_scratch_mutex = xSemaphoreCreateMutexStatic(&s_validation_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_validation_scratch_mutex_init_lock);
+        if (!s_validation_scratch_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return xSemaphoreTake(s_validation_scratch_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void validation_scratch_unlock(void)
+{
+    if (s_validation_scratch_mutex) {
+        xSemaphoreGive(s_validation_scratch_mutex);
+    }
+}
 
 static bool room_scenario_valid_device_command(const room_scenario_device_command_t *command)
 {
@@ -373,8 +405,8 @@ static void validation_check_device_command_payload(const room_scenario_device_c
                                                     room_scenario_validation_report_t *report)
 {
     char message[ROOM_SCENARIO_VALIDATION_MESSAGE_MAX_LEN] = {0};
-    quest_device_t device = {0};
-    quest_device_command_t command = {0};
+    quest_device_t *device = &s_validation_device;
+    quest_device_command_t *command = &s_validation_command;
     const char *name = step_name && step_name[0] ? step_name : "DEVICE_COMMAND";
     if (!command_payload || !command_payload->device_id[0]) {
         snprintf(message, sizeof(message), "%s has empty device_id", name);
@@ -394,8 +426,20 @@ static void validation_check_device_command_payload(const room_scenario_device_c
                              message);
         return;
     }
-    esp_err_t err = quest_device_get(command_payload->device_id, &device);
+    esp_err_t err = validation_scratch_lock();
+    if (err != ESP_OK) {
+        validation_add_issue(report,
+                             ROOM_SCENARIO_VALIDATION_ERROR,
+                             step_index,
+                             "VALIDATION_SCRATCH_UNAVAILABLE",
+                             "Validation scratch is unavailable");
+        return;
+    }
+    memset(device, 0, sizeof(*device));
+    memset(command, 0, sizeof(*command));
+    err = quest_device_get(command_payload->device_id, device);
     if (err == ESP_ERR_NOT_FOUND) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Quest device '%s' not found",
@@ -408,6 +452,7 @@ static void validation_check_device_command_payload(const room_scenario_device_c
         return;
     }
     if (err != ESP_OK) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Quest device '%s' is unavailable",
@@ -419,7 +464,8 @@ static void validation_check_device_command_payload(const room_scenario_device_c
                              message);
         return;
     }
-    if (!device.enabled) {
+    if (!device->enabled) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Quest device '%s' is disabled",
@@ -433,8 +479,9 @@ static void validation_check_device_command_payload(const room_scenario_device_c
     }
     err = quest_device_get_command(command_payload->device_id,
                                    command_payload->command_id,
-                                   &command);
+                                   command);
     if (err == ESP_ERR_NOT_FOUND) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Command '%s' not found on quest device '%s'",
@@ -448,6 +495,7 @@ static void validation_check_device_command_payload(const room_scenario_device_c
         return;
     }
     if (err != ESP_OK) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Quest device '%s' is unavailable",
@@ -457,7 +505,9 @@ static void validation_check_device_command_payload(const room_scenario_device_c
                              step_index,
                              "QUEST_DEVICE_UNAVAILABLE",
                              message);
+        return;
     }
+    validation_scratch_unlock();
 }
 
 static void validation_check_device_command_step(const room_scenario_step_t *step,
@@ -515,8 +565,8 @@ static void validation_check_wait_device_event_payload(const room_scenario_wait_
                                                        room_scenario_validation_report_t *report)
 {
     char message[ROOM_SCENARIO_VALIDATION_MESSAGE_MAX_LEN] = {0};
-    quest_device_t device = {0};
-    quest_device_event_t event = {0};
+    quest_device_t *device = &s_validation_device;
+    quest_device_event_t *event = &s_validation_event;
     const char *name = step_name && step_name[0] ? step_name : "WAIT_DEVICE_EVENT";
     if (!wait || !wait->device_id[0]) {
         snprintf(message, sizeof(message), "%s has empty device_id", name);
@@ -536,8 +586,20 @@ static void validation_check_wait_device_event_payload(const room_scenario_wait_
                              message);
         return;
     }
-    esp_err_t err = quest_device_get(wait->device_id, &device);
+    esp_err_t err = validation_scratch_lock();
+    if (err != ESP_OK) {
+        validation_add_issue(report,
+                             ROOM_SCENARIO_VALIDATION_ERROR,
+                             step_index,
+                             "VALIDATION_SCRATCH_UNAVAILABLE",
+                             "Validation scratch is unavailable");
+        return;
+    }
+    memset(device, 0, sizeof(*device));
+    memset(event, 0, sizeof(*event));
+    err = quest_device_get(wait->device_id, device);
     if (err == ESP_ERR_NOT_FOUND) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Quest device '%s' not found",
@@ -550,6 +612,7 @@ static void validation_check_wait_device_event_payload(const room_scenario_wait_
         return;
     }
     if (err != ESP_OK) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Quest device '%s' is unavailable",
@@ -561,7 +624,8 @@ static void validation_check_wait_device_event_payload(const room_scenario_wait_
                              message);
         return;
     }
-    if (!device.enabled) {
+    if (!device->enabled) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Quest device '%s' is disabled",
@@ -575,8 +639,9 @@ static void validation_check_wait_device_event_payload(const room_scenario_wait_
     }
     err = quest_device_get_event(wait->device_id,
                                  wait->event_id,
-                                 &event);
+                                 event);
     if (err == ESP_ERR_NOT_FOUND) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Event '%s' not found on quest device '%s'",
@@ -590,6 +655,7 @@ static void validation_check_wait_device_event_payload(const room_scenario_wait_
         return;
     }
     if (err != ESP_OK) {
+        validation_scratch_unlock();
         snprintf(message,
                  sizeof(message),
                  "Quest device '%s' is unavailable",
@@ -599,7 +665,9 @@ static void validation_check_wait_device_event_payload(const room_scenario_wait_
                              step_index,
                              "QUEST_DEVICE_UNAVAILABLE",
                              message);
+        return;
     }
+    validation_scratch_unlock();
 }
 
 static void validation_check_wait_device_event_step(const room_scenario_step_t *step,

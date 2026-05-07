@@ -2,8 +2,18 @@
 
 #include <string.h>
 
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+static EXT_RAM_BSS_ATTR quest_device_t s_scratch_devices[ORCH_REGISTRY_MAX_DEVICES];
+static EXT_RAM_BSS_ATTR device_control_ingest_device_t s_scratch_ingest;
+static EXT_RAM_BSS_ATTR gm_room_session_t s_scratch_session;
+static EXT_RAM_BSS_ATTR room_scenario_t s_scratch_room_scenario;
+static EXT_RAM_BSS_ATTR room_scenario_validation_report_t s_scratch_validation_report;
+static SemaphoreHandle_t s_scratch_mutex = NULL;
+static StaticSemaphore_t s_scratch_mutex_storage;
 
 const char *orch_default_room_id(void)
 {
@@ -15,13 +25,55 @@ uint64_t orch_now_ms(void)
     return (uint64_t)(esp_timer_get_time() / 1000);
 }
 
-void *orch_snapshot_alloc(size_t size)
+esp_err_t orch_scratch_lock(void)
 {
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!s_scratch_mutex) {
+        s_scratch_mutex = xSemaphoreCreateMutexStatic(&s_scratch_mutex_storage);
     }
-    return ptr;
+    if (!s_scratch_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_scratch_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+void orch_scratch_unlock(void)
+{
+    if (s_scratch_mutex) {
+        xSemaphoreGive(s_scratch_mutex);
+    }
+}
+
+quest_device_t *orch_scratch_devices(size_t *out_capacity)
+{
+    if (out_capacity) {
+        *out_capacity = ORCH_REGISTRY_MAX_DEVICES;
+    }
+    memset(s_scratch_devices, 0, sizeof(s_scratch_devices));
+    return s_scratch_devices;
+}
+
+device_control_ingest_device_t *orch_scratch_ingest(void)
+{
+    memset(&s_scratch_ingest, 0, sizeof(s_scratch_ingest));
+    return &s_scratch_ingest;
+}
+
+gm_room_session_t *orch_scratch_session(void)
+{
+    memset(&s_scratch_session, 0, sizeof(s_scratch_session));
+    return &s_scratch_session;
+}
+
+room_scenario_t *orch_scratch_room_scenario(void)
+{
+    memset(&s_scratch_room_scenario, 0, sizeof(s_scratch_room_scenario));
+    return &s_scratch_room_scenario;
+}
+
+room_scenario_validation_report_t *orch_scratch_validation_report(void)
+{
+    memset(&s_scratch_validation_report, 0, sizeof(s_scratch_validation_report));
+    return &s_scratch_validation_report;
 }
 
 bool orch_runtime_is_active(orch_runtime_state_t state)

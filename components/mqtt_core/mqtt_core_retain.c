@@ -2,7 +2,6 @@
 
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 static const char *TAG = "mqtt_core";
@@ -12,10 +11,7 @@ static void retain_free_entry(retain_entry_t *slot)
     if (!slot) {
         return;
     }
-    if (slot->payload) {
-        heap_caps_free(slot->payload);
-        slot->payload = NULL;
-    }
+    slot->payload[0] = '\0';
     slot->payload_len = 0;
 }
 
@@ -63,18 +59,12 @@ void retain_store(const char *topic, const char *payload, uint8_t qos)
         ESP_LOGW(TAG, "retain table full, dropping %s", topic);
         return;
     }
-    char *buf = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) {
-        ESP_LOGW(TAG, "retain alloc failed for %s", topic);
-        return;
-    }
-    memcpy(buf, payload, len);
-    buf[len] = '\0';
     retain_free_entry(slot);
     slot->in_use = true;
     strncpy(slot->topic, topic, sizeof(slot->topic) - 1);
     slot->topic[sizeof(slot->topic) - 1] = '\0';
-    slot->payload = buf;
+    memcpy(slot->payload, payload, len);
+    slot->payload[len] = '\0';
     slot->payload_len = len;
     slot->qos = qos;
 }
@@ -90,8 +80,7 @@ void deliver_retain(mqtt_session_t *sess, const char *filter)
             continue;
         }
         if (topic_matches_filter(filter, s_retain[i].topic)) {
-            const char *payload = s_retain[i].payload ? s_retain[i].payload : "";
-            send_publish_packet(sess, s_retain[i].topic, payload, s_retain[i].qos, true, 0);
+            send_publish_packet(sess, s_retain[i].topic, s_retain[i].payload, s_retain[i].qos, true, 0);
         }
     }
     unlock();

@@ -36,7 +36,7 @@ extern "C" {
 #define ROOM_SCENARIO_MAX_REACTIVE_VARIANTS 8
 #define ROOM_SCENARIO_MAX_REACTIVE_ACTIONS 24
 #define ROOM_SCENARIO_MAX_REACTIVE_GROUP_COMMANDS 8
-#define ROOM_SCENARIO_MAX_SCENARIOS 24
+#define ROOM_SCENARIO_MAX_SCENARIOS 12
 #define ROOM_SCENARIO_VALIDATION_CODE_MAX_LEN 48
 #define ROOM_SCENARIO_VALIDATION_MESSAGE_MAX_LEN 128
 #define ROOM_SCENARIO_VALIDATION_MAX_ISSUES 32
@@ -276,10 +276,19 @@ esp_err_t room_scenario_add_and_save(const room_scenario_t *scenario);
 esp_err_t room_scenario_delete(const char *scenario_id);
 esp_err_t room_scenario_delete_and_save(const char *scenario_id);
 esp_err_t room_scenario_get(const char *scenario_id, room_scenario_t *out);
+esp_err_t room_scenario_exists_in_room(const char *scenario_id, const char *room_id);
+esp_err_t room_scenario_get_name_in_room(const char *scenario_id,
+                                         const char *room_id,
+                                         char *out_name,
+                                         size_t out_name_size);
 esp_err_t room_scenario_list_by_room(const char *room_id,
                                      room_scenario_t *out,
                                      size_t max_count,
                                      size_t *out_count);
+esp_err_t room_scenario_get_by_room_index(const char *room_id,
+                                          size_t index,
+                                          room_scenario_t *out,
+                                          size_t *out_count);
 esp_err_t room_scenario_validate(const room_scenario_t *scenario,
                                  room_scenario_validation_report_t *out);
 esp_err_t room_scenario_validate_by_id(const char *scenario_id,

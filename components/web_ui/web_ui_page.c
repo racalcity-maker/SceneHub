@@ -367,10 +367,11 @@ static const char s_web_ui_gm[] =
 "<button class='nav-btn admin-only' data-view='profiles'><span class='nav-dot'></span>Game Modes</button>"
 "<button class='nav-btn admin-only' data-view='scenarios'><span class='nav-dot'></span>Scenarios</button>"
 "<button class='nav-btn admin-only' data-view='device_setup'><span class='nav-dot'></span>Device Setup</button>"
+"<button class='nav-btn admin-only' data-view='hardware_io'><span class='nav-dot'></span>Hardware IO</button>"
 "<button class='nav-btn admin-only' data-view='observed'><span class='nav-dot'></span>Observed</button>"
 "<button class='nav-btn admin-only' data-view='storage'><span class='nav-dot'></span>Storage</button>"
 "</nav></aside><main class='main'><header class='topbar'><div><div id='page_title' class='page-title'>Dashboard</div><div id='page_sub' class='page-sub'>Loading state</div></div><div class='top-actions'><span id='gm_role_badge' class='role-badge'>role</span><span id='system_status' class='status state-unknown'>unknown</span><a id='gm_admin_home' class='top-link admin-only' href='/'>Admin</a><button id='gm_refresh'>Refresh</button><button id='gm_logout'>Logout</button></div></header><section id='gm_content' class='content'></section></main><aside class='right-sidebar' id='gm_right_sidebar'><div class='manual-empty'>Loading buttons...</div></aside></div>"
-"<script src='/ui/gm_panel.js?v=52'></script></body></html>";
+"<script src='/ui/gm_panel.js?v=54'></script></body></html>";
 
 const char *web_ui_get_gm_html(void)
 {

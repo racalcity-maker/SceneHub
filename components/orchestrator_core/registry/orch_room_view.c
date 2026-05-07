@@ -2,17 +2,6 @@
 
 #include <string.h>
 
-#include "esp_heap_caps.h"
-
-static void *orch_room_alloc(size_t size)
-{
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return ptr;
-}
-
 static void orch_room_view_branch_wait_skip(const gm_room_session_t *session,
                                             const gm_room_scenario_branch_runtime_t *runtime,
                                             bool *out_allowed,
@@ -131,7 +120,7 @@ void orch_room_view_enrich_from_sessions(orch_registry_snapshot_t *snapshot)
     if (!snapshot) {
         return;
     }
-    session = orch_room_alloc(sizeof(*session));
+    session = orch_scratch_session();
     if (!session) {
         return;
     }
@@ -272,5 +261,4 @@ void orch_room_view_enrich_from_sessions(orch_registry_snapshot_t *snapshot)
                     sizeof(room->scenario_last_error),
                     session->scenario_last_error);
     }
-    heap_caps_free(session);
 }

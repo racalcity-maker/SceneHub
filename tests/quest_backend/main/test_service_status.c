@@ -41,6 +41,8 @@ static void test_service_status_mark_init_failure_clears_start_state(void)
     TEST_ASSERT_FALSE(entry.init_ok);
     TEST_ASSERT_FALSE(entry.start_attempted);
     TEST_ASSERT_FALSE(entry.start_ok);
+    TEST_ASSERT_TRUE(entry.fault);
+    TEST_ASSERT_EQUAL(ESP_FAIL, entry.last_error);
 }
 
 static void test_service_status_mark_start_tracks_success_and_failure(void)
@@ -53,11 +55,33 @@ static void test_service_status_mark_start_tracks_success_and_failure(void)
     TEST_ASSERT_TRUE(service_status_get(SERVICE_STATUS_WEB_UI, &entry));
     TEST_ASSERT_TRUE(entry.start_attempted);
     TEST_ASSERT_FALSE(entry.start_ok);
+    TEST_ASSERT_TRUE(entry.fault);
+    TEST_ASSERT_EQUAL(ESP_FAIL, entry.last_error);
 
     service_status_mark_start(SERVICE_STATUS_WEB_UI, ESP_OK);
     TEST_ASSERT_TRUE(service_status_get(SERVICE_STATUS_WEB_UI, &entry));
     TEST_ASSERT_TRUE(entry.start_attempted);
     TEST_ASSERT_TRUE(entry.start_ok);
+    TEST_ASSERT_FALSE(entry.fault);
+    TEST_ASSERT_EQUAL(ESP_OK, entry.last_error);
+}
+
+static void test_service_status_mark_fault_tracks_runtime_faults(void)
+{
+    service_status_entry_t entry = {0};
+
+    ss_bootstrap();
+
+    service_status_mark_init(SERVICE_STATUS_HARDWARE_IO, ESP_OK);
+    service_status_mark_fault(SERVICE_STATUS_HARDWARE_IO, ESP_ERR_INVALID_STATE);
+    TEST_ASSERT_TRUE(service_status_get(SERVICE_STATUS_HARDWARE_IO, &entry));
+    TEST_ASSERT_TRUE(entry.fault);
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, entry.last_error);
+
+    service_status_mark_fault(SERVICE_STATUS_HARDWARE_IO, ESP_OK);
+    TEST_ASSERT_TRUE(service_status_get(SERVICE_STATUS_HARDWARE_IO, &entry));
+    TEST_ASSERT_FALSE(entry.fault);
+    TEST_ASSERT_EQUAL(ESP_OK, entry.last_error);
 }
 
 static void test_service_status_rejects_invalid_get_and_ignores_invalid_marks(void)
@@ -84,6 +108,7 @@ static void test_service_status_names_are_stable(void)
     TEST_ASSERT_EQUAL_STRING("audio", service_status_name(SERVICE_STATUS_AUDIO));
     TEST_ASSERT_EQUAL_STRING("web_ui", service_status_name(SERVICE_STATUS_WEB_UI));
     TEST_ASSERT_EQUAL_STRING("event_bus", service_status_name(SERVICE_STATUS_EVENT_BUS));
+    TEST_ASSERT_EQUAL_STRING("hardware_io", service_status_name(SERVICE_STATUS_HARDWARE_IO));
     TEST_ASSERT_EQUAL_STRING("unknown", service_status_name(SERVICE_STATUS_COUNT));
     TEST_ASSERT_EQUAL_STRING("unknown", service_status_name((service_status_id_t)-1));
 }
@@ -113,6 +138,7 @@ void register_service_status_tests(void)
     RUN_TEST(test_service_status_init_resets_entries);
     RUN_TEST(test_service_status_mark_init_failure_clears_start_state);
     RUN_TEST(test_service_status_mark_start_tracks_success_and_failure);
+    RUN_TEST(test_service_status_mark_fault_tracks_runtime_faults);
     RUN_TEST(test_service_status_rejects_invalid_get_and_ignores_invalid_marks);
     RUN_TEST(test_service_status_names_are_stable);
     RUN_TEST(test_service_status_update_event_bus_counters);

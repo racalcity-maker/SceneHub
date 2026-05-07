@@ -1,14 +1,30 @@
 set(GM_PANEL_PARTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_00_base.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_00_ui.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_00_api.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_00_form.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_00_actions.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_01_state_helpers.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_01a_scenario_runtime.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_01b_editor_dirty.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_01c_quest_device_status.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_01d_generic_helpers.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_02_room_rendering.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_03_main_views.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_04_hardware_io_view.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_04_profiles_view.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05a_scenario_model.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05b_scenario_payloads.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05c_reactive_v2.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05d_scenario_branches.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05e_scenario_steps.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05f_scenario_validation.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05_scenario_builder.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_06_storage_and_render.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_07_loaders_and_runtime_actions.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_08_editor_actions.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_09_scenario_change_events.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_09_editor_events.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_09_events_boot.js
 )
 
@@ -54,13 +70,14 @@ idf_component_register(
         "web_ui_orchestrator.c"
         "web_ui_gm_timer.c"
         "web_ui_gm_hint.c"
+        "web_ui_hardware_io.c"
         "web_ui.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     EMBED_TXTFILES
         "assets/gm_panel.css"
         ${GENERATED_GM_PANEL_JS}
-    REQUIRES esp_http_server event_bus config_store network audio_player mqtt_core ota_manager sd_storage service_status device_control_ingest orchestrator_core gm_core gm_control quest_common room_catalog room_scenario quest_device
+    REQUIRES esp_http_server event_bus config_store network audio_player mqtt_core ota_manager sd_storage service_status device_control_ingest orchestrator_core gm_core gm_control quest_common room_catalog room_scenario quest_device hardware_io
 )
 
 if(TARGET gm_panel_bundle)

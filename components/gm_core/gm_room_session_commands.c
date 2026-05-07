@@ -51,7 +51,24 @@ esp_err_t gm_room_session_execute_device_command(const char *device_id,
                                                  const char *command_id,
                                                  const char *params_json)
 {
-    return command_executor_execute_device_command(device_id, command_id, params_json);
+    command_executor_request_t request = {0};
+    if (!device_id || !device_id[0] || !command_id || !command_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(device_id) >= sizeof(request.device_id) ||
+        strlen(command_id) >= sizeof(request.command_id)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    quest_str_copy(request.source, sizeof(request.source), "session");
+    quest_str_copy(request.device_id, sizeof(request.device_id), device_id);
+    quest_str_copy(request.command_id, sizeof(request.command_id), command_id);
+    if (params_json && params_json[0]) {
+        if (strlen(params_json) >= sizeof(request.params_json)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        quest_str_copy(request.params_json, sizeof(request.params_json), params_json);
+    }
+    return command_executor_execute(&request, NULL, NULL, 0);
 }
 
 void gm_room_session_stop_audio(void)

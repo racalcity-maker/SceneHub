@@ -165,6 +165,65 @@ esp_err_t room_scenario_get(const char *scenario_id, room_scenario_t *out)
     return ESP_OK;
 }
 
+esp_err_t room_scenario_exists_in_room(const char *scenario_id, const char *room_id)
+{
+    room_scenario_slot_t *slot = NULL;
+    esp_err_t err = ESP_OK;
+
+    if (!scenario_id || !scenario_id[0] || !room_id || !room_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = room_scenario_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    slot = room_scenario_find_locked(scenario_id);
+    if (!slot) {
+        room_scenario_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    err = strcmp(slot->scenario.room_id, room_id) == 0 ? ESP_OK : ESP_ERR_INVALID_STATE;
+    room_scenario_unlock();
+    return err;
+}
+
+esp_err_t room_scenario_get_name_in_room(const char *scenario_id,
+                                         const char *room_id,
+                                         char *out_name,
+                                         size_t out_name_size)
+{
+    room_scenario_slot_t *slot = NULL;
+    esp_err_t err = ESP_OK;
+
+    if (!scenario_id || !scenario_id[0] ||
+        !room_id || !room_id[0] ||
+        !out_name || out_name_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    out_name[0] = '\0';
+    err = room_scenario_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    slot = room_scenario_find_locked(scenario_id);
+    if (!slot) {
+        room_scenario_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (strcmp(slot->scenario.room_id, room_id) != 0) {
+        room_scenario_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    size_t len = strlen(slot->scenario.name);
+    if (len >= out_name_size) {
+        len = out_name_size - 1;
+    }
+    memcpy(out_name, slot->scenario.name, len);
+    out_name[len] = '\0';
+    room_scenario_unlock();
+    return ESP_OK;
+}
+
 esp_err_t room_scenario_list_by_room(const char *room_id,
                                      room_scenario_t *out,
                                      size_t max_count,
@@ -195,6 +254,37 @@ esp_err_t room_scenario_list_by_room(const char *room_id,
     *out_count = count;
     room_scenario_unlock();
     return count > max_count ? ESP_ERR_INVALID_SIZE : ESP_OK;
+}
+
+esp_err_t room_scenario_get_by_room_index(const char *room_id,
+                                          size_t index,
+                                          room_scenario_t *out,
+                                          size_t *out_count)
+{
+    size_t count = 0;
+    bool found = false;
+    if (!room_id || !room_id[0] || !out || !out_count) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_count = 0;
+    esp_err_t err = room_scenario_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    for (size_t i = 0; i < ROOM_SCENARIO_MAX_SCENARIOS; ++i) {
+        const room_scenario_slot_t *slot = &s_scenarios[i];
+        if (!slot->in_use || strcmp(slot->scenario.room_id, room_id) != 0) {
+            continue;
+        }
+        if (count == index) {
+            *out = slot->scenario;
+            found = true;
+        }
+        count++;
+    }
+    *out_count = count;
+    room_scenario_unlock();
+    return found ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t room_scenario_store_export_json(cJSON **out)

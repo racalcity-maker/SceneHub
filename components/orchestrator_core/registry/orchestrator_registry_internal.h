@@ -18,7 +18,13 @@
 
 const char *orch_default_room_id(void);
 uint64_t orch_now_ms(void);
-void *orch_snapshot_alloc(size_t size);
+esp_err_t orch_scratch_lock(void);
+void orch_scratch_unlock(void);
+quest_device_t *orch_scratch_devices(size_t *out_capacity);
+device_control_ingest_device_t *orch_scratch_ingest(void);
+gm_room_session_t *orch_scratch_session(void);
+room_scenario_t *orch_scratch_room_scenario(void);
+room_scenario_validation_report_t *orch_scratch_validation_report(void);
 
 bool orch_runtime_is_active(orch_runtime_state_t state);
 orch_health_t orch_health_from_severity(orch_issue_severity_t severity);

@@ -2,8 +2,6 @@
 
 #include <string.h>
 
-#include "esp_heap_caps.h"
-
 void orch_collect_services(orch_registry_snapshot_t *snapshot)
 {
     if (!snapshot) {
@@ -21,8 +19,13 @@ void orch_collect_services(orch_registry_snapshot_t *snapshot)
         dst->init_ok = entry.init_ok;
         dst->start_attempted = entry.start_attempted;
         dst->start_ok = entry.start_ok;
+        dst->fault = entry.fault;
+        dst->last_error = entry.last_error;
         dst->health = ORCH_HEALTH_OK;
-        if ((entry.init_attempted && !entry.init_ok) || (entry.start_attempted && !entry.start_ok)) {
+        if (entry.fault) {
+            dst->health = ORCH_HEALTH_FAULT;
+            snapshot->has_fault = true;
+        } else if ((entry.init_attempted && !entry.init_ok) || (entry.start_attempted && !entry.start_ok)) {
             dst->health = ORCH_HEALTH_DEGRADED;
             snapshot->has_degraded = true;
         }
@@ -39,6 +42,10 @@ esp_err_t orch_snapshot_builder_build_uncached(orch_registry_snapshot_t *out)
     if (!out) {
         return ESP_ERR_INVALID_ARG;
     }
+    err = orch_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
     memset(out, 0, sizeof(*out));
 
     orch_collect_services(out);
@@ -51,6 +58,7 @@ esp_err_t orch_snapshot_builder_build_uncached(orch_registry_snapshot_t *out)
 
     err = quest_device_list(NULL, 0, &count, false);
     if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
+        orch_scratch_unlock();
         return err;
     }
     capacity = count;
@@ -63,15 +71,17 @@ esp_err_t orch_snapshot_builder_build_uncached(orch_registry_snapshot_t *out)
         orch_room_scenario_view_collect_all(out);
         orch_issue_builder_collect_system(out);
         orch_issue_builder_collect_rooms(out);
+        orch_scratch_unlock();
         return ESP_OK;
     }
-    devices = orch_snapshot_alloc(sizeof(*devices) * capacity);
+    devices = orch_scratch_devices(&capacity);
     if (!devices) {
+        orch_scratch_unlock();
         return ESP_ERR_NO_MEM;
     }
     err = quest_device_list(devices, capacity, &count, false);
     if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
-        heap_caps_free(devices);
+        orch_scratch_unlock();
         return err;
     }
     if (count > capacity) {
@@ -87,8 +97,6 @@ esp_err_t orch_snapshot_builder_build_uncached(orch_registry_snapshot_t *out)
             out->has_degraded = true;
         }
     }
-    heap_caps_free(devices);
-
     orch_room_view_collect_rooms(out);
     orch_room_view_enrich_from_sessions(out);
     orch_room_scenario_view_collect_all(out);
@@ -96,5 +104,6 @@ esp_err_t orch_snapshot_builder_build_uncached(orch_registry_snapshot_t *out)
     orch_issue_builder_collect_devices(out);
     orch_issue_builder_collect_rooms(out);
 
+    orch_scratch_unlock();
     return ESP_OK;
 }

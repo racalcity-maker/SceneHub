@@ -3,9 +3,11 @@
 #include <string.h>
 
 #include "command_executor.h"
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "quest_common_utils.h"
 #include "quest_device.h"
+
+static EXT_RAM_BSS_ATTR quest_device_t s_wait_device;
 
 void scenario_branch_clear_wait_fields(gm_room_scenario_branch_runtime_t *branch)
 {
@@ -36,28 +38,22 @@ esp_err_t scenario_enter_wait_device_event_locked(gm_room_session_t *session,
                                                   const room_scenario_wait_device_event_t *wait,
                                                   uint32_t now_ms)
 {
-    quest_device_t *device = NULL;
+    quest_device_t *device = &s_wait_device;
     quest_device_event_t event = {0};
     esp_err_t err = ESP_OK;
     if (!session || !wait || !wait->device_id[0] || !wait->event_id[0]) {
         return ESP_ERR_INVALID_ARG;
     }
-    device = (quest_device_t *)gm_room_session_heap_alloc(sizeof(*device));
-    if (!device) {
-        return ESP_ERR_NO_MEM;
-    }
+    memset(device, 0, sizeof(*device));
     err = quest_device_get(wait->device_id, device);
     if (err != ESP_OK) {
-        heap_caps_free(device);
         return err;
     }
     if (!device->enabled) {
-        heap_caps_free(device);
         return ESP_ERR_INVALID_STATE;
     }
     err = quest_device_get_event(wait->device_id, wait->event_id, &event);
     if (err != ESP_OK) {
-        heap_caps_free(device);
         return err;
     }
     session->scenario_state = GM_ROOM_SCENARIO_WAITING;
@@ -75,7 +71,6 @@ esp_err_t scenario_enter_wait_device_event_locked(gm_room_session_t *session,
                        sizeof(session->wait_source_id),
                        device->client_id);
     }
-    heap_caps_free(device);
     session->wait_event_count = 1;
     quest_str_copy(session->wait_events[0].event_type,
                    sizeof(session->wait_events[0].event_type),
@@ -91,27 +86,21 @@ static esp_err_t scenario_resolve_wait_event_match(const room_scenario_wait_devi
                                                    gm_room_scenario_wait_event_match_t *out)
 {
     quest_device_event_t event = {0};
-    quest_device_t *device = NULL;
+    quest_device_t *device = &s_wait_device;
     esp_err_t err = ESP_OK;
     if (!wait || !out || !wait->device_id[0] || !wait->event_id[0]) {
         return ESP_ERR_INVALID_ARG;
     }
-    device = (quest_device_t *)gm_room_session_heap_alloc(sizeof(*device));
-    if (!device) {
-        return ESP_ERR_NO_MEM;
-    }
+    memset(device, 0, sizeof(*device));
     err = quest_device_get(wait->device_id, device);
     if (err != ESP_OK) {
-        heap_caps_free(device);
         return err;
     }
     if (!device->enabled) {
-        heap_caps_free(device);
         return ESP_ERR_INVALID_STATE;
     }
     err = quest_device_get_event(wait->device_id, wait->event_id, &event);
     if (err != ESP_OK) {
-        heap_caps_free(device);
         return err;
     }
     memset(out, 0, sizeof(*out));
@@ -125,7 +114,6 @@ static esp_err_t scenario_resolve_wait_event_match(const room_scenario_wait_devi
                        sizeof(out->source_id),
                        device->client_id);
     }
-    heap_caps_free(device);
     return ESP_OK;
 }
 

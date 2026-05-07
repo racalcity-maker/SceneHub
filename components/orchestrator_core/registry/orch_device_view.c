@@ -2,17 +2,7 @@
 
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "scenehub_command_result.h"
-
-static void *orch_device_alloc(size_t size)
-{
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return ptr;
-}
 
 static const char *orch_observed_client_id(const quest_device_t *dev)
 {
@@ -32,12 +22,11 @@ static void orch_apply_control_ingest(const quest_device_t *dev, orch_device_ent
     if (!dev || !dst) {
         return;
     }
-    ingest = orch_device_alloc(sizeof(*ingest));
+    ingest = orch_scratch_ingest();
     if (!ingest) {
         return;
     }
     if (device_control_ingest_get_device(orch_observed_client_id(dev), ingest) != ESP_OK) {
-        heap_caps_free(ingest);
         dst->connectivity = ORCH_CONNECTIVITY_OFFLINE;
         dst->health = ORCH_HEALTH_FAULT;
         dst->has_fault = true;
@@ -89,7 +78,6 @@ static void orch_apply_control_ingest(const quest_device_t *dev, orch_device_ent
         scenehub_command_result_is_failure(ingest->result_status)) {
         orch_promote_health(dst, ORCH_HEALTH_DEGRADED);
     }
-    heap_caps_free(ingest);
 }
 
 void orch_device_view_fill_device(const quest_device_t *dev,

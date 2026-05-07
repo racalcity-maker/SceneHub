@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -15,6 +16,7 @@
 #define EVENT_BUS_JOB_QUEUE_LEN 32
 #define EVENT_BUS_MAX_HANDLERS 12
 #define EVENT_BUS_HANDLER_WARN_MS 20
+#define EVENT_BUS_JOB_TASK_STACK_BYTES 8192
 
 typedef struct {
     event_bus_job_fn_t fn;
@@ -27,6 +29,8 @@ static QueueHandle_t s_queue = NULL;
 static QueueHandle_t s_job_queue = NULL;
 static TaskHandle_t s_task = NULL;
 static TaskHandle_t s_job_task = NULL;
+static EXT_RAM_BSS_ATTR StackType_t s_job_task_stack[EVENT_BUS_JOB_TASK_STACK_BYTES];
+static StaticTask_t s_job_task_tcb;
 static bool s_initialized = false;
 static event_bus_message_t *s_message_pool = NULL;
 static bool s_message_pool_in_use[EVENT_BUS_QUEUE_LEN];
@@ -320,8 +324,14 @@ esp_err_t event_bus_start(void)
     }
 
     if (!s_job_task) {
-        BaseType_t ok = xTaskCreate(event_bus_job_task, "event_bus_job", 4096, NULL, 8, &s_job_task);
-        if (ok != pdPASS) {
+        s_job_task = xTaskCreateStatic(event_bus_job_task,
+                                       "event_bus_job",
+                                       EVENT_BUS_JOB_TASK_STACK_BYTES,
+                                       NULL,
+                                       8,
+                                       s_job_task_stack,
+                                       &s_job_task_tcb);
+        if (!s_job_task) {
             return ESP_ERR_NO_MEM;
         }
     }

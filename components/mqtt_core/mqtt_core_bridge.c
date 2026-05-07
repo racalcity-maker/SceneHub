@@ -1,8 +1,13 @@
 #include "mqtt_core.h"
 #include "mqtt_core_internal.h"
 
-#include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
+
+#include "esp_attr.h"
+#include "freertos/FreeRTOS.h"
+
+#define MQTT_BRIDGE_JOB_POOL_LEN 32
 
 typedef struct {
     event_bus_type_t type;
@@ -23,6 +28,46 @@ static const event_topic_map_t k_incoming_map[] = {
     {EVENT_RELAY_CMD, "relay/"},
     {EVENT_WEB_COMMAND, "web/cmd"},
 };
+
+static EXT_RAM_BSS_ATTR event_bus_message_t s_bridge_job_pool[MQTT_BRIDGE_JOB_POOL_LEN];
+static bool s_bridge_job_pool_in_use[MQTT_BRIDGE_JOB_POOL_LEN];
+static portMUX_TYPE s_bridge_job_pool_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static event_bus_message_t *bridge_job_alloc(void)
+{
+    event_bus_message_t *slot = NULL;
+
+    portENTER_CRITICAL(&s_bridge_job_pool_lock);
+    for (size_t i = 0; i < MQTT_BRIDGE_JOB_POOL_LEN; ++i) {
+        if (!s_bridge_job_pool_in_use[i]) {
+            s_bridge_job_pool_in_use[i] = true;
+            slot = &s_bridge_job_pool[i];
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&s_bridge_job_pool_lock);
+
+    if (slot) {
+        memset(slot, 0, sizeof(*slot));
+    }
+    return slot;
+}
+
+static void bridge_job_free(event_bus_message_t *slot)
+{
+    if (!slot) {
+        return;
+    }
+
+    ptrdiff_t index = slot - s_bridge_job_pool;
+    if (index < 0 || index >= MQTT_BRIDGE_JOB_POOL_LEN) {
+        return;
+    }
+
+    portENTER_CRITICAL(&s_bridge_job_pool_lock);
+    s_bridge_job_pool_in_use[index] = false;
+    portEXIT_CRITICAL(&s_bridge_job_pool_lock);
+}
 
 const char *find_topic_by_type(event_bus_type_t type)
 {
@@ -62,11 +107,11 @@ static void publish_event_message(void *ctx)
     }
     const char *topic = msg->topic[0] ? msg->topic : find_topic_by_type(msg->type);
     if (!topic) {
-        free(msg);
+        bridge_job_free(msg);
         return;
     }
     mqtt_core_publish(topic, msg->payload);
-    free(msg);
+    bridge_job_free(msg);
 }
 
 void on_event_bus_message(const event_bus_message_t *msg)
@@ -78,12 +123,12 @@ void on_event_bus_message(const event_bus_message_t *msg)
         return;
     }
 
-    event_bus_message_t *copy = malloc(sizeof(*copy));
+    event_bus_message_t *copy = bridge_job_alloc();
     if (!copy) {
         return;
     }
     *copy = *msg;
     if (event_bus_post_job(publish_event_message, copy, 0) != ESP_OK) {
-        free(copy);
+        bridge_job_free(copy);
     }
 }

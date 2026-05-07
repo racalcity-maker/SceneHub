@@ -10,6 +10,7 @@
 
 typedef struct {
     SemaphoreHandle_t lock;
+    StaticSemaphore_t lock_storage;
     size_t head;
     size_t count;
     bool ready;
@@ -40,7 +41,7 @@ esp_err_t orchestrator_audit_init(void)
     if (s_audit.ready) {
         return ESP_OK;
     }
-    s_audit.lock = xSemaphoreCreateMutex();
+    s_audit.lock = xSemaphoreCreateMutexStatic(&s_audit.lock_storage);
     if (!s_audit.lock) {
         return ESP_ERR_NO_MEM;
     }

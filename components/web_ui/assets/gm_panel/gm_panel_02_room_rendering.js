@@ -1,4 +1,12 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
+function renderRoomGameButtons(room,canStart,canStop,canReset){
+return uiActions([
+uiButton({label:'Start game',action:'room.game',kind:'approve',dataset:{op:'start','room-id':room.room_id},disabled:!canStart}),
+uiButton({label:'Stop game',action:'room.game',dataset:{op:'stop','room-id':room.room_id},disabled:!canStop,confirm:'Stop this game session?'}),
+uiButton({label:'Reset game',action:'room.game',kind:'danger',dataset:{op:'reset','room-id':room.room_id},disabled:!canReset,confirm:'Reset this game session?'}),
+]);
+}
+
 function renderRoomProfileControl(room){
 const profiles=roomProfiles(room.room_id);
 const selectedId=roomSelectedProfileId(room.room_id)||room.selected_profile_id||'';
@@ -14,9 +22,7 @@ profiles.map(p=>`<option value='${esc(p.id)}' ${selected&&selected.id===p.id?'se
 esc(selectedName||room.selected_profile_id||'none')}
 </span></div><div class='kv'><span class='k'>Scenario</span><span class='v'> ${
 esc(scenarioName(room.room_id,selectedScenarioId))}
-</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div><div style='height:12px'></div><div class='actions'><button class='approve' data-room-game='start' data-room-id='${esc(room.room_id)}' ${
-canStart?'':'disabled'}
->Start game</button><button data-room-game='stop' data-room-id='${esc(room.room_id)}'>Stop game</button><button class='danger' data-room-game='reset' data-room-id='${esc(room.room_id)}'>Reset game</button></div>`:noProfilesHtml(room.room_id)}</div><div style='height:12px'></div>`;
+</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div><div style='height:12px'></div>${renderRoomGameButtons(room,canStart,true,true)}`:noProfilesHtml(room.room_id)}</div><div style='height:12px'></div>`;
 }
 
 function renderRoomOperatorConsole(room){
@@ -34,8 +40,9 @@ const runningName=room.running_scenario_name||scenarioDisplayName(room.room_id,r
 const currentStep=roomCurrentScenarioStep(room);
 const currentStepText=currentStep?scenarioStepText(currentStep):scenarioStepLabel(room,steps.length);
 const canStart=!!selected&&selected.valid!==false;
-const canStop=room.session_present&&room.session_state!=='finished';
-const canReset=room.session_present;
+const sessionPresent=!!room.session_present||['running','paused','finished'].includes(room.session_state||'');
+const canStop=sessionPresent&&room.session_state!=='finished';
+const canReset=sessionPresent;
 const canPause=room.timer_state==='running';
 const canResume=room.timer_state==='paused';
 const canAdjust=(Number(room.timer_duration_ms)||0)>0||(Number(room.timer_remaining_ms)||0)>0;
@@ -61,13 +68,20 @@ profiles.map(p=>`<option value='${esc(p.id)}' ${selected&&selected.id===p.id?'se
 esc(selectedName||selectedId||'none')}
 </span></div><div class='kv'><span class='k'>Scenario</span><span class='v'> ${
 esc(scenarioName(room.room_id,scenarioId))}
-</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div><div class='actions'><button class='approve' data-room-game='start' data-room-id='${esc(room.room_id)}' ${canStart?'':'disabled'}>Start game</button><button data-room-game='stop' data-room-id='${esc(room.room_id)}' ${canStop?'':'disabled'}>Stop game</button><button class='danger' data-room-game='reset' data-room-id='${esc(room.room_id)}' ${canReset?'':'disabled'}>Reset game</button></div></div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room,steps.length))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText)}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
+</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div>${renderRoomGameButtons(room,canStart,canStop,canReset)}</div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room,steps.length))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText)}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
 esc(waitPrompt)}
 </div>`:''}${canSkipWait?`<div class='operator-prompt'>Operator override available: ${esc(skipWaitLabel)}</div>`:''}${room.scenario_operator_message?`<div class='operator-prompt'>${
 esc(room.scenario_operator_message)}
 </div>`:''}${flagsHtml}${room.scenario_last_error?`<div class='row-meta bad-text'>${
 esc(room.scenario_last_error)}
-</div>`:''}<div style='height:12px'></div><div class='actions'><button class='approve' data-room-scenario-runtime='approve' data-room-id='${esc(room.room_id)}' ${canApprove?'':'disabled'}>${esc(approveLabel)}</button>${canSkipWait?`<button data-room-scenario-runtime='next' data-room-id='${esc(room.room_id)}'>${esc(skipWaitLabel)}</button>`:''}<button data-room-timer='pause' data-room-id='${esc(room.room_id)}' ${canPause?'':'disabled'}>Pause</button><button data-room-timer='resume' data-room-id='${esc(room.room_id)}' ${canResume?'':'disabled'}>Resume</button><button data-room-timer='plus1' data-room-id='${esc(room.room_id)}' ${canAdjust?'':'disabled'}>+1 min</button><button data-room-timer='minus1' data-room-id='${esc(room.room_id)}' ${canAdjust?'':'disabled'}>-1 min</button></div><details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'><button data-room-timer='start' data-room-id='${esc(room.room_id)}'>Start timer</button></div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario||steps)}</div><div style='height:12px'></div>`;
+</div>`:''}<div style='height:12px'></div>${uiActions([
+uiButton({label:approveLabel,kind:'approve',action:'room.scenario.runtime',dataset:{op:'approve','room-id':room.room_id},disabled:!canApprove}),
+canSkipWait?uiButton({label:skipWaitLabel,action:'room.scenario.runtime',dataset:{op:'next','room-id':room.room_id},confirm:'Force complete current scenario wait?'}):'',
+uiButton({label:'Pause',action:'room.timer',dataset:{op:'pause','room-id':room.room_id},disabled:!canPause}),
+uiButton({label:'Resume',action:'room.timer',dataset:{op:'resume','room-id':room.room_id},disabled:!canResume}),
+uiButton({label:'+1 min',action:'room.timer',dataset:{op:'plus1','room-id':room.room_id},disabled:!canAdjust}),
+uiButton({label:'-1 min',action:'room.timer',dataset:{op:'minus1','room-id':room.room_id},disabled:!canAdjust}),
+])}<details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'>${uiButton({label:'Start timer',action:'room.timer',dataset:{op:'start','room-id':room.room_id}})}</div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario||steps)}</div><div style='height:12px'></div>`;
 }
 
 function renderRoomScenarioControl(room){
@@ -99,19 +113,13 @@ runningName?`<div class='row-meta'>Running snapshot: ${esc(runningName)} #${esc(
 ${selected&&selected.valid===false&&Array.isArray(selected.validation_issues)?`<div class='row-meta bad-text'>${esc((selected.validation_issues[0]&&selected.validation_issues[0].message)||'Scenario validation failed')}</div>`:''}
 ${
 room.scenario_last_error?`<div class='row-meta bad-text'>${esc(room.scenario_last_error)}</div>`:''}
-<div style='height:12px'></div><div class='actions'><button data-room-scenario-runtime='start' data-room-id='${esc(room.room_id)}' ${
-canStart?'':'disabled'}
->Start</button><button data-room-scenario-runtime='stop' data-room-id='${esc(room.room_id)}' ${
-canRun?'':'disabled'}
->Stop</button><button class='approve' data-room-scenario-runtime='approve' data-room-id='${esc(room.room_id)}' ${
-canApprove?'':'disabled'}
->${
-esc(approveLabel)}
-</button><button class='danger' data-room-scenario-runtime='next' data-room-id='${esc(room.room_id)}' ${
-canNext?'':'disabled'}
->Next</button><button data-room-scenario-runtime='reset' data-room-id='${esc(room.room_id)}' ${
-canRun?'':'disabled'}
->Reset</button></div>`:noScenariosHtml(room.room_id)}</details><div style='height:12px'></div>`;
+<div style='height:12px'></div>${uiActions([
+uiButton({label:'Start',action:'room.scenario.runtime',dataset:{op:'start','room-id':room.room_id},disabled:!canStart}),
+uiButton({label:'Stop',action:'room.scenario.runtime',dataset:{op:'stop','room-id':room.room_id},disabled:!canRun}),
+uiButton({label:approveLabel,kind:'approve',action:'room.scenario.runtime',dataset:{op:'approve','room-id':room.room_id},disabled:!canApprove}),
+uiButton({label:'Next',kind:'danger',action:'room.scenario.runtime',dataset:{op:'next','room-id':room.room_id},disabled:!canNext,confirm:'Force complete current scenario wait?'}),
+uiButton({label:'Reset',action:'room.scenario.runtime',dataset:{op:'reset','room-id':room.room_id},disabled:!canRun}),
+])}`:noScenariosHtml(room.room_id)}</details><div style='height:12px'></div>`;
 }
 
 function injectRoomScenarios(){
@@ -125,7 +133,7 @@ if(first)first.insertAdjacentHTML('beforebegin',renderRoomOperatorConsole(room)+
 }
 
 function tabs(active,names,scope){
-return `<div class='tabs'>${names.map(n=>`<button class='tab-btn ${active===n?'active':''}' data-tab-scope='${scope}' data-tab='${n}'>${
+return `<div class='tabs'>${names.map(n=>`<button class='tab-btn ${active===n?'active':''}' data-action='room.tab' data-scope='${scope}' data-tab='${n}'>${
 esc(n[0].toUpperCase()+n.slice(1))}
 </button>`).join('')}</div>`;
 }

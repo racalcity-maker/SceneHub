@@ -1,8 +1,8 @@
 #include "helix_mp3_wrapper.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -12,6 +12,11 @@
 static const char *TAG = "helix_mp3";
 
 #define MP3_SEEK_DISCARD_FRAMES 6
+#define MP3_INBUF_SIZE 2048
+
+static EXT_RAM_BSS_ATTR unsigned char s_mp3_inbuf[MP3_INBUF_SIZE + MAINBUF_SIZE];
+static EXT_RAM_BSS_ATTR short s_mp3_pcm[1152 * 2];
+static EXT_RAM_BSS_ATTR short s_mp3_outbuf[1152 * 2];
 
 static size_t convert_and_write(const short *pcm, int samples, int nChans, int sampleRate, int volume_percent, mp3_write_cb_t writer, void *user)
 {
@@ -22,7 +27,6 @@ static size_t convert_and_write(const short *pcm, int samples, int nChans, int s
     if (ratio != 1.0f) {
         out_frames = (int)((float)out_frames / ratio);
     }
-    static short outbuf[1152 * 2]; // max mp3 frame stereo
     if (out_frames > 1152) {
         out_frames = 1152;
     }
@@ -42,11 +46,11 @@ static size_t convert_and_write(const short *pcm, int samples, int nChans, int s
         } else if (r < -32768) {
             r = -32768;
         }
-        outbuf[o * 2] = (short)l;
-        outbuf[o * 2 + 1] = (short)r;
+        s_mp3_outbuf[o * 2] = (short)l;
+        s_mp3_outbuf[o * 2 + 1] = (short)r;
     }
     size_t bytes = out_frames * 2 * sizeof(short);
-    return writer((const uint8_t *)outbuf, bytes, user);
+    return writer((const uint8_t *)s_mp3_outbuf, bytes, user);
 }
 
 bool helix_mp3_decode_file(const char *path,
@@ -73,16 +77,10 @@ bool helix_mp3_decode_file(const char *path,
         ESP_LOGE(TAG, "MP3InitDecoder failed");
         return false;
     }
-    const int INBUF_SIZE = 2048;
-    unsigned char *inbuf = malloc(INBUF_SIZE + MAINBUF_SIZE);
-    if (!inbuf) {
-        MP3FreeDecoder(dec);
-        fclose(f);
-        return false;
-    }
-    short pcm[1152 * 2];
+    memset(s_mp3_inbuf, 0, sizeof(s_mp3_inbuf));
+    memset(s_mp3_pcm, 0, sizeof(s_mp3_pcm));
     int bytesLeft = 0;
-    unsigned char *readPtr = inbuf;
+    unsigned char *readPtr = s_mp3_inbuf;
     bool ok = true;
 
     // Skip ID3v2 tag if present
@@ -118,10 +116,10 @@ bool helix_mp3_decode_file(const char *path,
 
     while (1) {
         if (bytesLeft < MAINBUF_SIZE) {
-            memmove(inbuf, readPtr, bytesLeft);
-            int n = fread(inbuf + bytesLeft, 1, INBUF_SIZE, f);
+            memmove(s_mp3_inbuf, readPtr, bytesLeft);
+            int n = fread(s_mp3_inbuf + bytesLeft, 1, MP3_INBUF_SIZE, f);
             bytesLeft += n;
-            readPtr = inbuf;
+            readPtr = s_mp3_inbuf;
             if (bytesLeft == 0) {
                 break;
             }
@@ -135,7 +133,7 @@ bool helix_mp3_decode_file(const char *path,
         readPtr += offset;
         bytesLeft -= offset;
 
-        int err = MP3Decode(dec, &readPtr, &bytesLeft, pcm, 0);
+        int err = MP3Decode(dec, &readPtr, &bytesLeft, s_mp3_pcm, 0);
         if (err) {
             if (err == ERR_MP3_INDATA_UNDERFLOW) {
                 bytesLeft = 0;
@@ -179,7 +177,7 @@ bool helix_mp3_decode_file(const char *path,
             --seek_discard_frames;
             continue;
         }
-        if (convert_and_write(pcm, samples, chans, rate, volume_percent, writer, user) == 0) {
+        if (convert_and_write(s_mp3_pcm, samples, chans, rate, volume_percent, writer, user) == 0) {
             ok = false;
             break;
         }
@@ -195,10 +193,10 @@ bool helix_mp3_decode_file(const char *path,
         }
         // top up buffer if needed
         if (bytesLeft < MAINBUF_SIZE) {
-            memmove(inbuf, readPtr, bytesLeft);
-            int n = fread(inbuf + bytesLeft, 1, INBUF_SIZE, f);
+            memmove(s_mp3_inbuf, readPtr, bytesLeft);
+            int n = fread(s_mp3_inbuf + bytesLeft, 1, MP3_INBUF_SIZE, f);
             bytesLeft += n;
-            readPtr = inbuf;
+            readPtr = s_mp3_inbuf;
             bytes_read_total = (size_t)ftell(f);
             if (progress_cb && total_bytes > 0) {
                 // update after read to keep percentage moving even between frames
@@ -206,7 +204,6 @@ bool helix_mp3_decode_file(const char *path,
             }
         }
     }
-    free(inbuf);
     MP3FreeDecoder(dec);
     fclose(f);
     return ok;

@@ -28,6 +28,7 @@
 #define WEB_SESSION_TOKEN_LEN  64
 #define WEB_SESSION_TTL_US     (12LL * 60 * 60 * 1000000)
 #define WEB_AUTH_RESET_HOLD_US (10LL * 1000000)
+#define WEB_AUTH_TRACE_HTTP    0
 
 typedef struct {
     bool in_use;
@@ -168,12 +169,12 @@ static bool read_cookie_value(httpd_req_t *req, const char *name, char *out, siz
     if (hdr_len <= 0 || hdr_len >= 512) {
         return false;
     }
-    char *buf = malloc(hdr_len + 1);
+    char *buf = web_ui_malloc(hdr_len + 1);
     if (!buf) {
         return false;
     }
     if (httpd_req_get_hdr_value_str(req, "Cookie", buf, hdr_len + 1) != ESP_OK) {
-        free(buf);
+        web_ui_free(buf);
         return false;
     }
     bool found = false;
@@ -191,7 +192,7 @@ static bool read_cookie_value(httpd_req_t *req, const char *name, char *out, siz
         out[copy_len] = 0;
         found = true;
     }
-    free(buf);
+    web_ui_free(buf);
     return found;
 }
 
@@ -267,7 +268,7 @@ static char *read_request_body(httpd_req_t *req, size_t max_len)
     if (len == 0 || len > max_len) {
         return NULL;
     }
-    char *body = malloc(len + 1);
+    char *body = web_ui_malloc(len + 1);
     if (!body) {
         return NULL;
     }
@@ -278,7 +279,7 @@ static char *read_request_body(httpd_req_t *req, size_t max_len)
             if (r == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
-            free(body);
+            web_ui_free(body);
             return NULL;
         }
         received += (size_t)r;
@@ -347,7 +348,24 @@ esp_err_t auth_gate_handler(httpd_req_t *req)
     if (req->method != HTTP_GET && !web_ui_is_same_origin_request(req)) {
         return web_same_origin_reject(req);
     }
-    return route->fn(req);
+#if WEB_AUTH_TRACE_HTTP
+    const char *uri = req ? req->uri : "?";
+    ESP_LOGI(TAG,
+             "HTTP begin method=%d uri=%s stack_hwm=%u",
+             (int)req->method,
+             uri,
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+#endif
+    esp_err_t err = route->fn(req);
+#if WEB_AUTH_TRACE_HTTP
+    ESP_LOGI(TAG,
+             "HTTP end method=%d uri=%s err=%s stack_hwm=%u",
+             (int)req->method,
+             uri,
+             esp_err_to_name(err),
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+#endif
+    return err;
 }
 
 esp_err_t login_page_handler(httpd_req_t *req)
@@ -373,7 +391,7 @@ esp_err_t auth_login_handler(httpd_req_t *req)
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body required"));
     }
     cJSON *json = cJSON_Parse(body);
-    free(body);
+    web_ui_free(body);
     if (!json) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json"));
     }
@@ -479,7 +497,7 @@ esp_err_t auth_password_handler(httpd_req_t *req)
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body required"));
     }
     cJSON *json = cJSON_Parse(body);
-    free(body);
+    web_ui_free(body);
     if (!json) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json"));
     }

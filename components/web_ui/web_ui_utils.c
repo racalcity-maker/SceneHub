@@ -5,9 +5,43 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+
+static const char *TAG = "web_ui_utils";
+#define WEB_UI_JSON_CHUNK_SIZE 2048
+
+void *web_ui_malloc(size_t size)
+{
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ptr) {
+        ptr = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    return ptr;
+}
+
+void *web_ui_calloc(size_t count, size_t size)
+{
+    void *ptr = heap_caps_calloc(count, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ptr) {
+        ptr = heap_caps_calloc(count, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    return ptr;
+}
+
+void web_ui_free(void *ptr)
+{
+    heap_caps_free(ptr);
+}
+
 static esp_err_t default_resp_send(httpd_req_t *req, const char *body, ssize_t body_len)
 {
     return httpd_resp_send(req, body, body_len);
+}
+
+static esp_err_t default_resp_send_chunk(httpd_req_t *req, const char *body, ssize_t body_len)
+{
+    return httpd_resp_send_chunk(req, body, body_len);
 }
 
 static esp_err_t default_resp_send_err(httpd_req_t *req, httpd_err_code_t error, const char *message)
@@ -57,6 +91,7 @@ static esp_err_t default_req_get_hdr_value_str(httpd_req_t *req, const char *fie
 
 static const web_ui_http_adapter_t s_default_http_adapter = {
     .resp_send = default_resp_send,
+    .resp_send_chunk = default_resp_send_chunk,
     .resp_send_err = default_resp_send_err,
     .resp_set_status = default_resp_set_status,
     .resp_set_type = default_resp_set_type,
@@ -75,8 +110,28 @@ esp_err_t web_ui_http_resp_send(httpd_req_t *req, const char *body, ssize_t body
     return s_http_adapter->resp_send(req, body, body_len);
 }
 
+esp_err_t web_ui_http_resp_send_chunk(httpd_req_t *req, const char *body, ssize_t body_len)
+{
+    if (s_http_adapter->resp_send_chunk) {
+        return s_http_adapter->resp_send_chunk(req, body, body_len);
+    }
+    if (!body) {
+        return ESP_OK;
+    }
+    return s_http_adapter->resp_send(req, body, body_len);
+}
+
 esp_err_t web_ui_http_resp_send_err(httpd_req_t *req, httpd_err_code_t error, const char *message)
 {
+    const char *uri = (req && req->uri[0]) ? req->uri : "?";
+    ESP_LOGW(TAG,
+             "HTTP error uri=%s status=%d msg=%s free_int=%u largest_int=%u free_psram=%u",
+             uri,
+             (int)error,
+             message ? message : "",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     return s_http_adapter->resp_send_err(req, error, message);
 }
 
@@ -132,6 +187,7 @@ void web_ui_http_reset_adapter_for_test(void)
 
 esp_err_t web_ui_send_json(httpd_req_t *req, cJSON *root)
 {
+    esp_err_t err = ESP_OK;
     if (!req || !root) {
         if (root) {
             cJSON_Delete(root);
@@ -143,8 +199,29 @@ esp_err_t web_ui_send_json(httpd_req_t *req, cJSON *root)
     if (!json) {
         return web_ui_http_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json encode failed");
     }
-    esp_err_t err = web_ui_send_ok(req, "application/json", json);
-    free(json);
+    err = web_ui_http_resp_set_type(req, "application/json");
+    if (err == ESP_OK) {
+        size_t len = strlen(json);
+        size_t offset = 0;
+        while (offset < len) {
+            size_t chunk = len - offset;
+            if (chunk > WEB_UI_JSON_CHUNK_SIZE) {
+                chunk = WEB_UI_JSON_CHUNK_SIZE;
+            }
+            err = web_ui_http_resp_send_chunk(req, json + offset, chunk);
+            if (err != ESP_OK) {
+                break;
+            }
+            offset += chunk;
+        }
+    }
+    if (err == ESP_OK) {
+        err = web_ui_http_resp_send_chunk(req, NULL, 0);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "json chunk send failed: %s", esp_err_to_name(err));
+    }
+    cJSON_free(json);
     return err;
 }
 

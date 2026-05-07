@@ -185,7 +185,12 @@ static bool qd_json_device_valid(const quest_device_t *device)
     if (!device || !device->id[0] || !device->name[0] || !device->client_id[0]) {
         return false;
     }
-    if (device->system_device || strcmp(device->id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0) {
+    if (device->system_device ||
+        strcmp(device->id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0 ||
+        strcmp(device->id, QUEST_DEVICE_SYSTEM_RELAY_ID) == 0 ||
+        strcmp(device->id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0 ||
+        strcmp(device->id, QUEST_DEVICE_SYSTEM_INPUT_ID) == 0 ||
+        strcmp(device->id, QUEST_DEVICE_SYSTEM_GPIO_ID) == 0) {
         return false;
     }
     if (device->command_count > QUEST_DEVICE_MAX_COMMANDS ||

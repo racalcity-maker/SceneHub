@@ -9,10 +9,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
-#include "esp_heap_caps.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 
@@ -27,6 +27,7 @@ static const char *TAG = "mqtt_core";
 mqtt_session_t *s_sessions = NULL;
 StackType_t *s_session_stacks[MQTT_MAX_CLIENTS];
 StaticTask_t *s_session_tcbs[MQTT_MAX_CLIENTS];
+uint8_t *s_session_rx_bufs[MQTT_MAX_CLIENTS];
 uint8_t *s_session_tx_bufs[MQTT_MAX_CLIENTS];
 retain_entry_t *s_retain = NULL;
 SemaphoreHandle_t s_lock = NULL;
@@ -37,6 +38,37 @@ StackType_t *s_accept_stack = NULL;
 StaticTask_t *s_accept_tcb = NULL;
 esp_timer_handle_t s_sweep_timer = NULL;
 bool s_event_handler_registered = false;
+
+static EXT_RAM_BSS_ATTR mqtt_session_t s_session_storage[MQTT_MAX_CLIENTS];
+static EXT_RAM_BSS_ATTR retain_entry_t s_retain_storage[MQTT_RETAIN_MAX];
+static EXT_RAM_BSS_ATTR StackType_t s_session_stack_storage[MQTT_MAX_CLIENTS][MQTT_CLIENT_STACK];
+static StaticTask_t s_session_tcb_storage[MQTT_MAX_CLIENTS];
+static EXT_RAM_BSS_ATTR uint8_t s_session_rx_storage[MQTT_MAX_CLIENTS][MQTT_MAX_PACKET + 1];
+static EXT_RAM_BSS_ATTR uint8_t s_session_tx_storage[MQTT_MAX_CLIENTS][MQTT_MAX_PACKET];
+static EXT_RAM_BSS_ATTR StackType_t s_accept_stack_storage[MQTT_ACCEPT_STACK];
+static StaticTask_t s_accept_tcb_storage;
+static StaticSemaphore_t s_lock_storage;
+static bool s_storage_ready = false;
+
+static void mqtt_core_bind_static_storage(void)
+{
+    if (s_storage_ready) {
+        return;
+    }
+    memset(s_session_storage, 0, sizeof(s_session_storage));
+    memset(s_retain_storage, 0, sizeof(s_retain_storage));
+    s_sessions = s_session_storage;
+    s_retain = s_retain_storage;
+    for (size_t i = 0; i < MQTT_MAX_CLIENTS; ++i) {
+        s_session_stacks[i] = s_session_stack_storage[i];
+        s_session_tcbs[i] = &s_session_tcb_storage[i];
+        s_session_rx_bufs[i] = s_session_rx_storage[i];
+        s_session_tx_bufs[i] = s_session_tx_storage[i];
+    }
+    s_accept_stack = s_accept_stack_storage;
+    s_accept_tcb = &s_accept_tcb_storage;
+    s_storage_ready = true;
+}
 
 size_t session_index(const mqtt_session_t *sess)
 {
@@ -51,56 +83,32 @@ bool ensure_session_task_storage(size_t idx)
     if (idx >= MQTT_MAX_CLIENTS) {
         return false;
     }
-    if (!s_session_stacks[idx]) {
-        s_session_stacks[idx] = heap_caps_malloc(MQTT_CLIENT_STACK * sizeof(StackType_t),
-                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_session_stacks[idx]) {
-            return false;
-        }
-    }
-    if (!s_session_tcbs[idx]) {
-        s_session_tcbs[idx] = heap_caps_malloc(sizeof(StaticTask_t),
-                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (!s_session_tcbs[idx]) {
-            heap_caps_free(s_session_stacks[idx]);
-            s_session_stacks[idx] = NULL;
-            return false;
-        }
-    }
-    return true;
+    mqtt_core_bind_static_storage();
+    return s_session_stacks[idx] && s_session_tcbs[idx];
 }
 
+uint8_t *ensure_session_rx_buffer(size_t idx)
+{
+    if (idx >= MQTT_MAX_CLIENTS) {
+        return NULL;
+    }
+    mqtt_core_bind_static_storage();
+    return s_session_rx_bufs[idx];
+}
 
 uint8_t *ensure_session_tx_buffer(size_t idx)
 {
     if (idx >= MQTT_MAX_CLIENTS) {
         return NULL;
     }
-    if (!s_session_tx_bufs[idx]) {
-        s_session_tx_bufs[idx] = heap_caps_malloc(MQTT_MAX_PACKET, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
+    mqtt_core_bind_static_storage();
     return s_session_tx_bufs[idx];
 }
 
 bool ensure_accept_task_storage(void)
 {
-    if (!s_accept_stack) {
-        s_accept_stack = heap_caps_malloc(MQTT_ACCEPT_STACK * sizeof(StackType_t),
-                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_accept_stack) {
-            return false;
-        }
-    }
-    if (!s_accept_tcb) {
-        s_accept_tcb = heap_caps_malloc(sizeof(StaticTask_t),
-                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (!s_accept_tcb) {
-            heap_caps_free(s_accept_stack);
-            s_accept_stack = NULL;
-            return false;
-        }
-    }
-    return true;
+    mqtt_core_bind_static_storage();
+    return s_accept_stack && s_accept_tcb;
 }
 
 void mqtt_core_get_client_stats(mqtt_client_stats_t *out)
@@ -165,25 +173,10 @@ void request_session_close(mqtt_session_t *sess, const char *reason, int err)
 
 esp_err_t mqtt_core_init(void)
 {
+    mqtt_core_bind_static_storage();
     if (!s_lock) {
-        s_lock = xSemaphoreCreateMutex();
-    }
-    if (!s_sessions) {
-        s_sessions = heap_caps_calloc(MQTT_MAX_CLIENTS, sizeof(mqtt_session_t),
-                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_sessions) {
-            ESP_LOGE(TAG, "failed to allocate sessions in PSRAM");
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    if (!s_retain) {
-        s_retain = heap_caps_calloc(MQTT_RETAIN_MAX, sizeof(retain_entry_t),
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_retain) {
-            ESP_LOGE(TAG, "failed to allocate retain table in PSRAM");
-            // Освобождаем ранее выделенную память
-            heap_caps_free(s_sessions);
-            s_sessions = NULL;
+        s_lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
+        if (!s_lock) {
             return ESP_ERR_NO_MEM;
         }
     }

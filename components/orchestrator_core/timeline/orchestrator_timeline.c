@@ -15,6 +15,7 @@
 
 typedef struct {
     SemaphoreHandle_t lock;
+    StaticSemaphore_t lock_storage;
     size_t head;
     size_t count;
     bool ready;
@@ -123,7 +124,7 @@ static bool timeline_state_changed(const char *device_id, const char *key, const
 esp_err_t orchestrator_timeline_init(void)
 {
     if (!s_timeline.ready) {
-        s_timeline.lock = xSemaphoreCreateMutex();
+        s_timeline.lock = xSemaphoreCreateMutexStatic(&s_timeline.lock_storage);
         if (!s_timeline.lock) {
             return ESP_ERR_NO_MEM;
         }

@@ -7,6 +7,7 @@
 
 typedef struct {
     SemaphoreHandle_t mutex;
+    StaticSemaphore_t mutex_storage;
     service_status_entry_t entries[SERVICE_STATUS_COUNT];
 } service_status_state_t;
 
@@ -27,7 +28,7 @@ static void service_status_unlock(void)
 esp_err_t service_status_init(void)
 {
     if (!s_status.mutex) {
-        s_status.mutex = xSemaphoreCreateMutex();
+        s_status.mutex = xSemaphoreCreateMutexStatic(&s_status.mutex_storage);
         if (!s_status.mutex) {
             return ESP_ERR_NO_MEM;
         }
@@ -47,6 +48,12 @@ void service_status_mark_init(service_status_id_t id, esp_err_t err)
     if (service_status_lock()) {
         s_status.entries[id].init_attempted = true;
         s_status.entries[id].init_ok = (err == ESP_OK);
+        s_status.entries[id].last_error = err;
+        if (err == ESP_OK) {
+            s_status.entries[id].fault = false;
+        } else {
+            s_status.entries[id].fault = true;
+        }
         if (err != ESP_OK) {
             s_status.entries[id].start_attempted = false;
             s_status.entries[id].start_ok = false;
@@ -63,6 +70,24 @@ void service_status_mark_start(service_status_id_t id, esp_err_t err)
     if (service_status_lock()) {
         s_status.entries[id].start_attempted = true;
         s_status.entries[id].start_ok = (err == ESP_OK);
+        s_status.entries[id].last_error = err;
+        if (err == ESP_OK) {
+            s_status.entries[id].fault = false;
+        } else {
+            s_status.entries[id].fault = true;
+        }
+        service_status_unlock();
+    }
+}
+
+void service_status_mark_fault(service_status_id_t id, esp_err_t err)
+{
+    if (id < 0 || id >= SERVICE_STATUS_COUNT) {
+        return;
+    }
+    if (service_status_lock()) {
+        s_status.entries[id].fault = (err != ESP_OK);
+        s_status.entries[id].last_error = err;
         service_status_unlock();
     }
 }
@@ -93,6 +118,8 @@ const char *service_status_name(service_status_id_t id)
         return "web_ui";
     case SERVICE_STATUS_EVENT_BUS:
         return "event_bus";
+    case SERVICE_STATUS_HARDWARE_IO:
+        return "hardware_io";
     default:
         return "unknown";
     }

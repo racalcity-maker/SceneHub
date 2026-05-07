@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "quest_common_utils.h"
+#include "hardware_io.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -20,9 +21,11 @@ static const char *TAG = "gm_room_session";
 EXT_RAM_BSS_ATTR gm_room_session_t g_gm_room_sessions[GM_SESSION_MAX_ROOMS];
 static uint32_t s_generation = 0;
 static SemaphoreHandle_t s_sessions_mutex = NULL;
+static StaticSemaphore_t s_sessions_mutex_storage;
 static portMUX_TYPE s_sessions_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 QueueHandle_t s_event_queue = NULL;
 static TaskHandle_t s_event_task = NULL;
+static TaskHandle_t s_runtime_task = NULL;
 
 void *gm_room_session_heap_alloc(size_t size)
 {
@@ -40,7 +43,7 @@ static esp_err_t sessions_ensure_mutex(void)
     }
     portENTER_CRITICAL(&s_sessions_mutex_init_lock);
     if (!s_sessions_mutex) {
-        s_sessions_mutex = xSemaphoreCreateMutex();
+        s_sessions_mutex = xSemaphoreCreateMutexStatic(&s_sessions_mutex_storage);
     }
     portEXIT_CRITICAL(&s_sessions_mutex_init_lock);
     return s_sessions_mutex ? ESP_OK : ESP_ERR_NO_MEM;
@@ -73,6 +76,24 @@ static esp_err_t gm_room_session_ensure_event_worker(void)
             s_event_task = NULL;
             return ESP_ERR_NO_MEM;
         }
+    }
+    return ESP_OK;
+}
+
+static esp_err_t gm_room_session_ensure_runtime_worker(void)
+{
+    if (s_runtime_task) {
+        return ESP_OK;
+    }
+    BaseType_t ok = xTaskCreate(gm_room_session_runtime_task,
+                                "gm_room_runtime",
+                                GM_ROOM_SESSION_RUNTIME_TASK_STACK,
+                                NULL,
+                                5,
+                                &s_runtime_task);
+    if (ok != pdPASS) {
+        s_runtime_task = NULL;
+        return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
 }
@@ -355,7 +376,15 @@ esp_err_t scenario_init_branch_runtimes_locked(gm_room_session_t *session)
             dst->priority = src->priority;
             dst->cooldown_ms = src->cooldown_ms;
             dst->cooldown_until_ms = 0;
-            dst->max_fire_count = src->run_once ? 1 : src->max_fire_count;
+            if (src->type == ROOM_SCENARIO_BRANCH_REACTIVE &&
+                (src->variant_count > 0 ||
+                 src->trigger.kind != ROOM_SCENARIO_REACTIVE_TRIGGER_NONE)) {
+                dst->max_fire_count = src->policy_mode == ROOM_SCENARIO_REACTIVE_POLICY_SINGLE
+                                          ? (src->run_once ? 1 : 0)
+                                          : src->max_fire_count;
+            } else {
+                dst->max_fire_count = src->run_once ? 1 : src->max_fire_count;
+            }
             dst->fire_count = 0;
             dst->run_once = src->run_once;
             dst->fired_once = false;
@@ -641,6 +670,10 @@ esp_err_t gm_room_session_init(void)
         return err;
     }
     gm_room_session_reset_all();
+    err = gm_room_session_ensure_runtime_worker();
+    if (err != ESP_OK) {
+        return err;
+    }
     return ESP_OK;
 }
 

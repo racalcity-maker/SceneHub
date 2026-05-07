@@ -10,6 +10,18 @@ All notable project changes are documented in this file.
 - Added a `command_executor` component as the first P2.2 extraction step, routing SceneHub-native MQTT and system audio command side effects behind one executor API.
 - Added GM room runtime refresh endpoint and audio path metadata warmup/cache for selected profiles.
 - Added dedicated command executor backend tests for dispatch metadata, policy checks, pending results, terminal result clearing, and timeout events.
+- Added the first `hardware_io` implementation slice with configurable local relay GPIO channels.
+- Added built-in `system_relay` Quest Device commands: `set`, `pulse`, and `toggle`.
+- Added relay module active-low configuration and defaulted the first relay set to GPIO 15-18 for the current board bring-up.
+- Added built-in `system_mosfet` PWM channels with `set`, `fade`, and `pulse` commands routed through `hardware_io`.
+- Added `system_mosfet all_off` and MOSFET `pulse_active` / `fade_active` status fields for Hardware IO diagnostics.
+- Added the first GM Panel Hardware IO screen for built-in relay and MOSFET testing through the new frontend action/API path.
+- Added `/api/hardware-io/status` so the Hardware IO screen can show relay and MOSFET GPIO/state/PWM status.
+- Added explicit Hardware IO service availability/fault metadata to `/api/hardware-io/status` and the main status service block.
+- Added system-level orchestrator/GM issues for service runtime faults, including `hardware_io` safe-off failures.
+- Added HTTP error diagnostics with URI and heap counters for low-memory Web UI failures.
+- Added a GM Panel bundle freshness checker so split frontend sources can be verified against the generated `gm_panel.js`.
+- Added a memory allocation policy document for internal heap, PSRAM, DMA buffers, runtime-hot paths, and audio buffer cleanup.
 
 ### Changed
 
@@ -27,6 +39,9 @@ All notable project changes are documented in this file.
 - Split orchestrator Web UI API activity, control-device, and room-scenario JSON views into dedicated modules, cutting down `orchestrator_api_view.c`.
 - Split GM room scenario runtime wait-state helpers into a dedicated internal module, cutting down `gm_room_session_runtime.c`.
 - Routed GM session audio cleanup through the executor-backed `system_audio` stop command.
+- Routed `system_relay` commands through `command_executor` while keeping external Quest Device relay commands on the MQTT backend.
+- Routed `system_mosfet` commands through `command_executor` while keeping external Quest Device MOSFET commands on the MQTT backend.
+- Moved Web UI cJSON allocations to PSRAM-first allocation to preserve internal heap for larger GM JSON responses.
 - Updated Quest Device discovery to use `device_description` with `command`, `capability`, and `policy` metadata.
 - Normalized command result handling around `accepted`, `done`, `failed`, `rejected`, and timeout semantics.
 - Added shared command-result status helpers in `quest_common` for executor, ingest, runtime, and orchestrator read-model code.
@@ -44,6 +59,44 @@ All notable project changes are documented in this file.
 - Expanded Reactive Branch v2 runtime coverage for `queue_one`, cooldown-from-start, `on_done` result policy, fail-scenario cleanup, operator/runtime triggers, `rotate`/`escalate`, `on_complete`, and sequential command groups.
 - Added the first GM scenario builder editor for creating Reactive Branch v2 branches with trigger, guards, policy, reentry, variants/actions, and result policy while keeping legacy reactive branches editable.
 - Reworked the Reactive Branch v2 editor UX around `Reaction type`, `When`, `If`, and `Then`, with empty-by-default actions, escalation levels, quick action buttons, and advanced settings kept out of the main flow.
+- Added collapsible Reactive Branch v2 actions and explicit `Can repeat` / `Run once` behavior for `Same actions`.
+- Made `Can repeat` clear hidden max-fire limits, while `Run once` saves a one-fire limit.
+- Added hardware safe-off on `Stop game` and `Reset game` for built-in relay/MOSFET/GPIO outputs. `END_GAME` intentionally keeps audio and hardware cleanup explicit.
+- Moved `Stop game` / `Reset game` hardware safe-off out of the GM session lock and surface safe-off failures through `service_status`.
+- Made the Hardware IO GM Panel controls disable themselves when the `hardware_io` service is unavailable or faulted instead of showing an apparently healthy empty channel list.
+- Updated Scenario setup, architecture, Hardware IO, API and Known Issues documentation for Reactive Branch v2, local hardware IO and resolved OTA-audio noise behavior.
+- Reworked GM Panel refresh behavior toward selective rendering: room runtime polling patches only the runtime panel, visible clocks update locally, and the manual-button sidebar skips DOM replacement unless its render key changes.
+- Reworked GM Panel static-data polling to use `/api/gm/versions` for changed devices, observed clients, scenarios, and profiles instead of forcing broad GM snapshot reloads.
+- Kept full GM Panel rendering as the fallback for navigation, editor save/delete, room structural changes, and unknown state transitions.
+- Split GM Panel scenario editor collection so branch settings and normal step collection are handled by focused helpers instead of one large `collectScenarioEditor()` body.
+- Added `json` field support to the shared GM Panel schema-form helper.
+- Moved hot-path GM runtime wait/reactive scratch storage toward static PSRAM-backed buffers to reduce repeated heap allocation/free churn.
+- Moved GM game-control, scenario-start and GM API session/scenario scratch storage to static PSRAM-backed buffers protected by mutexes.
+- Removed the unused command-executor heap allocation helper from the internal executor API.
+- Replaced command-executor flat parameter cJSON parsing with a bounded no-allocation scanner for audio and local hardware commands.
+- Replaced MQTT command-envelope cJSON building with a static PSRAM payload writer that merges default/request args without heap allocation.
+- Moved audio output/tone/silence buffers, WAV decode buffers, reader contexts, MP3 wrapper buffers, and Helix decoder scratch to static or bounded PSRAM/DMA storage.
+- Moved Web UI auth/request buffers to shared PSRAM-first allocation helpers and replaced OTA upload chunk allocation with a static PSRAM chunk buffer.
+- Moved `/api/gm/room/runtime` session scratch storage to a static PSRAM-backed buffer and stopped loading the full selected scenario inside the HTTP task before scenario start.
+- Made `/api/gm/room/profile/select` lightweight by using reference validation and scenario-name lookup instead of full scenario validation/loading, and moved selected-profile audio warmup to a coalesced background event-bus job outside the HTTP task.
+- Fixed cJSON hook ownership after moving Web UI JSON allocations to PSRAM: printed JSON buffers are now released through the cJSON/heap-caps allocator path.
+- Changed game-mode profile HTTP handlers to use lightweight room/scenario reference validation instead of running full scenario validation inside the HTTP task.
+- Changed `/api/gm/room/scenarios` to return saved scenario metadata without re-running full scenario validation for every scenario in the HTTP task.
+- Replaced fixed-size `config_store` snapshot allocations with a static PSRAM scratch buffer protected by a static mutex.
+- Fixed a static audio reader context race where a completed background reader could mark the channel done before releasing its fixed context, causing the next background track to fail with `reader ctx unavailable`.
+- Replaced orchestrator registry snapshot scratch allocations with a shared static PSRAM scratch pool for device lists, ingest lookups, room sessions, scenario lists, and validation reports.
+- Reworked orchestrator room-scenario scratch to iterate one scenario at a time instead of reserving a second full `room_scenario_t[ROOM_SCENARIO_MAX_SCENARIOS]` array in PSRAM.
+- Replaced MQTT retained-message per-publish payload allocation/free with fixed retained payload storage inside the PSRAM retained table.
+- Replaced MQTT broker session tables, retained table, client RX/TX buffers, accept/client task stacks, and broker mutex storage with fixed static storage.
+- Moved core service/runtime mutexes in GM, command executor, Hardware IO, service status, MQTT and orchestrator modules to static semaphore storage.
+- Reworked `/api/gm/room/scenarios` to build scenario editor responses one scenario at a time instead of allocating a full scenario array per request.
+- Reduced the in-memory room scenario catalog limit from 24 to 12 scenarios to return about 1.3 MB of PSRAM on the current firmware shape.
+- Removed per-message MQTT PUBLISH payload allocation by parsing incoming payloads in reusable per-client RX packet buffers.
+- Replaced MQTT event bridge `malloc` copies with a fixed PSRAM job pool for outgoing event-to-MQTT publishing.
+
+### Fixed
+
+- Fixed GM game start stack pressure by avoiding duplicate full profile validation in the HTTP task and moving room-scenario validation Quest Device scratch storage to PSRAM.
 
 ## 2026-05-03
 

@@ -98,6 +98,8 @@ typedef struct {
     bool init_ok;
     bool start_attempted;
     bool start_ok;
+    bool fault;
+    esp_err_t last_error;
     orch_health_t health;
 } orch_service_entry_t;
 

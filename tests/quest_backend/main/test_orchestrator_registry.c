@@ -136,6 +136,30 @@ static void test_orchestrator_registry_snapshot_collects_rooms_devices_services_
     TEST_ASSERT_EQUAL_STRING("disabled", s_reg_device.state);
 }
 
+static void test_orchestrator_registry_service_fault_creates_system_issue(void)
+{
+    bool found = false;
+
+    reg_bootstrap();
+    memset(&s_reg_snapshot_a, 0, sizeof(s_reg_snapshot_a));
+    service_status_mark_init(SERVICE_STATUS_HARDWARE_IO, ESP_OK);
+    service_status_mark_fault(SERVICE_STATUS_HARDWARE_IO, ESP_ERR_INVALID_STATE);
+
+    TEST_ASSERT_EQUAL(ESP_OK, orchestrator_registry_build_snapshot(&s_reg_snapshot_a));
+    TEST_ASSERT_TRUE(s_reg_snapshot_a.has_fault);
+    for (uint8_t i = 0; i < s_reg_snapshot_a.issue_count; ++i) {
+        const orch_issue_entry_t *issue = &s_reg_snapshot_a.issues[i];
+        if (strcmp(issue->code, "service_fault") == 0 &&
+            strcmp(issue->title, "hardware_io fault") == 0) {
+            found = true;
+            TEST_ASSERT_EQUAL(ORCH_ISSUE_SCOPE_SYSTEM, issue->scope);
+            TEST_ASSERT_EQUAL(ORCH_ISSUE_SEVERITY_ERROR, issue->severity);
+            break;
+        }
+    }
+    TEST_ASSERT_TRUE(found);
+}
+
 static void test_orchestrator_registry_cache_version_changes_after_invalidate(void)
 {
     reg_bootstrap();
@@ -186,6 +210,7 @@ void register_orchestrator_registry_tests(void)
 {
     RUN_TEST(test_orchestrator_registry_rejects_invalid_args);
     RUN_TEST(test_orchestrator_registry_snapshot_collects_rooms_devices_services_and_scenarios);
+    RUN_TEST(test_orchestrator_registry_service_fault_creates_system_issue);
     RUN_TEST(test_orchestrator_registry_cache_version_changes_after_invalidate);
     RUN_TEST(test_orchestrator_registry_lists_room_scenarios_and_details);
 }

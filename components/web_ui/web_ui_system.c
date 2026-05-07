@@ -9,7 +9,6 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -75,7 +74,7 @@ esp_err_t wifi_scan_handler(httpd_req_t *req)
 
     uint16_t ap_num = 0;
     esp_wifi_scan_get_ap_num(&ap_num);
-    wifi_ap_record_t *aps = calloc(ap_num, sizeof(wifi_ap_record_t));
+    wifi_ap_record_t *aps = web_ui_calloc(ap_num, sizeof(wifi_ap_record_t));
     if (!aps) {
         xSemaphoreGive(s_scan_mutex);
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"));
@@ -84,7 +83,7 @@ esp_err_t wifi_scan_handler(httpd_req_t *req)
 
     cJSON *root = cJSON_CreateArray();
     if (!root) {
-        free(aps);
+        web_ui_free(aps);
         xSemaphoreGive(s_scan_mutex);
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"));
     }
@@ -92,13 +91,13 @@ esp_err_t wifi_scan_handler(httpd_req_t *req)
         cJSON *item = cJSON_CreateString((const char *)aps[i].ssid);
         if (!item) {
             cJSON_Delete(root);
-            free(aps);
+            web_ui_free(aps);
             xSemaphoreGive(s_scan_mutex);
             return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"));
         }
         cJSON_AddItemToArray(root, item);
     }
-    free(aps);
+    web_ui_free(aps);
     xSemaphoreGive(s_scan_mutex);
     return WEB_HTTP_CHECK(web_ui_send_json(req, root));
 }
@@ -193,7 +192,7 @@ esp_err_t mqtt_users_handler(httpd_req_t *req)
     if (len == 0 || len > 4096) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid body"));
     }
-    char *body = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    char *body = web_ui_malloc(len + 1);
     if (!body) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory"));
     }
@@ -204,7 +203,7 @@ esp_err_t mqtt_users_handler(httpd_req_t *req)
             if (r == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
-            heap_caps_free(body);
+            web_ui_free(body);
             return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"));
         }
         received += (size_t)r;
@@ -215,7 +214,7 @@ esp_err_t mqtt_users_handler(httpd_req_t *req)
         if (root) {
             cJSON_Delete(root);
         }
-        heap_caps_free(body);
+        web_ui_free(body);
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "array required"));
     }
     app_config_t cfg = *config_store_get();
@@ -224,12 +223,12 @@ esp_err_t mqtt_users_handler(httpd_req_t *req)
     cJSON_ArrayForEach(item, root) {
         if (cfg.mqtt.user_count >= CONFIG_STORE_MAX_MQTT_USERS) {
             cJSON_Delete(root);
-            heap_caps_free(body);
+            web_ui_free(body);
             return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "too many users"));
         }
         if (!cJSON_IsObject(item)) {
             cJSON_Delete(root);
-            heap_caps_free(body);
+            web_ui_free(body);
             return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid user entry"));
         }
         const cJSON *client = cJSON_GetObjectItem(item, "client_id");
@@ -237,7 +236,7 @@ esp_err_t mqtt_users_handler(httpd_req_t *req)
         const cJSON *password = cJSON_GetObjectItem(item, "password");
         if (!cJSON_IsString(client) || !cJSON_IsString(username) || !cJSON_IsString(password)) {
             cJSON_Delete(root);
-            heap_caps_free(body);
+            web_ui_free(body);
             return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing fields"));
         }
         app_mqtt_user_t *dst = &cfg.mqtt.users[cfg.mqtt.user_count++];
@@ -249,7 +248,7 @@ esp_err_t mqtt_users_handler(httpd_req_t *req)
         dst->password[sizeof(dst->password) - 1] = 0;
     }
     cJSON_Delete(root);
-    heap_caps_free(body);
+    web_ui_free(body);
     esp_err_t err = config_store_set(&cfg);
     if (err != ESP_OK) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed"));

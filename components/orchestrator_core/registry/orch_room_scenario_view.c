@@ -2,20 +2,9 @@
 
 #include <string.h>
 
-#include "esp_heap_caps.h"
-
 static size_t orch_room_scenario_min_size(size_t a, size_t b)
 {
     return a < b ? a : b;
-}
-
-static void *orch_room_scenario_alloc(size_t size)
-{
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return ptr;
 }
 
 static orch_room_scenario_step_type_t orch_room_scenario_map_step_type(room_scenario_step_type_t type)
@@ -188,7 +177,7 @@ static void orch_room_scenario_copy_detail(const room_scenario_t *src,
     for (size_t i = 0; i < step_count; ++i) {
         orch_room_scenario_copy_step(&src->steps[i], &dst->steps[i]);
     }
-    report = orch_room_scenario_alloc(sizeof(*report));
+    report = orch_scratch_validation_report();
     if (!report) {
         return;
     }
@@ -199,43 +188,6 @@ static void orch_room_scenario_copy_detail(const room_scenario_t *src,
             dst->validation_issues[i] = report->issues[i];
         }
     }
-    heap_caps_free(report);
-}
-
-static esp_err_t orch_room_scenario_load_room(const char *room_id,
-                                              room_scenario_t **out_items,
-                                              size_t *out_count)
-{
-    room_scenario_t *items = NULL;
-    size_t total = 0;
-    size_t capacity = 0;
-    esp_err_t err = ESP_OK;
-    if (!room_id || !room_id[0] || !out_items || !out_count) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    *out_items = NULL;
-    *out_count = 0;
-    (void)room_scenario_init();
-    err = room_scenario_list_by_room(room_id, NULL, 0, &total);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
-        return err;
-    }
-    if (total == 0) {
-        return ESP_OK;
-    }
-    capacity = orch_room_scenario_min_size(total, ROOM_SCENARIO_MAX_SCENARIOS);
-    items = orch_snapshot_alloc(sizeof(*items) * capacity);
-    if (!items) {
-        return ESP_ERR_NO_MEM;
-    }
-    err = room_scenario_list_by_room(room_id, items, capacity, &total);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
-        heap_caps_free(items);
-        return err;
-    }
-    *out_items = items;
-    *out_count = orch_room_scenario_min_size(total, capacity);
-    return ESP_OK;
 }
 
 void orch_room_scenario_view_collect_all(orch_registry_snapshot_t *snapshot)
@@ -245,16 +197,21 @@ void orch_room_scenario_view_collect_all(orch_registry_snapshot_t *snapshot)
     }
     snapshot->room_scenario_count = 0;
     for (uint8_t room_index = 0; room_index < snapshot->room_count; ++room_index) {
-        room_scenario_t *items = NULL;
-        size_t count = 0;
-        esp_err_t err = orch_room_scenario_load_room(snapshot->rooms[room_index].room_id, &items, &count);
-        if (err != ESP_OK) {
-            continue;
+        for (size_t i = 0; snapshot->room_scenario_count < ORCH_REGISTRY_MAX_ROOM_SCENARIOS; ++i) {
+            room_scenario_t *scenario = orch_scratch_room_scenario();
+            size_t total = 0;
+            esp_err_t err = room_scenario_get_by_room_index(snapshot->rooms[room_index].room_id,
+                                                            i,
+                                                            scenario,
+                                                            &total);
+            if (err == ESP_ERR_NOT_FOUND) {
+                break;
+            }
+            if (err != ESP_OK) {
+                break;
+            }
+            orch_room_scenario_copy_summary(scenario, &snapshot->room_scenarios[snapshot->room_scenario_count++]);
         }
-        for (size_t i = 0; i < count && snapshot->room_scenario_count < ORCH_REGISTRY_MAX_ROOM_SCENARIOS; ++i) {
-            orch_room_scenario_copy_summary(&items[i], &snapshot->room_scenarios[snapshot->room_scenario_count++]);
-        }
-        heap_caps_free(items);
         if (snapshot->room_scenario_count >= ORCH_REGISTRY_MAX_ROOM_SCENARIOS) {
             return;
         }
@@ -303,23 +260,35 @@ esp_err_t orch_room_scenario_view_list_details(const char *room_id,
                                                size_t max_scenarios,
                                                size_t *out_count)
 {
-    room_scenario_t *items = NULL;
+    room_scenario_t *scenario = NULL;
     size_t count = 0;
-    size_t copy_count = 0;
     esp_err_t err = ESP_OK;
     if (!room_id || !room_id[0] || !out_scenarios || !out_count || max_scenarios == 0) {
         return ESP_ERR_INVALID_ARG;
     }
     *out_count = 0;
-    err = orch_room_scenario_load_room(room_id, &items, &count);
+    err = orch_scratch_lock();
     if (err != ESP_OK) {
         return err;
     }
-    copy_count = orch_room_scenario_min_size(count, max_scenarios);
-    for (size_t i = 0; i < copy_count; ++i) {
-        orch_room_scenario_copy_detail(&items[i], &out_scenarios[i]);
+    scenario = orch_scratch_room_scenario();
+    for (size_t i = 0; i < max_scenarios; ++i) {
+        size_t total = 0;
+        err = room_scenario_get_by_room_index(room_id, i, scenario, &total);
+        if (err == ESP_ERR_NOT_FOUND) {
+            count = total;
+            err = ESP_OK;
+            break;
+        }
+        if (err != ESP_OK) {
+            orch_scratch_unlock();
+            return err;
+        }
+        count = total;
+        orch_room_scenario_copy_detail(scenario, &out_scenarios[i]);
     }
     *out_count = count;
-    heap_caps_free(items);
-    return count > max_scenarios ? ESP_ERR_INVALID_SIZE : ESP_OK;
+    err = count > max_scenarios ? ESP_ERR_INVALID_SIZE : ESP_OK;
+    orch_scratch_unlock();
+    return err;
 }

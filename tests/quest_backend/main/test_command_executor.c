@@ -134,6 +134,15 @@ static void test_command_executor_rejects_manual_or_scenario_disabled_policy(voi
     TEST_ASSERT_EQUAL_STRING("device_command_scenario_disabled", error);
 }
 
+static void test_command_executor_device_command_helper_requires_manual_policy(void)
+{
+    ce_test_bootstrap();
+    ce_add_relay_device(false, true, false, 0);
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE,
+                      command_executor_execute_device_command("relay", "pulse", "{\"duration_ms\":100}"));
+}
+
 static void test_command_executor_accepted_result_keeps_pending_until_timeout(void)
 {
     command_executor_request_t request = {0};
@@ -209,6 +218,7 @@ void register_command_executor_tests(void)
 {
     RUN_TEST(test_command_executor_dispatches_mqtt_and_tracks_result_required);
     RUN_TEST(test_command_executor_rejects_manual_or_scenario_disabled_policy);
+    RUN_TEST(test_command_executor_device_command_helper_requires_manual_policy);
     RUN_TEST(test_command_executor_accepted_result_keeps_pending_until_timeout);
     RUN_TEST(test_command_executor_terminal_result_clears_pending);
     RUN_TEST(test_command_executor_cancel_request_clears_pending);

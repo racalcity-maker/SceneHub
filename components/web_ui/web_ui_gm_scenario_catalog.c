@@ -303,27 +303,39 @@ static esp_err_t gm_scenario_add_quest_devices_catalog(cJSON *root)
     }
     heap_caps_free(devices);
 
-    quest_device_t *system_audio = gm_scenario_alloc_devices(1);
-    if (!system_audio) {
+    const char *system_ids[] = {
+        QUEST_DEVICE_SYSTEM_AUDIO_ID,
+        QUEST_DEVICE_SYSTEM_RELAY_ID,
+        QUEST_DEVICE_SYSTEM_MOSFET_ID,
+        QUEST_DEVICE_SYSTEM_INPUT_ID,
+        QUEST_DEVICE_SYSTEM_GPIO_ID,
+    };
+    quest_device_t *system_device = gm_scenario_alloc_devices(1);
+    if (!system_device) {
         cJSON_Delete(array);
         return ESP_ERR_NO_MEM;
     }
-    err = quest_device_get(QUEST_DEVICE_SYSTEM_AUDIO_ID, system_audio);
-    if (err == ESP_OK) {
+    for (size_t i = 0; i < sizeof(system_ids) / sizeof(system_ids[0]); ++i) {
+        memset(system_device, 0, sizeof(*system_device));
+        err = quest_device_get(system_ids[i], system_device);
+        if (err != ESP_OK) {
+            break;
+        }
         cJSON *obj = cJSON_CreateObject();
         if (!obj) {
-            heap_caps_free(system_audio);
+            heap_caps_free(system_device);
             cJSON_Delete(array);
             return ESP_ERR_NO_MEM;
         }
-        err = quest_device_to_json(system_audio, obj);
+        err = quest_device_to_json(system_device, obj);
         if (err == ESP_OK) {
             cJSON_AddItemToArray(array, obj);
         } else {
             cJSON_Delete(obj);
+            break;
         }
     }
-    heap_caps_free(system_audio);
+    heap_caps_free(system_device);
     if (err != ESP_OK) {
         cJSON_Delete(array);
         return err;

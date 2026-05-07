@@ -224,41 +224,52 @@ esp_err_t gm_quest_devices_handler(httpd_req_t *req)
         emitted++;
     }
     if (include_system) {
-        quest_device_t *system_audio = gm_qd_alloc(sizeof(*system_audio));
+        const char *system_ids[] = {
+            QUEST_DEVICE_SYSTEM_AUDIO_ID,
+            QUEST_DEVICE_SYSTEM_RELAY_ID,
+            QUEST_DEVICE_SYSTEM_MOSFET_ID,
+            QUEST_DEVICE_SYSTEM_INPUT_ID,
+            QUEST_DEVICE_SYSTEM_GPIO_ID,
+        };
+        quest_device_t *system_device = gm_qd_alloc(sizeof(*system_device));
         cJSON *item = NULL;
-        if (!system_audio) {
+        if (!system_device) {
             cJSON_Delete(root);
             cJSON_Delete(items);
             heap_caps_free(devices);
             return gm_qd_send_error(req, ESP_ERR_NO_MEM);
         }
-        err = quest_device_get(QUEST_DEVICE_SYSTEM_AUDIO_ID, system_audio);
-        if (err != ESP_OK) {
-            cJSON_Delete(root);
-            cJSON_Delete(items);
-            heap_caps_free(system_audio);
-            heap_caps_free(devices);
-            return gm_qd_send_error(req, err);
+        for (size_t i = 0; i < sizeof(system_ids) / sizeof(system_ids[0]); ++i) {
+            memset(system_device, 0, sizeof(*system_device));
+            err = quest_device_get(system_ids[i], system_device);
+            if (err != ESP_OK) {
+                heap_caps_free(system_device);
+                cJSON_Delete(root);
+                cJSON_Delete(items);
+                heap_caps_free(devices);
+                return gm_qd_send_error(req, err);
+            }
+            item = cJSON_CreateObject();
+            if (!item) {
+                heap_caps_free(system_device);
+                cJSON_Delete(root);
+                cJSON_Delete(items);
+                heap_caps_free(devices);
+                return gm_qd_send_error(req, ESP_ERR_NO_MEM);
+            }
+            err = quest_device_to_json(system_device, item);
+            if (err != ESP_OK) {
+                cJSON_Delete(item);
+                heap_caps_free(system_device);
+                cJSON_Delete(root);
+                cJSON_Delete(items);
+                heap_caps_free(devices);
+                return gm_qd_send_error(req, err);
+            }
+            cJSON_AddItemToArray(items, item);
+            emitted++;
         }
-        item = cJSON_CreateObject();
-        if (!item) {
-            cJSON_Delete(root);
-            cJSON_Delete(items);
-            heap_caps_free(system_audio);
-            heap_caps_free(devices);
-            return gm_qd_send_error(req, ESP_ERR_NO_MEM);
-        }
-        err = quest_device_to_json(system_audio, item);
-        heap_caps_free(system_audio);
-        if (err != ESP_OK) {
-            cJSON_Delete(item);
-            cJSON_Delete(root);
-            cJSON_Delete(items);
-            heap_caps_free(devices);
-            return gm_qd_send_error(req, err);
-        }
-        cJSON_AddItemToArray(items, item);
-        emitted++;
+        heap_caps_free(system_device);
     }
     cJSON_AddNumberToObject(root, "device_count", emitted);
     cJSON_AddItemToObject(root, "devices", items);

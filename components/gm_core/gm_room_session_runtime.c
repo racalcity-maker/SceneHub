@@ -3,61 +3,111 @@
 #include <string.h>
 
 #include "command_executor.h"
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
+#include "esp_log.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "quest_common_utils.h"
 #include "quest_device.h"
 #include "room_scenario.h"
 
-#define GM_SCENARIO_MAX_STEPS_PER_TICK 8
+#ifndef CONFIG_SCENEHUB_GM_RUNTIME_TICK_MS
+#define CONFIG_SCENEHUB_GM_RUNTIME_TICK_MS 100
+#endif
 
-static room_scenario_t *scenario_alloc(void)
+#define GM_SCENARIO_MAX_STEPS_PER_TICK 8
+#define GM_RUNTIME_STACK_WARN_BYTES 2048
+#define GM_RUNTIME_STACK_WARN_INTERVAL_TICKS pdMS_TO_TICKS(10000)
+
+static const char *TAG = "gm_room_runtime";
+
+static SemaphoreHandle_t s_tick_mutex = NULL;
+static StaticSemaphore_t s_tick_mutex_storage;
+static portMUX_TYPE s_tick_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static EXT_RAM_BSS_ATTR event_bus_message_t s_timeout_events[4];
+static EXT_RAM_BSS_ATTR room_scenario_t s_start_scenario;
+static EXT_RAM_BSS_ATTR room_scenario_validation_report_t s_start_report;
+static SemaphoreHandle_t s_start_scratch_mutex = NULL;
+static StaticSemaphore_t s_start_scratch_mutex_storage;
+static portMUX_TYPE s_start_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_err_t gm_room_session_ensure_tick_mutex(void)
 {
-    room_scenario_t *scenario = heap_caps_calloc(1, sizeof(*scenario), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!scenario) {
-        scenario = heap_caps_calloc(1, sizeof(*scenario), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (s_tick_mutex) {
+        return ESP_OK;
     }
-    return scenario;
+    portENTER_CRITICAL(&s_tick_mutex_init_lock);
+    if (!s_tick_mutex) {
+        s_tick_mutex = xSemaphoreCreateMutexStatic(&s_tick_mutex_storage);
+    }
+    portEXIT_CRITICAL(&s_tick_mutex_init_lock);
+    return s_tick_mutex ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-static esp_err_t load_selected_scenario_for_room(const char *room_id, room_scenario_t **out_scenario)
+static void gm_room_session_runtime_check_stack(void)
+{
+    static TickType_t s_last_warn_tick = 0;
+    UBaseType_t high_water = uxTaskGetStackHighWaterMark(NULL);
+    TickType_t now = xTaskGetTickCount();
+    if (high_water >= GM_RUNTIME_STACK_WARN_BYTES) {
+        return;
+    }
+    if (s_last_warn_tick != 0 &&
+        (now - s_last_warn_tick) < GM_RUNTIME_STACK_WARN_INTERVAL_TICKS) {
+        return;
+    }
+    s_last_warn_tick = now;
+    ESP_LOGW(TAG, "low stack headroom: high_water=%u", (unsigned)high_water);
+}
+
+static esp_err_t gm_room_session_start_scratch_lock(void)
+{
+    if (!s_start_scratch_mutex) {
+        portENTER_CRITICAL(&s_start_scratch_mutex_init_lock);
+        if (!s_start_scratch_mutex) {
+            s_start_scratch_mutex = xSemaphoreCreateMutexStatic(&s_start_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_start_scratch_mutex_init_lock);
+        if (!s_start_scratch_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return (xSemaphoreTake(s_start_scratch_mutex, portMAX_DELAY) == pdTRUE) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void gm_room_session_start_scratch_unlock(void)
+{
+    if (s_start_scratch_mutex) {
+        xSemaphoreGive(s_start_scratch_mutex);
+    }
+}
+
+static esp_err_t load_selected_scenario_for_room(const char *room_id, room_scenario_t *scenario)
 {
     char selected_id[ROOM_SCENARIO_ID_MAX_LEN] = {0};
-    gm_room_session_t *session = NULL;
-    room_scenario_t *scenario = NULL;
     esp_err_t err = ESP_OK;
-    if (!room_id || !room_id[0] || !out_scenario) {
+    if (!room_id || !room_id[0] || !scenario) {
         return ESP_ERR_INVALID_ARG;
     }
-    *out_scenario = NULL;
-    session = gm_room_session_heap_alloc(sizeof(*session));
-    if (!session) {
-        return ESP_ERR_NO_MEM;
-    }
-    err = gm_room_session_get(room_id, session);
+    err = gm_room_session_sessions_lock();
     if (err != ESP_OK) {
-        heap_caps_free(session);
         return err;
     }
-    if (!session->selected_scenario_id[0]) {
-        heap_caps_free(session);
+    const gm_room_session_t *session = find_session_mutable_locked(room_id);
+    if (!session || !session->selected_scenario_id[0]) {
+        gm_room_session_sessions_unlock();
         return ESP_ERR_INVALID_STATE;
     }
     quest_str_copy(selected_id, sizeof(selected_id), session->selected_scenario_id);
-    heap_caps_free(session);
-    scenario = scenario_alloc();
-    if (!scenario) {
-        return ESP_ERR_NO_MEM;
-    }
+    gm_room_session_sessions_unlock();
+
     err = room_scenario_get(selected_id, scenario);
     if (err != ESP_OK) {
-        heap_caps_free(scenario);
         return err;
     }
     if (strcmp(scenario->room_id, room_id) != 0) {
-        heap_caps_free(scenario);
         return ESP_ERR_INVALID_STATE;
     }
-    *out_scenario = scenario;
     return ESP_OK;
 }
 
@@ -391,18 +441,20 @@ static gm_room_scenario_branch_runtime_t *scenario_branch_by_id_locked(gm_room_s
 
 esp_err_t gm_room_session_scenario_start(const char *room_id)
 {
-    room_scenario_t *scenario = NULL;
+    room_scenario_t *scenario = &s_start_scenario;
     uint32_t scenario_generation = 0;
-    room_scenario_validation_report_t *report = NULL;
+    room_scenario_validation_report_t *report = &s_start_report;
     gm_room_session_t *session = NULL;
-    esp_err_t err = load_selected_scenario_for_room(room_id, &scenario);
+    esp_err_t err = gm_room_session_start_scratch_lock();
     if (err != ESP_OK) {
         return err;
     }
-    report = gm_room_session_heap_alloc(sizeof(*report));
-    if (!report) {
-        heap_caps_free(scenario);
-        return ESP_ERR_NO_MEM;
+    memset(scenario, 0, sizeof(*scenario));
+    memset(report, 0, sizeof(*report));
+    err = load_selected_scenario_for_room(room_id, scenario);
+    if (err != ESP_OK) {
+        gm_room_session_start_scratch_unlock();
+        return err;
     }
     err = room_scenario_validate(scenario, report);
     if (err != ESP_OK || !report->valid) {
@@ -415,21 +467,19 @@ esp_err_t gm_room_session_scenario_start(const char *room_id)
             }
             gm_room_session_sessions_unlock();
         }
-        heap_caps_free(report);
-        heap_caps_free(scenario);
+        gm_room_session_start_scratch_unlock();
         return err != ESP_OK ? err : ESP_ERR_INVALID_ARG;
     }
-    heap_caps_free(report);
     scenario_generation = room_scenario_generation();
     err = gm_room_session_sessions_lock();
     if (err != ESP_OK) {
-        heap_caps_free(scenario);
+        gm_room_session_start_scratch_unlock();
         return err;
     }
     session = find_session_mutable_locked(room_id);
     if (!session) {
         gm_room_session_sessions_unlock();
-        heap_caps_free(scenario);
+        gm_room_session_start_scratch_unlock();
         return ESP_ERR_NOT_FOUND;
     }
     session->running_scenario = *scenario;
@@ -445,15 +495,15 @@ esp_err_t gm_room_session_scenario_start(const char *room_id)
     err = scenario_init_branch_runtimes_locked(session);
     if (err != ESP_OK) {
         gm_room_session_sessions_unlock();
-        heap_caps_free(scenario);
+        gm_room_session_start_scratch_unlock();
         return err;
     }
     gm_room_session_mark_session_changed_locked(session);
+    gm_room_session_start_scratch_unlock();
     err = execute_all_running_branches_locked(session,
                                               gm_room_session_scenario_now_ms(),
                                               GM_SCENARIO_MAX_STEPS_PER_TICK);
     gm_room_session_sessions_unlock();
-    heap_caps_free(scenario);
     return err;
 }
 
@@ -635,15 +685,23 @@ esp_err_t gm_room_session_scenario_reset(const char *room_id)
 
 void gm_room_session_scenario_tick(void)
 {
-    event_bus_message_t timeout_events[4] = {0};
-    size_t timeout_count = command_executor_poll_timeouts(timeout_events,
-                                                         sizeof(timeout_events) / sizeof(timeout_events[0]));
+    size_t timeout_count = 0;
     uint32_t now_ms = gm_room_session_scenario_now_ms();
+    if (gm_room_session_ensure_tick_mutex() != ESP_OK) {
+        return;
+    }
+    if (xSemaphoreTake(s_tick_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    memset(s_timeout_events, 0, sizeof(s_timeout_events));
+    timeout_count = command_executor_poll_timeouts(s_timeout_events,
+                                                   sizeof(s_timeout_events) / sizeof(s_timeout_events[0]));
     for (size_t i = 0; i < timeout_count; ++i) {
-        (void)event_bus_post_priority(&timeout_events[i], EVENT_BUS_PRIORITY_HIGH, 0);
-        (void)gm_room_session_scenario_on_event(&timeout_events[i]);
+        (void)event_bus_post_priority(&s_timeout_events[i], EVENT_BUS_PRIORITY_HIGH, 0);
+        (void)gm_room_session_scenario_on_event(&s_timeout_events[i]);
     }
     if (gm_room_session_sessions_lock() != ESP_OK) {
+        xSemaphoreGive(s_tick_mutex);
         return;
     }
     for (size_t i = 0; i < GM_SESSION_MAX_ROOMS; ++i) {
@@ -737,4 +795,16 @@ void gm_room_session_scenario_tick(void)
         }
     }
     gm_room_session_sessions_unlock();
+    xSemaphoreGive(s_tick_mutex);
+}
+
+void gm_room_session_runtime_task(void *ctx)
+{
+    const TickType_t delay_ticks = pdMS_TO_TICKS(CONFIG_SCENEHUB_GM_RUNTIME_TICK_MS);
+    (void)ctx;
+    for (;;) {
+        gm_room_session_scenario_tick();
+        gm_room_session_runtime_check_stack();
+        vTaskDelay(delay_ticks > 0 ? delay_ticks : 1);
+    }
 }

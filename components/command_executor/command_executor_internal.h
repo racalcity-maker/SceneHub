@@ -8,7 +8,6 @@
 #include "esp_err.h"
 #include "quest_device.h"
 
-void *command_executor_alloc(size_t size);
 esp_err_t command_executor_fail(char *error,
                                 size_t error_size,
                                 esp_err_t err,
@@ -41,6 +40,10 @@ esp_err_t command_executor_execute_audio(const command_executor_request_t *reque
                                          const quest_device_command_t *command,
                                          char *error,
                                          size_t error_size);
+esp_err_t command_executor_execute_hardware(const command_executor_request_t *request,
+                                            const quest_device_command_t *command,
+                                            char *error,
+                                            size_t error_size);
 esp_err_t command_executor_execute_mqtt(const quest_device_t *device,
                                         const quest_device_command_t *command,
                                         const command_executor_request_t *request,

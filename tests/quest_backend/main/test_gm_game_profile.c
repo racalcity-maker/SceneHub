@@ -171,6 +171,30 @@ static void test_gm_game_profile_validate_checks_room_and_scenario(void)
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, gm_game_profile_validate(other_room));
 }
 
+static void test_gm_game_profile_validate_reference_checks_room_and_scenario_only(void)
+{
+    gm_game_profile_t *profile = &s_profiles[0];
+    gm_game_profile_t *other_room = &s_profiles[1];
+
+    game_profile_test_bootstrap();
+    game_profile_runtime_bootstrap();
+    memset(s_profiles, 0, sizeof(s_profiles));
+    add_room_scenario("easy_flow", "room_1");
+    add_room_scenario("wrong_room_flow", "room_2");
+
+    init_profile(profile, "easy", "Easy", "room_1", "easy_flow", 3600000);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_game_profile_validate_reference(profile));
+
+    init_profile(profile, "missing_scenario", "Missing", "room_1", "missing_flow", 3600000);
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, gm_game_profile_validate_reference(profile));
+
+    init_profile(profile, "missing_room", "Missing room", "room_missing", "easy_flow", 3600000);
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, gm_game_profile_validate_reference(profile));
+
+    init_profile(other_room, "wrong_room", "Wrong room", "room_1", "wrong_room_flow", 3600000);
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, gm_game_profile_validate_reference(other_room));
+}
+
 static void test_gm_game_profile_json_round_trip(void)
 {
     gm_game_profile_t *profile = &s_profiles[0];
@@ -322,6 +346,7 @@ void register_gm_game_profile_tests(void)
     RUN_TEST(test_gm_game_profile_replace_existing_id);
     RUN_TEST(test_gm_game_profile_delete_removes_profile);
     RUN_TEST(test_gm_game_profile_validate_checks_room_and_scenario);
+    RUN_TEST(test_gm_game_profile_validate_reference_checks_room_and_scenario_only);
     RUN_TEST(test_gm_game_profile_json_round_trip);
     RUN_TEST(test_gm_game_profile_collection_export_import);
     RUN_TEST(test_gm_game_profile_import_invalid_json_keeps_existing_store);

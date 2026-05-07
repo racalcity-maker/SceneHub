@@ -54,10 +54,11 @@ device state comes from `quest_device` and `device_control_ingest`.
 | `quest_device` | File-backed Quest Device store and command/event capability model |
 | `device_control_ingest` | Control-contract telemetry ingest for observed physical clients |
 | `room_scenario` | Scenario model, validation, JSON import/export |
-| `command_executor` | Command dispatch boundary for MQTT devices, system audio and future hardware IO |
+| `command_executor` | Command dispatch boundary for MQTT devices, system audio and local hardware IO |
 | `gm_game_profile` | Game Mode model, validation, JSON import/export |
 | `gm_core` | Room session runtime, timer, game start/stop/reset, scenario execution |
 | `orchestrator_core` | GM read model, health aggregation, audit and timeline |
+| `hardware_io` | Built-in relay/MOSFET/input/GPIO control, safe-off and status snapshots |
 | `audio_player` | Local audio playback service, background/effect mixer and system audio command handling |
 | `web_ui` | HTTP API, auth, GM panel assets and UI endpoints |
 | `error_monitor` | Fault collection for dashboard/room health |
@@ -85,16 +86,27 @@ Scenario execution:
 - `OPERATOR_APPROVAL` resumes from operator approval.
 - `SET_FLAG` and `WAIT_FLAGS` synchronize branches inside one game run.
 - `END_GAME` finishes the game timer/session without automatically stopping
-  audio.
+  audio or turning off local hardware outputs.
 
 Game stop:
 
 1. Room scenario runtime stops.
 2. Game timer stops.
 3. System audio receives a best-effort stop command.
-4. Audio output drains a short silence buffer before I2S reset so the DAC does
+4. Built-in relay/MOSFET/GPIO outputs are forced to safe/off after the GM
+   session lock is released; failures are surfaced through `service_status`.
+5. Audio output drains a short silence buffer before I2S reset so the DAC does
    not hold the last sample.
-5. The room session returns to stopped/finished state.
+6. The room session returns to stopped/finished state.
+
+Game reset also forces built-in relay/MOSFET/GPIO outputs to safe/off after the
+GM session lock is released. `END_GAME` does not; scenarios that need finale
+cleanup should add explicit `system_audio.stop`, `system_relay.set/off`,
+`system_mosfet.all_off` or `system_gpio.set/inactive` steps.
+
+Service runtime faults are promoted into the orchestrator issue list. For
+example, a `hardware_io` safe-off failure becomes a system issue visible in GM
+state instead of being hidden in logs only.
 
 ## Branches
 
@@ -175,6 +187,9 @@ different triggers. Reactive branches do not participate in
 Result-required reaction commands use `command_executor`. `accepted` keeps the
 action pending; terminal `done` advances the action; `failed`, `rejected` and
 `timeout` follow the branch result policy.
+
+For `Same actions`, `Can repeat` is represented as `max_fire_count=0`; `Run once`
+is represented as `run_once=true` and `max_fire_count=1`.
 
 Reactive branches use the same game-run flag store as normal branches. This is
 intentional: a reaction may execute `SET_FLAG secret_path_unlocked=true`, and a

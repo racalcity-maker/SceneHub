@@ -1,145 +1,727 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
-let gmState=null;
-
-let gmObserved=null;
-
-let gmAudit=null;
-
-let gmTimeline=null;
-
-let gmRoomScenarios={
-}
-;
-
-let gmRoomProfiles={
-}
-;
-
-let gmScenarioEditorCatalogs={
-}
-;
-
-let gmDeviceConfig=null;
-
-let gmQuestDevices=null;
-
-let gmAudioFiles={
-loaded:false,loading:false,scheduled:false,error:'',items:[]}
-;
-
-let gmSession={
-role:'user',username:''}
-;
-
-let currentRoomScenarioId={
-}
-;
-
-let currentRoomProfileId={
-}
-;
-
-let profileEditor={
-room_id:'',profile_id:'',dirty:false,open:false,prefill:null}
-;
-
-let scenarioEditor={
-room_id:'',scenario_id:'',dirty:false,open:false,draft:null,original_scenario:null,validation_report:null,expanded_step:-1,active_branch:0,branch_count_shrink_allowed:false,branch_count_shrink_floor:0}
-;
-
-let questDeviceEditor={
-device_id:'',dirty:false,open:false,draft:null,discovery:null}
-;
-
-let deviceFilterRoom='';
-
-let observedFilter='all';
-
-let currentView='dashboard';
-
-let currentRoomId='';
-
-let roomTab='overview';
-
-let gmInputDirty=false;
-
-let gmAutoRenderDeferred=false;
-
-let gmInitialRouteApplied=false;
-
-let gmSkipScenarioDomSync=false;
-
-let gmOpenDetails={
-}
-;
-
-let gmFlagDatalistSeq=0;
-
 function esc(v){
 const value=(v===undefined||v===null)?'':v;
+return String(value).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
 
-return String(value).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
-function detailsKeyFor(el){
-if(!el||String(el.tagName||'').toLowerCase()!=='details')return '';
-if(el.dataset&&el.dataset.detailsKey)return el.dataset.detailsKey;
-const summary=(el.querySelector('summary')&&el.querySelector('summary').textContent||'details').trim().toLowerCase();
-let scope='';
-const scoped=el.closest('[data-scenario-step],[data-quest-command],[data-quest-event],[data-quest-device-editor],[data-manual-device],[data-open-room],[data-open-device-setup]');
-if(scoped){
-['scenarioStep','questCommand','questEvent','questDeviceEditor','manualDevice','openRoom','openDeviceSetup'].some(k=>{
-if(scoped.dataset&&scoped.dataset[k]!==undefined){scope=`${k}:${scoped.dataset[k]||'1'}`;return true;}
-return false;
+function enc(value){
+return encodeURIComponent(value);
+}
+
+function kebab(value){
+return String(value||'').replace(/([a-z0-9])([A-Z])/g,'$1-$2').replace(/[_\s]+/g,'-').toLowerCase();
+}
+
+function boolAttr(name,value){
+return value?` ${esc(name)}`:'';
+}
+
+function jsonAttr(value){
+return esc(JSON.stringify(value===undefined?null:value));
+}
+
+function uiAttrs(attrs){
+return Object.entries(attrs||{}).filter(([,value])=>value!==false&&value!==undefined&&value!==null).map(([key,value])=>value===true?esc(key):`${esc(key)}='${esc(value)}'`).join(' ');
+}
+
+function uiDataset(dataset){
+const attrs={};
+Object.entries(dataset||{}).forEach(([key,value])=>{
+if(value===undefined||value===null)return;
+attrs[`data-${kebab(key)}`]=value;
+});
+return uiAttrs(attrs);
+}
+function uiButton(opts){
+opts=opts||{};
+const classes=['ui-btn',opts.kind||'',opts.size?`ui-btn-${opts.size}`:'',opts.className||''].filter(Boolean).join(' ');
+const cls=` class='${esc(classes)}'`;
+const action=opts.action?` data-action='${esc(opts.action)}'`:'';
+const dataset=uiDataset(opts.dataset);
+const confirm=opts.confirm?` data-confirm='${esc(opts.confirm)}'`:'';
+const title=opts.title?` title='${esc(opts.title)}'`:'';
+const disabled=opts.disabled?' disabled':'';
+const attrs=[action,dataset,confirm,title,disabled].filter(Boolean).join(' ');
+return `<button${cls}${attrs?` ${attrs}`:''}>${esc(opts.label||'')}</button>`;
+}
+
+function uiIconButton(opts){
+opts=opts||{};
+return uiButton({...opts,kind:`icon-btn${opts.kind?` ${opts.kind}`:''}`.trim()});
+}
+
+function uiActions(buttons){
+return `<div class='actions'>${(Array.isArray(buttons)?buttons:[]).join('')}</div>`;
+}
+
+function uiCard(opts){
+opts=opts||{};
+const cls=['card',opts.kind||'',opts.className||''].filter(Boolean).join(' ');
+const dataset=opts.dataset?` ${uiDataset(opts.dataset)}`:'';
+const actions=Array.isArray(opts.actions)?opts.actions.join(''):(opts.actions||'');
+const header=(opts.title||opts.subtitle||opts.status||actions)?`<div class='card-head'><div>${opts.title?`<h2 class='section-title'>${esc(opts.title)}</h2>`:''}${opts.subtitle?`<div class='card-sub'>${esc(opts.subtitle)}</div>`:''}</div>${opts.status||actions?`<div class='actions'>${opts.status||''}${actions||''}</div>`:''}</div>`:'';
+const footer=opts.footer?`<div class='card-footer'>${opts.footer}</div>`:'';
+return `<section class='${esc(cls)}'${dataset}>${header}${opts.content||''}${footer}</section>`;
+}
+
+function uiSection(opts){
+opts=opts||{};
+return `<section${opts.kind?` class='${esc(opts.kind)}'`:''}>${opts.title?`<h2 class='section-title'>${esc(opts.title)}</h2>`:''}${opts.content||''}</section>`;
+}
+
+function uiField(opts){
+opts=opts||{};
+return `<label class='field-stack'>${opts.label?`<span>${esc(opts.label)}</span>`:''}${opts.content||''}</label>`;
+}
+
+function uiInput(opts){
+opts=opts||{};
+const attrs=uiAttrs({
+type:opts.type||'text',
+value:opts.value!==undefined?opts.value:'',
+placeholder:opts.placeholder||undefined,
+min:opts.min,
+max:opts.max,
+step:opts.step,
+disabled:!!opts.disabled,
+});
+return `<input ${attrs}${opts.dataset?` ${uiDataset(opts.dataset)}`:''}>`;
+}
+
+function uiSelect(opts){
+opts=opts||{};
+const selected=String(opts.value!==undefined?opts.value:'');
+const options=(Array.isArray(opts.options)?opts.options:[]).map(option=>{
+const value=String(option&&typeof option==='object'?option.value:option);
+const label=option&&typeof option==='object'?(option.label!==undefined?option.label:value):value;
+return `<option value='${esc(value)}' ${value===selected?'selected':''}>${esc(label)}</option>`;
+}).join('');
+return `<select${opts.dataset?` ${uiDataset(opts.dataset)}`:''}${opts.disabled?' disabled':''}>${options}</select>`;
+}
+
+function uiCheckbox(opts){
+opts=opts||{};
+return `<label class='row-meta'><input type='checkbox' ${opts.checked?'checked':''}${opts.disabled?' disabled':''}${opts.dataset?` ${uiDataset(opts.dataset)}`:''} style='min-width:auto'> ${esc(opts.label||'')}</label>`;
+}
+
+function uiBadge(text,kind){
+return `<span class='badge${kind?` ${esc(kind)}`:''}'>${esc(text)}</span>`;
+}
+
+function uiEmpty(text){
+return `<div class='manual-empty'>${esc(text||'')}</div>`;
+}
+
+function uiDetails(opts){
+opts=opts||{};
+return `<details class='scenario-advanced' ${opts.open?'open':''}><summary>${esc(opts.summary||'Details')}</summary>${opts.content||''}</details>`;
+}
+async function gmResponseText(res){
+return (await res.text().catch(()=>''))||(`HTTP ${res.status}`);
+}
+
+async function gmJsonOrNull(res){
+return res.ok?await res.json():null;
+}
+
+async function gmReadJson(res){
+if(!res.ok)throw new Error(await gmResponseText(res));
+return await res.json();
+}
+
+async function gmExpectOk(res){
+if(!res.ok)throw new Error(await gmResponseText(res));
+return res;
+}
+
+async function gmGet(url){
+return gmFetch(url);
+}
+
+async function gmGetJson(url){
+return gmReadJson(await gmGet(url));
+}
+
+async function gmPost(url){
+return gmFetch(url,{method:'POST'});
+}
+
+async function gmPostJson(url,body){
+return gmFetch(url,{
+method:'POST',
+headers:{'Content-Type':'application/json'},
+body:JSON.stringify(body||{})}
+);
+}
+
+async function gmPostJsonResult(url,body){
+return gmReadJson(await gmPostJson(url,body));
+}
+
+async function gmDeleteJson(url,body){
+return gmFetch(url,{
+method:'DELETE',
+headers:{'Content-Type':'application/json'},
+body:JSON.stringify(body||{})}
+);
+}
+
+const api={
+session:{
+info:()=>gmGet('/api/session/info'),
+},
+gm:{
+state:()=>gmGet('/api/gm/state'),
+stateJson:()=>gmGetJson('/api/gm/state'),
+versions:()=>gmGet('/api/gm/versions'),
+versionsJson:()=>gmGetJson('/api/gm/versions'),
+},
+orchestrator:{
+controlDevices:()=>gmGet('/api/orchestrator/control/devices'),
+auditRecent:()=>gmGet('/api/orchestrator/audit/recent'),
+timelineRecent:()=>gmGet('/api/orchestrator/timeline/recent'),
+},
+files:{
+list:path=>gmGet(`/api/files?path=${enc(path)}`),
+},
+hardwareIo:{
+status:()=>gmGet('/api/hardware-io/status'),
+},
+device:{
+list:(includeSystem=true)=>gmGet(`/api/gm/devices?include_system=${includeSystem?'1':'0'}`),
+save:device=>gmPostJson('/api/gm/device/save',{device}),
+delete:deviceId=>gmPostJson('/api/gm/device/delete',{device_id:deviceId}),
+describeInterface:clientId=>gmPostJson('/api/gm/device/describe-interface',{client_id:clientId}),
+runCommand:(deviceId,commandId,params)=>gmPostJson('/api/gm/device/command/run',{
+device_id:deviceId,
+command_id:commandId,
+...(params&&typeof params==='object'?{params}:{}),
+}),
+},
+room:{
+runtime:roomId=>gmGet(`/api/gm/room/runtime?room_id=${enc(roomId)}`),
+runtimeJson:roomId=>gmGetJson(`/api/gm/room/runtime?room_id=${enc(roomId)}`),
+scenarios:roomId=>gmGet(`/api/gm/room/scenarios?room_id=${enc(roomId)}`),
+profiles:roomId=>gmGet(`/api/gm/room/profiles?room_id=${enc(roomId)}`),
+scenarioEditorCatalog:roomId=>gmGet(`/api/gm/room/scenario-editor/catalog?room_id=${enc(roomId)}`),
+save:body=>gmPostJson('/api/gm/room/save',body),
+delete:body=>gmPostJson('/api/gm/room/delete',body),
+hintSend:body=>gmPostJson('/api/gm/room/hint/send',body),
+hintClear:roomId=>gmPost(`/api/gm/room/hint/clear?room_id=${enc(roomId)}`),
+profileSelect:body=>gmPostJson('/api/gm/room/profile/select',body),
+profileSave:body=>gmPostJson('/api/gm/room/profile/save',body),
+profileDelete:profileId=>gmPostJson('/api/gm/room/profile/delete',{profile_id:profileId}),
+scenarioSelect:body=>gmPostJson('/api/gm/room/scenario/select',body),
+scenarioValidate:scenario=>gmPostJson('/api/gm/room/scenario/validate',{scenario}),
+scenarioSave:scenario=>gmPostJson('/api/gm/room/scenario/save',{scenario}),
+scenarioDelete:scenarioId=>gmPostJson('/api/gm/room/scenario/delete',{scenario_id:scenarioId}),
+game:(roomId,action)=>gmPost(`/api/gm/room/game/${enc(action)}?room_id=${enc(roomId)}`),
+timerStart:(roomId,durationMs)=>gmPost(`/api/gm/room/timer/start?room_id=${enc(roomId)}&duration_ms=${enc(durationMs)}`),
+timer:(roomId,action)=>gmPost(`/api/gm/room/timer/${enc(action)}?room_id=${enc(roomId)}`),
+timerAdd:(roomId,deltaMs)=>gmPost(`/api/gm/room/timer/add?room_id=${enc(roomId)}&delta_ms=${enc(deltaMs)}`),
+sessionFinish:roomId=>gmPost(`/api/gm/room/session/finish?room_id=${enc(roomId)}`),
+scenarioRuntime:(roomId,action,branchId)=>{
+let url=`/api/gm/room/scenario/${enc(action)}?room_id=${enc(roomId)}`;
+if(branchId)url+=`&branch_id=${enc(branchId)}`;
+return gmPost(url);
+},
+},
+storage:{
+post:url=>gmPost(url),
+importJson:(url,text)=>gmFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:text}),
+exportUrl:kind=>kind==='device'?'/api/gm/devices/export':(kind==='scenario'?'/api/gm/room/scenarios/export':'/api/gm/profiles/export'),
+commandUrl:(kind,op)=>{
+if(kind==='device')return `/api/gm/devices/${op}`;
+if(kind==='scenario')return `/api/gm/room/scenarios/${op}`;
+return `/api/gm/profiles/${op}`;
+},
+run:(kind,op)=>gmPost(kind==='device'?`/api/gm/devices/${op}`:(kind==='scenario'?`/api/gm/room/scenarios/${op}`:`/api/gm/profiles/${op}`)),
+},
+};
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+function formFieldId(scope,name){
+return `${scope||'form'}_${name||'field'}`.replace(/[^a-zA-Z0-9_:-]/g,'_');
+}
+
+function renderFormField(field,model,scope){
+field=field||{};
+const name=field.name||field.field||'';
+const type=field.type||'text';
+const value=model&&Object.prototype.hasOwnProperty.call(model,name)?model[name]:field.default;
+const dataset={field:name,scope:scope||''};
+let content='';
+if(type==='checkbox'){
+content=uiCheckbox({label:field.checkbox_label||'',checked:!!value,disabled:!!field.disabled,dataset});
+return field.label?`<div class='field-stack'><span>${esc(field.label)}</span>${content}</div>`:content;
+}
+if(type==='select'){
+content=uiSelect({value:value!==undefined?value:'',options:field.options||[],disabled:!!field.disabled,dataset});
+}
+else if(type==='textarea'){
+content=`<textarea ${uiDataset(dataset)}${field.disabled?' disabled':''} placeholder='${esc(field.placeholder||'')}'>${esc(value!==undefined?value:'')}</textarea>`;
+}
+else if(type==='json'){
+const text=value===undefined||value===null?'':(typeof value==='string'?value:JSON.stringify(value));
+content=`<textarea ${uiDataset(dataset)}${field.disabled?' disabled':''} placeholder='${esc(field.placeholder||'{}')}'>${esc(text)}</textarea>`;
+}
+else{
+content=uiInput({
+type:type==='number'||type==='duration_ms'?'number':'text',
+value:value!==undefined?value:'',
+placeholder:field.placeholder||'',
+min:field.min,
+max:field.max,
+step:field.step||(type==='number'||type==='duration_ms'?1:undefined),
+disabled:!!field.disabled,
+dataset,
 });
 }
-return `${currentView}:${currentRoomId||''}:${scenarioEditor.room_id||''}:${scenarioEditor.scenario_id||''}:${scope}:${summary}`;
+return uiField({label:field.label||name,content});
 }
-function detailsAttrs(key,defaultOpen){
-const open=gmOpenDetails[key]!==undefined?gmOpenDetails[key]:!!defaultOpen;
-return `data-details-key='${esc(key)}' ${open?'open':''}`;
+
+function renderFormFields(schema,model,scope){
+return (Array.isArray(schema)?schema:[]).map(field=>renderFormField(field,model||{},scope||'')).join('');
 }
-function slugifyId(value,fallback){
-const base=String(value||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
-return base||`${fallback||'item'}_${Date.now().toString(16)}`;
+
+function collectFormFields(root,schema,scope){
+const out={};
+(Array.isArray(schema)?schema:[]).forEach(field=>{
+field=field||{};
+const name=field.name||field.field||'';
+if(!name)return;
+const candidates=root&&root.querySelectorAll?Array.from(root.querySelectorAll('[data-field]')):[];
+const el=candidates.find(item=>(item.dataset.field||'')===name&&(!scope||(item.dataset.scope||'')===scope));
+if(!el)return;
+if(field.type==='checkbox'){
+out[name]=!!el.checked;
 }
-function stateClass(v){return v==='fault'||v==='error'||v==='offline'?'state-fault':(v==='degraded'||v==='warning'?'state-degraded':(v==='ok'||v==='online'?'state-ok':'state-unknown'));}
-function healthLabel(v){return v||'unknown';}
-function fmtClock(ms){const total=Math.max(0,Math.floor((Number(ms)||0)/1000));const h=Math.floor(total/3600);const m=Math.floor((total%3600)/60);const s=total%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`;}
-function roomTimerDisplayMs(room){
-const remaining=Math.max(0,Number(room&&room.timer_remaining_ms)||0);
-if((room&&room.timer_state)!=='running')return remaining;
-const synced=Number(room&&room._timer_synced_at_ms)||performance.now();
-return Math.max(0,remaining-(performance.now()-synced));
+else if(field.type==='number'||field.type==='duration_ms'){
+const num=Number(el.value);
+out[name]=Number.isFinite(num)?num:0;
 }
-function roomClockAttrs(room){return `data-room-clock='${esc(room&&room.room_id||'')}' data-room-clock-state='${esc(room&&room.timer_state||'idle')}'`;}
-function roomClockHtml(room,tag,cls){const name=tag||'span';const classAttr=cls?` class='${esc(cls)}'`:'';return `<${name}${classAttr} ${roomClockAttrs(room)}>${fmtClock(roomTimerDisplayMs(room))}</${name}>`;}
-function ago(ms){if(!ms)return 'never';const age=Math.max(0,Math.floor((performance.now()-Number(ms))/1000));return age<60?`${age}s ago`:`${Math.floor(age/60)}m ago`;}
-function audioBaseName(path){if(!path)return '';const parts=String(path).split('/').filter(Boolean);return parts.length?parts[parts.length-1]:path;}
-function audioDirName(path){if(!path)return '/';const raw=String(path);const idx=raw.lastIndexOf('/');if(idx<0)return '/';return raw.slice(0,idx)||'/';}
-function compactText(value,max){const text=String(value||'');const limit=Math.max(8,Number(max)||32);return text.length>limit?`${text.slice(0,limit-1)}...`:text;}
-function roomById(id){return (gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[]).find(r=>r.room_id===id)||null;}
-function deviceById(id){return (gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).find(d=>d.device_id===id)||null;}
-function roomName(id){const r=roomById(id);return r&&(r.title||r.name||r.room_id)||id||'No room';}
-function deviceDisplayName(id){const live=deviceById(id);const quest=questDevices().find(d=>(d.id||'')===id);const cfg=configDevices().find(d=>(d.id||d.device_id||'')===id);return live&&(live.display_name||live.device_id)||quest&&(quest.name||quest.id)||cfg&&(cfg.display_name||cfg.name||cfg.id||cfg.device_id)||id||'Device';}
-function roomDevices(id){return (gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).filter(d=>d.room_id===id);}
-function roomIssues(id){return (gmState&&Array.isArray(gmState.issues)?gmState.issues:[]).filter(i=>!id||!i.room_id||i.room_id===id);}
-function observedRegistration(id){const key=String(id||'');if(!key)return null;const live=(gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).find(d=>d.device_id===key);if(live)return {device_id:live.device_id,name:live.display_name||live.device_id,via:'direct'};const quest=questDevices().find(dev=>(dev.client_id||dev.id||'')===key);if(quest)return {device_id:quest.id,name:quest.name||quest.id,via:'quest_device'};const cfg=configDevices().find(dev=>(Array.isArray(dev.bindings)?dev.bindings:[]).some(b=>(b&&b.client_id||'')===key));if(cfg){const devId=cfg.id||cfg.device_id||'';return {device_id:devId,name:cfg.display_name||cfg.name||devId,via:'binding'};}return null;}
-function knownDeviceIds(){const ids=new Set((gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).map(d=>d.device_id));questDevices().forEach(dev=>{if(dev.id)ids.add(dev.id);if(dev.client_id)ids.add(dev.client_id);});configDevices().forEach(dev=>(Array.isArray(dev.bindings)?dev.bindings:[]).forEach(b=>{if(b&&b.client_id)ids.add(b.client_id);}));return ids;}
-function observedItems(){return (gmObserved&&Array.isArray(gmObserved.items))?gmObserved.items:[];}
-function auditItems(){return (gmAudit&&Array.isArray(gmAudit.items))?gmAudit.items:[];}
-function timelineItems(){return (gmTimeline&&Array.isArray(gmTimeline.items))?gmTimeline.items:[];}
-function roomScenarios(id){return (gmRoomScenarios&&Array.isArray(gmRoomScenarios[id]))?gmRoomScenarios[id]:[];}
-function roomProfiles(id){const data=gmRoomProfiles?gmRoomProfiles[id]:null;return data&&Array.isArray(data.profiles)?data.profiles:[];}
-function roomSelectedProfileId(id){return currentRoomProfileId[id]||(gmRoomProfiles[id]&&gmRoomProfiles[id].selected_profile_id)||'';}
-function scenarioName(roomId,scenarioId){const s=roomScenarios(roomId).find(x=>x.id===scenarioId);return s&&(s.name||s.id)||scenarioId||'none';}
-function scenarioDisplayName(roomId,scenarioId,fallback){const s=scenarioById(roomId,scenarioId);return s&&(s.name||s.id)||fallback||scenarioId||'none';}
-function configDevices(){return gmDeviceConfig&&Array.isArray(gmDeviceConfig.devices)?gmDeviceConfig.devices:[];}
-function questDevices(){return gmQuestDevices&&Array.isArray(gmQuestDevices.devices)?gmQuestDevices.devices:[];}
-function observedByClientId(id){const key=String(id||'');if(!key)return null;return observedItems().find(o=>o.device_id===key)||null;}
-function questDeviceById(id){return questDevices().find(d=>(d.id||'')===id)||null;}
-function questDeviceDisplayName(dev){return dev&&(dev.name||dev.display_name||dev.id)||'Device';}
-function observedDisplayName(item){if(!item)return 'Device';const reg=observedRegistration(item.device_id);return reg&&(reg.name||reg.device_id)||item.name||item.display_name||item.device_id||'Device';}
-function questDeviceHealth(dev){if(!dev)return 'offline';if(dev.system_device)return 'ok';if(dev.enabled===false)return 'degraded';const observed=observedByClientId(dev.client_id||dev.id);if(!observed)return 'fault';if(observed.connectivity==='offline'||observed.connectivity==='unknown')return 'fault';if(observed.health==='fault'||observed.state==='fault')return 'fault';if(observed.health==='degraded'||observed.state==='degraded')return 'degraded';return 'ok';}
-function questDeviceStatusText(dev){if(!dev)return 'missing device';if(dev.system_device)return 'system device';if(dev.enabled===false)return 'disabled';const observed=observedByClientId(dev.client_id||dev.id);if(!observed)return 'not observed';if(observed.connectivity==='offline'||observed.connectivity==='unknown')return 'offline';return observed.health||observed.state||'online';}
+else if(field.type==='json'){
+const raw=(el.value||'').trim();
+if(!raw){
+out[name]=field.default!==undefined?field.default:null;
+}
+else{
+try{
+out[name]=JSON.parse(raw);
+}
+catch(err){
+out[name]=raw;
+}
+}
+}
+else{
+out[name]=el.value;
+}
+});
+return out;
+}
+
+function validateFormFields(model,schema){
+const errors=[];
+(Array.isArray(schema)?schema:[]).forEach(field=>{
+field=field||{};
+const name=field.name||field.field||'';
+if(!name)return;
+const value=model?model[name]:undefined;
+if(field.required&&(value===undefined||value===null||value==='')){
+errors.push(`${field.label||name} is required`);
+}
+if((field.type==='number'||field.type==='duration_ms')&&value!==undefined){
+if(field.min!==undefined&&value<field.min)errors.push(`${field.label||name} is below minimum`);
+if(field.max!==undefined&&value>field.max)errors.push(`${field.label||name} is above maximum`);
+}
+if(field.type==='json'&&typeof value==='string'&&value.trim()){
+try{
+JSON.parse(value);
+}
+catch(err){
+errors.push(`${field.label||name} must be valid JSON`);
+}
+}
+});
+return errors;
+}
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+const GM_ACTIONS={
+}
+;
+
+function gmRegisterAction(name,handler){
+if(!name||typeof handler!=='function')return;
+GM_ACTIONS[name]=handler;
+}
+
+async function gmHandleActionClick(e){
+const el=e.target.closest('[data-action]');
+if(!el||el.disabled)return false;
+const action=el.dataset.action||'';
+const handler=GM_ACTIONS[action];
+if(!handler){
+setStatus(`Unknown UI action: ${action}`,'state-fault');
+return true;
+}
+try{
+if(el.dataset.confirm&&!confirm(el.dataset.confirm))return true;
+await handler(el,e);
+}
+catch(err){
+setStatus(err.message||'command failed','state-fault');
+}
+return true;
+}
+
+gmRegisterAction('manual.device.command',async el=>{
+await runManualDeviceCommand(el.dataset.deviceId||'',el.dataset.commandId||'');
+});
+
+gmRegisterAction('room.game',async el=>{
+await runRoomGame(el.dataset.op||'',el.dataset.roomId||'',true);
+});
+
+gmRegisterAction('room.timer',async el=>{
+await runRoomTimer(el.dataset.op||'',el.dataset.roomId||'');
+});
+
+gmRegisterAction('room.hint',async el=>{
+await runRoomHint(el.dataset.op||'',el.dataset.roomId||'');
+});
+
+gmRegisterAction('room.create',async()=>{
+if(!confirmDiscardEditorChanges())return;
+await createRoomFromPrompt();
+});
+
+gmRegisterAction('room.delete',async el=>{
+if(!confirmDiscardEditorChanges())return;
+await deleteRoom(el.dataset.roomId||'',true);
+});
+
+gmRegisterAction('admin.open',async el=>{
+if(!confirmDiscardEditorChanges())return;
+const roomId=el.dataset.roomId||'';
+if(roomId){
+profileEditor.room_id=roomId;
+scenarioEditor.room_id=roomId;
+}
+currentView=el.dataset.view||'profiles';
+if(currentView==='profiles')profileEditor.open=true;
+if(currentView==='scenarios')scenarioEditor.open=true;
+await loadGMViewData(false);
+render();
+});
+
+gmRegisterAction('room.open',async el=>{
+const nextRoomId=el.dataset.roomId||'';
+if((currentView!=='room'||currentRoomId!==nextRoomId)&&!confirmDiscardEditorChanges())return;
+currentRoomId=nextRoomId;
+currentView='room';
+roomTab='control';
+await loadGMViewData(false);
+render();
+});
+
+gmRegisterAction('device.setup.open',async el=>{
+if(!isAdmin())return;
+if(!confirmDiscardEditorChanges())return;
+currentView='device_setup';
+const setupTarget=el.dataset.deviceId||'';
+if(setupTarget==='new'){
+questDeviceEditor.device_id='';
+questDeviceEditor.open=true;
+questDeviceEditor.draft=newQuestDeviceDraft();
+clearQuestDeviceDirty();
+}
+else if(setupTarget&&setupTarget!=='1'){
+questDeviceEditor.device_id=setupTarget;
+questDeviceEditor.open=true;
+questDeviceEditor.draft=null;
+clearQuestDeviceDirty();
+}
+await loadGMViewData(false);
+render();
+});
+
+gmRegisterAction('room.tab',async el=>{
+if(!confirmDiscardEditorChanges())return;
+if((el.dataset.scope||'')==='room')roomTab=el.dataset.tab||'overview';
+render();
+});
+
+gmRegisterAction('room.scenario.runtime',async el=>{
+await runRoomScenarioRuntime(el.dataset.op||'',el.dataset.roomId||'',el.dataset.branchId||'',true);
+});
+
+gmRegisterAction('storage.run',async el=>{
+if(!confirmDiscardEditorChanges())return;
+await runStorageAction(el.dataset.op||'');
+});
+
+gmRegisterAction('audio.files.refresh',async()=>{
+await loadGMAudioFiles(true);
+});
+
+gmRegisterAction('scenario.edit',async el=>{
+if(!confirmDiscardScenario())return;
+scenarioEditor.scenario_id=el.dataset.scenarioId||'';
+scenarioEditor.open=true;
+scenarioEditor.expanded_step=-1;
+scenarioEditor.expanded_v2_action='';
+scenarioEditor.active_branch=0;
+clearScenarioDirty();
+const original=roomScenarios(scenarioEditor.room_id).find(s=>s.id===scenarioEditor.scenario_id)||null;
+scenarioEditor.original_scenario=original?scenarioEditableJson(original,scenarioEditor.room_id):null;
+render();
+});
+
+gmRegisterAction('scenario.new',async()=>{
+if(!confirmDiscardScenario())return;
+scenarioEditor.scenario_id='';
+scenarioEditor.open=true;
+scenarioEditor.expanded_step=-1;
+scenarioEditor.expanded_v2_action='';
+scenarioEditor.active_branch=0;
+clearScenarioDirty();
+scenarioEditor.draft={id:'',name:'',room_id:scenarioEditor.room_id,branches:[defaultScenarioBranch(0,[])]};
+skipNextScenarioDomSync();
+render();
+});
+
+gmRegisterAction('scenario.delete',async el=>{
+if(!confirmDiscardScenario())return;
+await deleteScenarioEditor(el.dataset.scenarioId||'',true);
+});
+
+gmRegisterAction('scenario.validate',async()=>{
+await validateScenarioEditor();
+});
+
+gmRegisterAction('scenario.save',async()=>{
+await saveScenarioEditor();
+});
+
+gmRegisterAction('scenario.create_game_mode',async el=>{
+if(!confirmDiscardEditorChanges())return;
+const scenarioId=el.dataset.scenarioId||'';
+const scenario=roomScenarios(scenarioEditor.room_id).find(s=>s.id===scenarioId)||null;
+profileEditor.room_id=scenarioEditor.room_id;
+profileEditor.profile_id='';
+profileEditor.open=true;
+clearProfileDirty();
+profileEditor.prefill={
+room_id:scenarioEditor.room_id,
+scenario_id:scenarioId,
+name:scenario&&(scenario.name||scenario.id)||'New mode',
+id:'',
+duration_ms:3600000,
+hint_pack_id:'',
+audio_pack_id:''};
+currentView='profiles';
+await loadGMViewData(false);
+render();
+});
+
+gmRegisterAction('scenario.branch',async el=>{
+const index=Number(el.dataset.branchIndex);
+applyScenarioBranchAction(el.dataset.op||'',Number.isFinite(index)?index:0);
+});
+
+gmRegisterAction('scenario.reactive_v2',async el=>{
+applyReactiveV2Action(el.dataset.op||'',el.dataset.variantIndex,el.dataset.actionIndex||el.dataset.guardIndex,el.dataset.actionType||'');
+});
+
+gmRegisterAction('scenario.step.help',async el=>{
+alert(scenarioStepHelpText(el.dataset.stepType||''));
+});
+
+gmRegisterAction('scenario.step',async el=>{
+const v2ActionEl=el.closest('[data-v2-action]');
+if(v2ActionEl){
+applyReactiveV2Action(el.dataset.op||'',v2ActionEl.dataset.variantIndex,v2ActionEl.dataset.v2Action,el.dataset.commandIndex||'');
+return;
+}
+const stepEl=el.closest('[data-scenario-step]');
+const fallbackIndex=Number(stepEl&&stepEl.dataset.scenarioStep);
+const index=Number.isFinite(Number(el.dataset.stepIndex))?Number(el.dataset.stepIndex):fallbackIndex;
+applyScenarioStepAction(el.dataset.op||'',index,el.dataset.stepType||el.dataset.commandIndex||el.dataset.eventIndex||el.dataset.flagIndex||'');
+});
+
+gmRegisterAction('profile.edit',async el=>{
+if(!confirmDiscardProfile())return;
+profileEditor.profile_id=el.dataset.profileId||'';
+profileEditor.open=true;
+clearProfileDirty();
+render();
+});
+
+gmRegisterAction('profile.new',async()=>{
+if(!confirmDiscardProfile())return;
+profileEditor.profile_id='';
+profileEditor.open=true;
+profileEditor.prefill=null;
+clearProfileDirty();
+render();
+});
+
+gmRegisterAction('profile.delete',async el=>{
+if(!confirmDiscardProfile())return;
+await deleteProfileEditor(el.dataset.profileId||'',true);
+});
+
+gmRegisterAction('profile.save',async()=>{
+await saveProfileEditor();
+});
+
+gmRegisterAction('profile.select',async el=>{
+if(!confirmDiscardProfile())return;
+await selectRoomProfile(profileEditor.room_id,el.dataset.profileId||'');
+});
+
+gmRegisterAction('quest.device.edit',async el=>{
+if(!confirmDiscardQuestDevice())return;
+questDeviceEditor.device_id=el.dataset.deviceId||'';
+questDeviceEditor.open=true;
+questDeviceEditor.draft=null;
+clearQuestDeviceDirty();
+render();
+});
+
+gmRegisterAction('quest.device.new',async()=>{
+if(!confirmDiscardQuestDevice())return;
+questDeviceEditor.device_id='';
+questDeviceEditor.open=true;
+questDeviceEditor.draft=newQuestDeviceDraft();
+clearQuestDeviceDirty();
+render();
+});
+
+gmRegisterAction('quest.device.discover',async()=>{
+await discoverQuestDeviceInterface();
+});
+
+gmRegisterAction('quest.discovery.apply',async()=>{
+applyQuestDeviceDiscovery();
+});
+
+gmRegisterAction('quest.discovery.discard',async()=>{
+discardQuestDeviceDiscovery();
+});
+
+gmRegisterAction('quest.device.save',async()=>{
+await saveQuestDeviceEditor();
+});
+
+gmRegisterAction('quest.device.delete',async el=>{
+if(!confirmDiscardQuestDevice())return;
+await deleteQuestDeviceEditor(el.dataset.deviceId||'',true);
+});
+
+gmRegisterAction('quest.command.add',async()=>{
+addQuestDeviceCommand();
+});
+
+gmRegisterAction('quest.command.delete',async el=>{
+deleteQuestDeviceCommand(Number(el.dataset.index));
+});
+
+gmRegisterAction('quest.event.add',async()=>{
+addQuestDeviceEvent();
+});
+
+gmRegisterAction('quest.event.delete',async el=>{
+deleteQuestDeviceEvent(Number(el.dataset.index));
+});
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+const GM={
+data:{
+state:null,
+observed:null,
+audit:null,
+timeline:null,
+roomScenarios:{},
+roomProfiles:{},
+scenarioEditorCatalogs:{},
+deviceConfig:null,
+questDevices:null,
+hardwareIo:{loaded:false,loading:false,error:'',data:null},
+audioFiles:{loaded:false,loading:false,scheduled:false,error:'',items:[]}
+},
+ui:{
+currentRoomScenarioId:{},
+currentRoomProfileId:{},
+deviceFilterRoom:'',
+observedFilter:'all',
+currentView:'dashboard',
+currentRoomId:'',
+roomTab:'overview',
+inputDirty:false,
+autoRenderDeferred:false,
+initialRouteApplied:false,
+skipScenarioDomSync:false,
+openDetails:{},
+flagDatalistSeq:0
+},
+editors:{
+profile:{room_id:'',profile_id:'',dirty:false,open:false,prefill:null},
+scenario:{room_id:'',scenario_id:'',dirty:false,open:false,draft:null,original_scenario:null,validation_report:null,expanded_step:-1,expanded_v2_action:'',active_branch:0,branch_count_shrink_allowed:false,branch_count_shrink_floor:0},
+questDevice:{device_id:'',dirty:false,open:false,draft:null,discovery:null}
+},
+session:{
+current:{role:'user',username:''}
+}
+};
+
+Object.defineProperties(globalThis,{
+gmState:{get(){return GM.data.state;},set(v){GM.data.state=v;}},
+gmObserved:{get(){return GM.data.observed;},set(v){GM.data.observed=v;}},
+gmAudit:{get(){return GM.data.audit;},set(v){GM.data.audit=v;}},
+gmTimeline:{get(){return GM.data.timeline;},set(v){GM.data.timeline=v;}},
+gmRoomScenarios:{get(){return GM.data.roomScenarios;},set(v){GM.data.roomScenarios=v||{};}},
+gmRoomProfiles:{get(){return GM.data.roomProfiles;},set(v){GM.data.roomProfiles=v||{};}},
+gmScenarioEditorCatalogs:{get(){return GM.data.scenarioEditorCatalogs;},set(v){GM.data.scenarioEditorCatalogs=v||{};}},
+gmDeviceConfig:{get(){return GM.data.deviceConfig;},set(v){GM.data.deviceConfig=v;}},
+gmQuestDevices:{get(){return GM.data.questDevices;},set(v){GM.data.questDevices=v;}},
+gmHardwareIo:{get(){return GM.data.hardwareIo;},set(v){GM.data.hardwareIo=v||{loaded:false,loading:false,error:'',data:null};}},
+gmAudioFiles:{get(){return GM.data.audioFiles;},set(v){GM.data.audioFiles=v||{loaded:false,loading:false,scheduled:false,error:'',items:[]};}},
+gmSession:{get(){return GM.session.current;},set(v){GM.session.current=v||{role:'user',username:''};}},
+currentRoomScenarioId:{get(){return GM.ui.currentRoomScenarioId;},set(v){GM.ui.currentRoomScenarioId=v||{};}},
+currentRoomProfileId:{get(){return GM.ui.currentRoomProfileId;},set(v){GM.ui.currentRoomProfileId=v||{};}},
+profileEditor:{get(){return GM.editors.profile;},set(v){GM.editors.profile=v||{};}},
+scenarioEditor:{get(){return GM.editors.scenario;},set(v){GM.editors.scenario=v||{};}},
+questDeviceEditor:{get(){return GM.editors.questDevice;},set(v){GM.editors.questDevice=v||{};}},
+deviceFilterRoom:{get(){return GM.ui.deviceFilterRoom;},set(v){GM.ui.deviceFilterRoom=v||'';}},
+observedFilter:{get(){return GM.ui.observedFilter;},set(v){GM.ui.observedFilter=v||'all';}},
+currentView:{get(){return GM.ui.currentView;},set(v){GM.ui.currentView=v||'dashboard';}},
+currentRoomId:{get(){return GM.ui.currentRoomId;},set(v){GM.ui.currentRoomId=v||'';}},
+roomTab:{get(){return GM.ui.roomTab;},set(v){GM.ui.roomTab=v||'overview';}},
+gmInputDirty:{get(){return GM.ui.inputDirty;},set(v){GM.ui.inputDirty=!!v;}},
+gmAutoRenderDeferred:{get(){return GM.ui.autoRenderDeferred;},set(v){GM.ui.autoRenderDeferred=!!v;}},
+gmInitialRouteApplied:{get(){return GM.ui.initialRouteApplied;},set(v){GM.ui.initialRouteApplied=!!v;}},
+gmSkipScenarioDomSync:{get(){return GM.ui.skipScenarioDomSync;},set(v){GM.ui.skipScenarioDomSync=!!v;}},
+gmOpenDetails:{get(){return GM.ui.openDetails;},set(v){GM.ui.openDetails=v||{};}},
+gmFlagDatalistSeq:{get(){return GM.ui.flagDatalistSeq;},set(v){GM.ui.flagDatalistSeq=Number(v)||0;}}
+});
+
+function setStatus(text,cls){const el=document.getElementById('system_status');if(!el)return;el.textContent=text||'';el.className='status '+(cls||'state-unknown');}
+async function gmFetch(url,options){const res=await fetch(url,options);if(res.status===401){window.location='/login';throw new Error('Unauthorized');}return res;}
+function isAdmin(){return gmSession&&gmSession.role==='admin';}
+function canOpenView(view){return !['profiles','scenarios','device_setup','hardware_io','observed','storage'].includes(view)||isAdmin();}
+function ensureAllowedView(){if(!canOpenView(currentView)){currentView='dashboard';}}
+function applyGMRoleLayout(){const admin=isAdmin();
+document.body.classList.toggle('role-admin',admin);const badge=document.getElementById('gm_role_badge');if(badge)badge.textContent=admin?'admin':'operator';
+document.querySelectorAll('[data-view]').forEach(el=>{if(['profiles','scenarios','device_setup','observed','storage'].includes(el.dataset.view||'')){el.style.display=admin?'':'none';}});ensureAllowedView();}
+async function loadGMSession(){try{const res=await api.session.info();if(res.ok){gmSession=await res.json();}}catch(err){gmSession={role:'user',username:''};}window.__WEB_SESSION=gmSession;applyGMRoleLayout();return gmSession;}
+function metric(label,value){return `<div class='card metric'><div class='label'>${esc(label)}</div><div class='value'>${esc(value)}</div></div>`;}
+function status(v){return `<span class='status ${stateClass(v)}'>${esc(healthLabel(v))}</span>`;}
+function roomCard(r){const derived=roomDerivedHealth(r);const scenarioIssues=roomQuestDeviceIssues(r).length;const issueCount=(Number(r.issue_count)||0)+scenarioIssues;return `<article class='card clickable' data-action='room.open' data-room-id='${esc(r.room_id)}'><div class='card-head'><div><div class='card-title'>${esc(r.title||r.name||r.room_id)}</div><div class='card-sub'>Room</div></div>${status(derived)}</div><div class='kvs'><div class='kv'><span class='k'>Devices</span><span class='v'>${esc(roomScenarioDeviceIds(r).length||r.device_count||0)}</span></div><div class='kv'><span class='k'>Issues</span><span class='v'>${esc(issueCount)}</span></div><div class='kv'><span class='k'>Timer</span>${roomClockHtml(r,'span','v')}</div></div></article>`;}
+function issueRow(i){const subject=i.device_id?deviceDisplayName(i.device_id):(i.room_id?roomName(i.room_id):i.scope);return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(subject)} - ${esc(i.title||i.code)}</div><div class='row-meta'>${esc(i.details||'')}</div></div>${status(i.severity)}</div>`;}
+function noProfilesHtml(roomId){return isAdmin()?`<div class='empty'>No game modes for this room</div><div class='actions'>${uiButton({label:'Create game mode',action:'admin.open',dataset:{view:'profiles','room-id':roomId||''}})}</div>`:`<div class='empty'>No game modes available. Ask admin.</div>`;}
+function noScenariosHtml(roomId){return isAdmin()?`<div class='empty'>No room scenarios</div><div class='actions'>${uiButton({label:'Create scenario',action:'admin.open',dataset:{view:'scenarios','room-id':roomId||''}})}</div>`:`<div class='empty'>No room scenarios</div>`;}
+function applyInitialOperatorRoute(){if(gmInitialRouteApplied)return;gmInitialRouteApplied=true;if(isAdmin())return;const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];if(!rooms.length)return;if(currentView==='dashboard'||currentView==='rooms'){currentView='room';currentRoomId=currentRoomId||rooms[0].room_id;roomTab='control';}}
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
 function scenarioById(roomId,scenarioId){return roomScenarios(roomId).find(s=>s.id===scenarioId)||null;}
 function roomSelectedScenarioObject(room){if(!room)return null;const profiles=roomProfiles(room.room_id);const profileId=roomSelectedProfileId(room.room_id)||room.selected_profile_id||'';const profile=profiles.find(p=>p.id===profileId)||null;const preferred=room.running_scenario_id||room.selected_profile_scenario_id||(profile&&profile.scenario_id)||room.selected_scenario_id||'';return scenarioById(room.room_id,preferred)||scenarioById(room.room_id,room.selected_scenario_id)||null;}
 function scenarioBranchDisplaySteps(branch){
@@ -171,30 +753,6 @@ function roomCurrentScenarioStep(room){const steps=roomScenarioSteps(room);const
 function roomScenarioDeviceIds(room){const ids=new Set();roomScenarioSteps(room).forEach(step=>{const type=String(step&&step.type||'').toLowerCase();if((type==='device_command'||type==='wait_device_event')&&step.device_id)ids.add(step.device_id);});return Array.from(ids);}
 function roomQuestDeviceIssues(room){return roomScenarioDeviceIds(room).map(id=>questDeviceById(id)).filter(Boolean).map(dev=>{const health=questDeviceHealth(dev);if(health==='ok')return null;return {device_id:dev.id,title:health==='fault'?'Device offline':'Device degraded',details:`${dev.name||dev.id}: ${questDeviceStatusText(dev)}`,severity:health};}).filter(Boolean);}
 function roomDerivedHealth(room){const issues=roomQuestDeviceIssues(room);if(issues.some(i=>i.severity==='fault'))return 'fault';if(issues.some(i=>i.severity==='degraded'))return 'degraded';return room&&room.health||'unknown';}
-function scenarioEditorCatalog(roomId){return gmScenarioEditorCatalogs[roomId]||{quest_devices:[],step_schemas:[]};}
-function optionList(items,selected,emptyLabel){let found=false;const opts=[];if(emptyLabel)opts.push(`<option value=''>${esc(emptyLabel)}</option>`);(Array.isArray(items)?items:[]).forEach(item=>{const id=item.id||'';if(id===selected)found=true;opts.push(`<option value='${esc(id)}' ${id===selected?'selected':''}>${esc(item.name||id)}</option>`);});if(selected&&!found)opts.push(`<option value='${esc(selected)}' selected>${esc(selected)} (missing)</option>`);return opts.join('');}
-function setStatus(text,cls){const el=document.getElementById('system_status');if(!el)return;el.textContent=text||'';el.className='status '+(cls||'state-unknown');}
-async function gmFetch(url,options){const res=await fetch(url,options);if(res.status===401){window.location='/login';throw new Error('Unauthorized');}return res;}
-function isAdmin(){return gmSession&&gmSession.role==='admin';}
-function canOpenView(view){return !['profiles','scenarios','device_setup','observed','storage'].includes(view)||isAdmin();}
-function ensureAllowedView(){if(!canOpenView(currentView)){currentView='dashboard';}}
-function applyGMRoleLayout(){const admin=isAdmin();
-document.body.classList.toggle('role-admin',admin);const badge=document.getElementById('gm_role_badge');if(badge)badge.textContent=admin?'admin':'operator';
-document.querySelectorAll('[data-view]').forEach(el=>{if(['profiles','scenarios','device_setup','observed','storage'].includes(el.dataset.view||'')){el.style.display=admin?'':'none';}});ensureAllowedView();}
-async function loadGMSession(){try{const res=await gmFetch('/api/session/info');if(res.ok){gmSession=await res.json();}}catch(err){gmSession={role:'user',username:''};}window.__WEB_SESSION=gmSession;applyGMRoleLayout();return gmSession;}
-function metric(label,value){return `<div class='card metric'><div class='label'>${esc(label)}</div><div class='value'>${esc(value)}</div></div>`;}
-function status(v){return `<span class='status ${stateClass(v)}'>${esc(healthLabel(v))}</span>`;}
-function roomCard(r){const derived=roomDerivedHealth(r);const scenarioIssues=roomQuestDeviceIssues(r).length;const issueCount=(Number(r.issue_count)||0)+scenarioIssues;return `<article class='card clickable' data-open-room='${esc(r.room_id)}'><div class='card-head'><div><div class='card-title'>${esc(r.title||r.name||r.room_id)}</div><div class='card-sub'>Room</div></div>${status(derived)}</div><div class='kvs'><div class='kv'><span class='k'>Devices</span><span class='v'>${esc(roomScenarioDeviceIds(r).length||r.device_count||0)}</span></div><div class='kv'><span class='k'>Issues</span><span class='v'>${esc(issueCount)}</span></div><div class='kv'><span class='k'>Timer</span>${roomClockHtml(r,'span','v')}</div></div></article>`;}
-function questDeviceMonitorRow(dev){const observed=observedByClientId(dev.client_id||dev.id);const health=questDeviceHealth(dev);const meta=[`${(dev.commands||[]).length} commands`,`${(dev.events||[]).length} events`,dev.enabled===false?'disabled':'enabled'].join(' / ');const setup=isAdmin()?`<button data-open-device-setup='${esc(dev.id||'1')}'>Device Setup</button>`:'';const debug=isAdmin()?`<details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(dev.id||'')}</div><div class='row-meta'>Client: ${esc(dev.client_id||'none')}</div></details>`:'';return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(questDeviceDisplayName(dev))} ${dev.enabled===false?`<span class='badge'>disabled</span>`:''}</div><div class='row-meta'>${esc(meta)}</div><div class='row-meta'>${observed?`${esc(observed.connectivity||'unknown')} / fw ${esc(observed.fw_version||'n/a')}`:'not observed'}</div>${debug}</div><div>${status(health)}<div class='row-meta'>${esc(questDeviceStatusText(dev))}</div></div><div class='actions'>${setup}</div></div>`;}
-function issueRow(i){const subject=i.device_id?deviceDisplayName(i.device_id):(i.room_id?roomName(i.room_id):i.scope);return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(subject)} - ${esc(i.title||i.code)}</div><div class='row-meta'>${esc(i.details||'')}</div></div>${status(i.severity)}</div>`;}
-function commandPolicy(cmd){return cmd&&cmd.policy&&typeof cmd.policy==='object'?cmd.policy:{};}
-function commandRequiresConfirmation(cmd){const p=commandPolicy(cmd);return !!p.requires_confirmation||(p.danger_level&&p.danger_level!=='normal');}
-function manualButtonGroups(){return questDevices().map(dev=>{const id=dev.id||'';const commands=(Array.isArray(dev.commands)?dev.commands:[]).filter(cmd=>cmd&&cmd.id&&commandPolicy(cmd).manual_allowed!==false);if(!id||!commands.length)return null;return {id,name:dev.name||id,room_id:'',health:questDeviceHealth(dev),commands};}).filter(Boolean);}
-function renderRightSidebar(){const root=document.getElementById('gm_right_sidebar');if(!root)return;const groups=manualButtonGroups();root.innerHTML=`<div class='right-brand'><h2>Manual buttons</h2><p>Single-device controls</p></div><div class='manual-groups'>${groups.length?groups.map(g=>`<section class='manual-group'><div class='manual-group-head'><div><div class='manual-title'>${esc(g.name)}</div><div class='manual-meta'>${g.room_id?esc(roomName(g.room_id)):'Quest device'}</div></div>${status(g.health)}</div><div class='manual-buttons'>${g.commands.map(cmd=>`<button class='${commandRequiresConfirmation(cmd)?'danger':''}' data-manual-device='${esc(g.id)}' data-manual-command='${esc(cmd.id)}' data-confirm-required='${commandRequiresConfirmation(cmd)?'1':'0'}'>${esc(cmd.label||cmd.id)}</button>`).join('')}</div>${isAdmin()?`<details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(g.id)}</div></details>`:''}</section>`).join(''):`<div class='manual-empty'>No manual buttons configured</div>`}</div>`;}
-function commandSupportsScenarioParams(command){return !!(command&&command.command);}
-function questDeviceCommandName(deviceId,commandId){const dev=questDeviceById(deviceId);const cmd=dev&&Array.isArray(dev.commands)?dev.commands.find(c=>(c.id||'')===commandId):null;return cmd&&(cmd.label||cmd.id)||commandId||'command';}
-function questDeviceEventName(deviceId,eventId){const dev=questDeviceById(deviceId);const ev=dev&&Array.isArray(dev.events)?dev.events.find(item=>(item.id||'')===eventId):null;return ev&&(ev.label||ev.id)||eventId||'event';}
-function questDeviceEventNameByType(deviceId,eventType){const dev=questDeviceById(deviceId);const ev=dev&&Array.isArray(dev.events)?dev.events.find(item=>(item.event||item.id||'')===eventType):null;return ev&&(ev.label||ev.id)||eventType||'event';}
 function scenarioAudioStepText(s){const params=s&&s.params&&typeof s.params==='object'?s.params:{};const command=String(s&&s.command_id||'');const channel=String(params.channel||'effect').toLowerCase();const file=compactText(audioBaseName(params.file||''),34);if(command==='play'){const kind=channel==='background'||channel==='bg'||channel==='music'?'bg':'sfx';return file?`Play ${kind}: ${file}`:`Play ${kind}`;}if(command==='stop')return `Stop audio${params.channel?`: ${params.channel}`:''}`;if(command==='pause')return 'Pause audio';if(command==='resume')return 'Resume audio';if(command==='set_volume')return `Set volume: ${params.volume??''}`;return `Audio: ${questDeviceCommandName('system_audio',command)}`;}
 function scenarioStepText(s){if(!s)return '';const type=String(s.type||'').toLowerCase();if(type==='device_command'){if(String(s.device_id||'')==='system_audio')return scenarioAudioStepText(s);return `${deviceDisplayName(s.device_id)} -> ${questDeviceCommandName(s.device_id,s.command_id)}`;}if(type==='wait_device_event')return `Wait ${deviceDisplayName(s.device_id)}: ${questDeviceEventName(s.device_id,s.event_id)}`;if(type==='wait_time')return `Wait ${Math.max(1,Math.round((Number(s.duration_ms)||1000)/1000))} sec`;if(type==='operator_approval')return `Operator approval: ${s.operator_prompt||s.prompt||s.label||'Confirm'}`;return s.label||s.id||s.type||'Step';}
 function scenarioStepLabel(room,total){const state=room.scenario_runtime_state||'idle';const idx=Number(room.scenario_current_step_index)||0;if(!total)return '0 / 0';if(state==='idle'||state==='stopped')return `0 / ${total}`;if(state==='done')return `${total} / ${total}`;return `${Math.min(total,idx+1)} / ${total}`;}
@@ -260,7 +818,12 @@ function renderScenarioBranchSkipButton(room,branch,branchRuntime){
 if(!room||!branchRuntime||branchRuntime.state!=='waiting'||!branchRuntime.wait_operator_skip_allowed)return '';
 const label=branchRuntime.wait_operator_skip_label||'Skip wait';
 const branchId=branchRuntime.id||branch.id||'';
-return `<button data-room-scenario-runtime='next' data-room-id='${esc(room.room_id||'')}' data-room-scenario-branch='${esc(branchId)}'>${esc(label)}</button>`;
+return uiButton({
+label,
+action:'room.scenario.runtime',
+dataset:{op:'next','room-id':room.room_id||'','branch-id':branchId},
+confirm:'Force complete this branch wait?',
+});
 }
 function renderScenarioActiveWaits(room,items){
 const waits=items.filter(item=>item.runtime&&item.runtime.state==='waiting'&&item.runtime.wait_operator_skip_allowed);
@@ -312,9 +875,7 @@ return `<div class='scenario-progress-wrap'><div class='scenario-progress-overvi
 function scenarioValidationText(s){if(!s)return 'No scenario selected';const n=Number(s.validation_issue_count)||0;if(s.valid===false)return `${n||1} validation issue${n===1?'':'s'}`;return n?`Valid, ${n} warning${n===1?'':'s'}`:'Valid';}
 function scenarioIssueHtml(issues){return Array.isArray(issues)&&issues.length?`<div class='validation-list'>${issues.map(i=>`<div class='validation-item'>${esc(i.level||'error')} step ${esc(i.step_index||0)} / ${esc(i.code||'VALIDATION')}: ${esc(i.message||'')}</div>`).join('')}</div>`:'';}
 function scenarioDraftValidationHtml(){const r=scenarioEditor.validation_report;if(!r)return '';const errors=Number(r.error_count)||0;const warnings=Number(r.warning_count)||0;const summary=errors?`${errors} error${errors===1?'':'s'}, ${warnings} warning${warnings===1?'':'s'}`:(warnings?`${warnings} warning${warnings===1?'':'s'}`:'valid');return `<div class='row-meta ${errors?'bad-text':''}'>Draft validation: ${esc(summary)}</div>${scenarioIssueHtml(r.issues)}`;}
-function noProfilesHtml(roomId){return isAdmin()?`<div class='empty'>No game modes for this room</div><div class='actions'><button data-open-admin-view='profiles' data-open-admin-room='${esc(roomId||'')}'>Create game mode</button></div>`:`<div class='empty'>No game modes available. Ask admin.</div>`;}
-function noScenariosHtml(roomId){return isAdmin()?`<div class='empty'>No room scenarios</div><div class='actions'><button data-open-admin-view='scenarios' data-open-admin-room='${esc(roomId||'')}'>Create scenario</button></div>`:`<div class='empty'>No room scenarios</div>`;}
-function applyInitialOperatorRoute(){if(gmInitialRouteApplied)return;gmInitialRouteApplied=true;if(isAdmin())return;const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];if(!rooms.length)return;if(currentView==='dashboard'||currentView==='rooms'){currentView='room';currentRoomId=currentRoomId||rooms[0].room_id;roomTab='control';}}
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
 function isEditableControl(el){return !!(el&&el.closest&&el.closest('#gm_content')&&el.matches('input,select,textarea'));}
 function dirtyLockControl(el){
 if(!isEditableControl(el)||el.disabled||el.readOnly)return false;
@@ -343,6 +904,104 @@ function syncScenarioDraftFromDom(){if(!scenarioEditor.dirty||currentView!=='sce
 function skipNextScenarioDomSync(){gmSkipScenarioDomSync=true;}
 function markQuestDeviceDirty(){questDeviceEditor.dirty=true;if(document.querySelector('[data-quest-device-editor]'))questDeviceEditor.draft=collectQuestDeviceEditor(false);}
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
+function questDeviceDisplayName(dev){return dev&&(dev.name||dev.display_name||dev.id)||'Device';}
+function observedDisplayName(item){if(!item)return 'Device';const reg=observedRegistration(item.device_id);return reg&&(reg.name||reg.device_id)||item.name||item.display_name||item.device_id||'Device';}
+function questDeviceHealth(dev){if(!dev)return 'offline';if(dev.system_device)return 'ok';if(dev.enabled===false)return 'degraded';const observed=observedByClientId(dev.client_id||dev.id);if(!observed)return 'fault';if(observed.connectivity==='offline'||observed.connectivity==='unknown')return 'fault';if(observed.health==='fault'||observed.state==='fault')return 'fault';if(observed.health==='degraded'||observed.state==='degraded')return 'degraded';return 'ok';}
+function questDeviceStatusText(dev){if(!dev)return 'missing device';if(dev.system_device)return 'system device';if(dev.enabled===false)return 'disabled';const observed=observedByClientId(dev.client_id||dev.id);if(!observed)return 'not observed';if(observed.connectivity==='offline'||observed.connectivity==='unknown')return 'offline';return observed.health||observed.state||'online';}
+function questDeviceMonitorRow(dev){const observed=observedByClientId(dev.client_id||dev.id);const health=questDeviceHealth(dev);const meta=[`${(dev.commands||[]).length} commands`,`${(dev.events||[]).length} events`,dev.enabled===false?'disabled':'enabled'].join(' / ');const setup=isAdmin()?uiButton({label:'Device Setup',action:'device.setup.open',dataset:{'device-id':dev.id||'1'}}):'';const debug=isAdmin()?`<details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(dev.id||'')}</div><div class='row-meta'>Client: ${esc(dev.client_id||'none')}</div></details>`:'';return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(questDeviceDisplayName(dev))} ${dev.enabled===false?`<span class='badge'>disabled</span>`:''}</div><div class='row-meta'>${esc(meta)}</div><div class='row-meta'>${observed?`${esc(observed.connectivity||'unknown')} / fw ${esc(observed.fw_version||'n/a')}`:'not observed'}</div>${debug}</div><div>${status(health)}<div class='row-meta'>${esc(questDeviceStatusText(dev))}</div></div><div class='actions'>${setup}</div></div>`;}
+function commandPolicy(cmd){return cmd&&cmd.policy&&typeof cmd.policy==='object'?cmd.policy:{};}
+function commandRequiresConfirmation(cmd){const p=commandPolicy(cmd);return !!p.requires_confirmation||(p.danger_level&&p.danger_level!=='normal');}
+function manualButtonGroups(){return questDevices().map(dev=>{const id=dev.id||'';const commands=(Array.isArray(dev.commands)?dev.commands:[]).filter(cmd=>cmd&&cmd.id&&commandPolicy(cmd).manual_allowed!==false);if(!id||!commands.length)return null;return {id,name:dev.name||id,room_id:'',health:questDeviceHealth(dev),commands};}).filter(Boolean);}
+let gmRightSidebarRenderKey='';
+function rightSidebarRenderKey(groups){
+return JSON.stringify({
+admin:isAdmin(),
+groups:groups.map(g=>({
+id:g.id,
+name:g.name,
+room_id:g.room_id||'',
+health:g.health,
+commands:g.commands.map(cmd=>({
+id:cmd.id||'',
+label:cmd.label||cmd.id||'',
+danger:commandRequiresConfirmation(cmd)
+}))
+}))
+});
+}
+function renderRightSidebar(force){const root=document.getElementById('gm_right_sidebar');if(!root)return;const groups=manualButtonGroups();const key=rightSidebarRenderKey(groups);if(!force&&gmRightSidebarRenderKey===key)return;gmRightSidebarRenderKey=key;root.innerHTML=`<div class='right-brand'><h2>Manual buttons</h2><p>Single-device controls</p></div><div class='manual-groups'>${groups.length?groups.map(g=>`<section class='manual-group'><div class='manual-group-head'><div><div class='manual-title'>${esc(g.name)}</div><div class='manual-meta'>${g.room_id?esc(roomName(g.room_id)):'Quest device'}</div></div>${status(g.health)}</div><div class='manual-buttons'>${g.commands.map(cmd=>uiButton({label:cmd.label||cmd.id,action:'manual.device.command',kind:commandRequiresConfirmation(cmd)?'danger':'',dataset:{'device-id':g.id,'command-id':cmd.id},confirm:commandRequiresConfirmation(cmd)?'Run this manual command?':''})).join('')}</div>${isAdmin()?uiDetails({summary:'Debug ids',content:`<div class='row-meta'>Device ID: ${esc(g.id)}</div>`}):''}</section>`).join(''):uiEmpty('No manual buttons configured')}</div>`;}
+function commandSupportsScenarioParams(command){return !!(command&&command.command);}
+function questDeviceCommandName(deviceId,commandId){const dev=questDeviceById(deviceId);const cmd=dev&&Array.isArray(dev.commands)?dev.commands.find(c=>(c.id||'')===commandId):null;return cmd&&(cmd.label||cmd.id)||commandId||'command';}
+function questDeviceEventName(deviceId,eventId){const dev=questDeviceById(deviceId);const ev=dev&&Array.isArray(dev.events)?dev.events.find(item=>(item.id||'')===eventId):null;return ev&&(ev.label||ev.id)||eventId||'event';}
+function questDeviceEventNameByType(deviceId,eventType){const dev=questDeviceById(deviceId);const ev=dev&&Array.isArray(dev.events)?dev.events.find(item=>(item.event||item.id||'')===eventType):null;return ev&&(ev.label||ev.id)||eventType||'event';}
+function detailsKeyFor(el){
+if(!el||String(el.tagName||'').toLowerCase()!=='details')return '';
+if(el.dataset&&el.dataset.detailsKey)return el.dataset.detailsKey;
+const summary=(el.querySelector('summary')&&el.querySelector('summary').textContent||'details').trim().toLowerCase();
+let scope='';
+const scoped=el.closest('[data-scenario-step],[data-quest-command],[data-quest-event],[data-quest-device-editor]');
+if(scoped){
+['scenarioStep','questCommand','questEvent','questDeviceEditor'].some(k=>{
+if(scoped.dataset&&scoped.dataset[k]!==undefined){scope=`${k}:${scoped.dataset[k]||'1'}`;return true;}
+return false;
+});
+}
+return `${currentView}:${currentRoomId||''}:${scenarioEditor.room_id||''}:${scenarioEditor.scenario_id||''}:${scope}:${summary}`;
+}
+function detailsAttrs(key,defaultOpen){
+const open=gmOpenDetails[key]!==undefined?gmOpenDetails[key]:!!defaultOpen;
+return `data-details-key='${esc(key)}' ${open?'open':''}`;
+}
+function slugifyId(value,fallback){
+const base=String(value||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+return base||`${fallback||'item'}_${Date.now().toString(16)}`;
+}
+function stateClass(v){return v==='fault'||v==='error'||v==='offline'?'state-fault':(v==='degraded'||v==='warning'?'state-degraded':(v==='ok'||v==='online'?'state-ok':'state-unknown'));}
+function healthLabel(v){return v||'unknown';}
+function fmtClock(ms){const total=Math.max(0,Math.floor((Number(ms)||0)/1000));const h=Math.floor(total/3600);const m=Math.floor((total%3600)/60);const s=total%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`;}
+function roomTimerDisplayMs(room){
+const remaining=Math.max(0,Number(room&&room.timer_remaining_ms)||0);
+if((room&&room.timer_state)!=='running')return remaining;
+const synced=Number(room&&room._timer_synced_at_ms)||performance.now();
+return Math.max(0,remaining-(performance.now()-synced));
+}
+function roomClockAttrs(room){return `data-room-clock='${esc(room&&room.room_id||'')}' data-room-clock-state='${esc(room&&room.timer_state||'idle')}'`;}
+function roomClockHtml(room,tag,cls){const name=tag||'span';const classAttr=cls?` class='${esc(cls)}'`:'';return `<${name}${classAttr} ${roomClockAttrs(room)}>${fmtClock(roomTimerDisplayMs(room))}</${name}>`;}
+function ago(ms){if(!ms)return 'never';const age=Math.max(0,Math.floor((performance.now()-Number(ms))/1000));return age<60?`${age}s ago`:`${Math.floor(age/60)}m ago`;}
+function audioBaseName(path){if(!path)return '';const parts=String(path).split('/').filter(Boolean);return parts.length?parts[parts.length-1]:path;}
+function audioDirName(path){if(!path)return '/';const raw=String(path);const idx=raw.lastIndexOf('/');if(idx<0)return '/';return raw.slice(0,idx)||'/';}
+function compactText(value,max){const text=String(value||'');const limit=Math.max(8,Number(max)||32);return text.length>limit?`${text.slice(0,limit-1)}...`:text;}
+function roomById(id){return (gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[]).find(r=>r.room_id===id)||null;}
+function deviceById(id){return (gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).find(d=>d.device_id===id)||null;}
+function roomName(id){const r=roomById(id);return r&&(r.title||r.name||r.room_id)||id||'No room';}
+function deviceDisplayName(id){const live=deviceById(id);const quest=questDevices().find(d=>(d.id||'')===id);const cfg=configDevices().find(d=>(d.id||d.device_id||'')===id);return live&&(live.display_name||live.device_id)||quest&&(quest.name||quest.id)||cfg&&(cfg.display_name||cfg.name||cfg.id||cfg.device_id)||id||'Device';}
+function roomDevices(id){return (gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).filter(d=>d.room_id===id);}
+function roomIssues(id){return (gmState&&Array.isArray(gmState.issues)?gmState.issues:[]).filter(i=>!id||!i.room_id||i.room_id===id);}
+function observedRegistration(id){const key=String(id||'');if(!key)return null;const live=(gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).find(d=>d.device_id===key);if(live)return {device_id:live.device_id,name:live.display_name||live.device_id,via:'direct'};const quest=questDevices().find(dev=>(dev.client_id||dev.id||'')===key);if(quest)return {device_id:quest.id,name:quest.name||quest.id,via:'quest_device'};const cfg=configDevices().find(dev=>(Array.isArray(dev.bindings)?dev.bindings:[]).some(b=>(b&&b.client_id||'')===key));if(cfg){const devId=cfg.id||cfg.device_id||'';return {device_id:devId,name:cfg.display_name||cfg.name||devId,via:'binding'};}return null;}
+function knownDeviceIds(){const ids=new Set((gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).map(d=>d.device_id));questDevices().forEach(dev=>{if(dev.id)ids.add(dev.id);if(dev.client_id)ids.add(dev.client_id);});configDevices().forEach(dev=>(Array.isArray(dev.bindings)?dev.bindings:[]).forEach(b=>{if(b&&b.client_id)ids.add(b.client_id);}));return ids;}
+function observedItems(){return (gmObserved&&Array.isArray(gmObserved.items))?gmObserved.items:[];}
+function auditItems(){return (gmAudit&&Array.isArray(gmAudit.items))?gmAudit.items:[];}
+function timelineItems(){return (gmTimeline&&Array.isArray(gmTimeline.items))?gmTimeline.items:[];}
+function roomScenarios(id){return (gmRoomScenarios&&Array.isArray(gmRoomScenarios[id]))?gmRoomScenarios[id]:[];}
+function roomProfiles(id){const data=gmRoomProfiles?gmRoomProfiles[id]:null;return data&&Array.isArray(data.profiles)?data.profiles:[];}
+function roomSelectedProfileId(id){return currentRoomProfileId[id]||(gmRoomProfiles[id]&&gmRoomProfiles[id].selected_profile_id)||'';}
+function scenarioName(roomId,scenarioId){const s=roomScenarios(roomId).find(x=>x.id===scenarioId);return s&&(s.name||s.id)||scenarioId||'none';}
+function scenarioDisplayName(roomId,scenarioId,fallback){const s=scenarioById(roomId,scenarioId);return s&&(s.name||s.id)||fallback||scenarioId||'none';}
+function configDevices(){return gmDeviceConfig&&Array.isArray(gmDeviceConfig.devices)?gmDeviceConfig.devices:[];}
+function questDevices(){return gmQuestDevices&&Array.isArray(gmQuestDevices.devices)?gmQuestDevices.devices:[];}
+function observedByClientId(id){const key=String(id||'');if(!key)return null;return observedItems().find(o=>o.device_id===key)||null;}
+function questDeviceById(id){return questDevices().find(d=>(d.id||'')===id)||null;}
+function scenarioEditorCatalog(roomId){return gmScenarioEditorCatalogs[roomId]||{quest_devices:[],step_schemas:[]};}
+function optionList(items,selected,emptyLabel){let found=false;const opts=[];if(emptyLabel)opts.push(`<option value=''>${esc(emptyLabel)}</option>`);(Array.isArray(items)?items:[]).forEach(item=>{const id=item.id||'';if(id===selected)found=true;opts.push(`<option value='${esc(id)}' ${id===selected?'selected':''}>${esc(item.name||id)}</option>`);});if(selected&&!found)opts.push(`<option value='${esc(selected)}' selected>${esc(selected)} (missing)</option>`);return opts.join('');}
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+function renderRoomGameButtons(room,canStart,canStop,canReset){
+return uiActions([
+uiButton({label:'Start game',action:'room.game',kind:'approve',dataset:{op:'start','room-id':room.room_id},disabled:!canStart}),
+uiButton({label:'Stop game',action:'room.game',dataset:{op:'stop','room-id':room.room_id},disabled:!canStop,confirm:'Stop this game session?'}),
+uiButton({label:'Reset game',action:'room.game',kind:'danger',dataset:{op:'reset','room-id':room.room_id},disabled:!canReset,confirm:'Reset this game session?'}),
+]);
+}
+
 function renderRoomProfileControl(room){
 const profiles=roomProfiles(room.room_id);
 const selectedId=roomSelectedProfileId(room.room_id)||room.selected_profile_id||'';
@@ -358,9 +1017,7 @@ profiles.map(p=>`<option value='${esc(p.id)}' ${selected&&selected.id===p.id?'se
 esc(selectedName||room.selected_profile_id||'none')}
 </span></div><div class='kv'><span class='k'>Scenario</span><span class='v'> ${
 esc(scenarioName(room.room_id,selectedScenarioId))}
-</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div><div style='height:12px'></div><div class='actions'><button class='approve' data-room-game='start' data-room-id='${esc(room.room_id)}' ${
-canStart?'':'disabled'}
->Start game</button><button data-room-game='stop' data-room-id='${esc(room.room_id)}'>Stop game</button><button class='danger' data-room-game='reset' data-room-id='${esc(room.room_id)}'>Reset game</button></div>`:noProfilesHtml(room.room_id)}</div><div style='height:12px'></div>`;
+</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div><div style='height:12px'></div>${renderRoomGameButtons(room,canStart,true,true)}`:noProfilesHtml(room.room_id)}</div><div style='height:12px'></div>`;
 }
 
 function renderRoomOperatorConsole(room){
@@ -378,8 +1035,9 @@ const runningName=room.running_scenario_name||scenarioDisplayName(room.room_id,r
 const currentStep=roomCurrentScenarioStep(room);
 const currentStepText=currentStep?scenarioStepText(currentStep):scenarioStepLabel(room,steps.length);
 const canStart=!!selected&&selected.valid!==false;
-const canStop=room.session_present&&room.session_state!=='finished';
-const canReset=room.session_present;
+const sessionPresent=!!room.session_present||['running','paused','finished'].includes(room.session_state||'');
+const canStop=sessionPresent&&room.session_state!=='finished';
+const canReset=sessionPresent;
 const canPause=room.timer_state==='running';
 const canResume=room.timer_state==='paused';
 const canAdjust=(Number(room.timer_duration_ms)||0)>0||(Number(room.timer_remaining_ms)||0)>0;
@@ -405,13 +1063,20 @@ profiles.map(p=>`<option value='${esc(p.id)}' ${selected&&selected.id===p.id?'se
 esc(selectedName||selectedId||'none')}
 </span></div><div class='kv'><span class='k'>Scenario</span><span class='v'> ${
 esc(scenarioName(room.room_id,scenarioId))}
-</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div><div class='actions'><button class='approve' data-room-game='start' data-room-id='${esc(room.room_id)}' ${canStart?'':'disabled'}>Start game</button><button data-room-game='stop' data-room-id='${esc(room.room_id)}' ${canStop?'':'disabled'}>Stop game</button><button class='danger' data-room-game='reset' data-room-id='${esc(room.room_id)}' ${canReset?'':'disabled'}>Reset game</button></div></div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room,steps.length))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText)}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
+</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div>${renderRoomGameButtons(room,canStart,canStop,canReset)}</div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room,steps.length))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText)}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
 esc(waitPrompt)}
 </div>`:''}${canSkipWait?`<div class='operator-prompt'>Operator override available: ${esc(skipWaitLabel)}</div>`:''}${room.scenario_operator_message?`<div class='operator-prompt'>${
 esc(room.scenario_operator_message)}
 </div>`:''}${flagsHtml}${room.scenario_last_error?`<div class='row-meta bad-text'>${
 esc(room.scenario_last_error)}
-</div>`:''}<div style='height:12px'></div><div class='actions'><button class='approve' data-room-scenario-runtime='approve' data-room-id='${esc(room.room_id)}' ${canApprove?'':'disabled'}>${esc(approveLabel)}</button>${canSkipWait?`<button data-room-scenario-runtime='next' data-room-id='${esc(room.room_id)}'>${esc(skipWaitLabel)}</button>`:''}<button data-room-timer='pause' data-room-id='${esc(room.room_id)}' ${canPause?'':'disabled'}>Pause</button><button data-room-timer='resume' data-room-id='${esc(room.room_id)}' ${canResume?'':'disabled'}>Resume</button><button data-room-timer='plus1' data-room-id='${esc(room.room_id)}' ${canAdjust?'':'disabled'}>+1 min</button><button data-room-timer='minus1' data-room-id='${esc(room.room_id)}' ${canAdjust?'':'disabled'}>-1 min</button></div><details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'><button data-room-timer='start' data-room-id='${esc(room.room_id)}'>Start timer</button></div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario||steps)}</div><div style='height:12px'></div>`;
+</div>`:''}<div style='height:12px'></div>${uiActions([
+uiButton({label:approveLabel,kind:'approve',action:'room.scenario.runtime',dataset:{op:'approve','room-id':room.room_id},disabled:!canApprove}),
+canSkipWait?uiButton({label:skipWaitLabel,action:'room.scenario.runtime',dataset:{op:'next','room-id':room.room_id},confirm:'Force complete current scenario wait?'}):'',
+uiButton({label:'Pause',action:'room.timer',dataset:{op:'pause','room-id':room.room_id},disabled:!canPause}),
+uiButton({label:'Resume',action:'room.timer',dataset:{op:'resume','room-id':room.room_id},disabled:!canResume}),
+uiButton({label:'+1 min',action:'room.timer',dataset:{op:'plus1','room-id':room.room_id},disabled:!canAdjust}),
+uiButton({label:'-1 min',action:'room.timer',dataset:{op:'minus1','room-id':room.room_id},disabled:!canAdjust}),
+])}<details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'>${uiButton({label:'Start timer',action:'room.timer',dataset:{op:'start','room-id':room.room_id}})}</div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario||steps)}</div><div style='height:12px'></div>`;
 }
 
 function renderRoomScenarioControl(room){
@@ -443,19 +1108,13 @@ runningName?`<div class='row-meta'>Running snapshot: ${esc(runningName)} #${esc(
 ${selected&&selected.valid===false&&Array.isArray(selected.validation_issues)?`<div class='row-meta bad-text'>${esc((selected.validation_issues[0]&&selected.validation_issues[0].message)||'Scenario validation failed')}</div>`:''}
 ${
 room.scenario_last_error?`<div class='row-meta bad-text'>${esc(room.scenario_last_error)}</div>`:''}
-<div style='height:12px'></div><div class='actions'><button data-room-scenario-runtime='start' data-room-id='${esc(room.room_id)}' ${
-canStart?'':'disabled'}
->Start</button><button data-room-scenario-runtime='stop' data-room-id='${esc(room.room_id)}' ${
-canRun?'':'disabled'}
->Stop</button><button class='approve' data-room-scenario-runtime='approve' data-room-id='${esc(room.room_id)}' ${
-canApprove?'':'disabled'}
->${
-esc(approveLabel)}
-</button><button class='danger' data-room-scenario-runtime='next' data-room-id='${esc(room.room_id)}' ${
-canNext?'':'disabled'}
->Next</button><button data-room-scenario-runtime='reset' data-room-id='${esc(room.room_id)}' ${
-canRun?'':'disabled'}
->Reset</button></div>`:noScenariosHtml(room.room_id)}</details><div style='height:12px'></div>`;
+<div style='height:12px'></div>${uiActions([
+uiButton({label:'Start',action:'room.scenario.runtime',dataset:{op:'start','room-id':room.room_id},disabled:!canStart}),
+uiButton({label:'Stop',action:'room.scenario.runtime',dataset:{op:'stop','room-id':room.room_id},disabled:!canRun}),
+uiButton({label:approveLabel,kind:'approve',action:'room.scenario.runtime',dataset:{op:'approve','room-id':room.room_id},disabled:!canApprove}),
+uiButton({label:'Next',kind:'danger',action:'room.scenario.runtime',dataset:{op:'next','room-id':room.room_id},disabled:!canNext,confirm:'Force complete current scenario wait?'}),
+uiButton({label:'Reset',action:'room.scenario.runtime',dataset:{op:'reset','room-id':room.room_id},disabled:!canRun}),
+])}`:noScenariosHtml(room.room_id)}</details><div style='height:12px'></div>`;
 }
 
 function injectRoomScenarios(){
@@ -469,7 +1128,7 @@ if(first)first.insertAdjacentHTML('beforebegin',renderRoomOperatorConsole(room)+
 }
 
 function tabs(active,names,scope){
-return `<div class='tabs'>${names.map(n=>`<button class='tab-btn ${active===n?'active':''}' data-tab-scope='${scope}' data-tab='${n}'>${
+return `<div class='tabs'>${names.map(n=>`<button class='tab-btn ${active===n?'active':''}' data-action='room.tab' data-scope='${scope}' data-tab='${n}'>${
 esc(n[0].toUpperCase()+n.slice(1))}
 </button>`).join('')}</div>`;
 }
@@ -493,7 +1152,7 @@ const current=roomCurrentScenarioStep(room);
 const issues=roomQuestDeviceIssues(room).length+(Number(room.issue_count)||0);
 const devices=roomScenarioDeviceIds(room).length||room.device_count||0;
 const runtime=room.scenario_runtime_state||room.session_state||'idle';
-return `<tr class='clickable-row' data-open-room='${esc(room.room_id)}'><td><strong>${esc(room.title||room.name||room.room_id)}</strong><span>${esc(room.room_id||'')}</span></td><td>${status(roomDerivedHealth(room))}</td><td><strong>${esc(gameName)}</strong><span>${esc(scenarioNameText)}</span></td><td>${roomClockHtml(room,'span','')}</td><td>${esc(runtime)}</td><td>${esc(current?scenarioStepText(current):'none')}</td><td>${esc(scenarioWaitText(room))}</td><td>${esc(devices)}</td><td>${esc(issues)}</td><td class='observed-actions'><button class='small-btn' data-open-room='${esc(room.room_id)}'>Open</button></td></tr>`;
+return `<tr class='clickable-row' data-action='room.open' data-room-id='${esc(room.room_id)}'><td><strong>${esc(room.title||room.name||room.room_id)}</strong><span>${esc(room.room_id||'')}</span></td><td>${status(roomDerivedHealth(room))}</td><td><strong>${esc(gameName)}</strong><span>${esc(scenarioNameText)}</span></td><td>${roomClockHtml(room,'span','')}</td><td>${esc(runtime)}</td><td>${esc(current?scenarioStepText(current):'none')}</td><td>${esc(scenarioWaitText(room))}</td><td>${esc(devices)}</td><td>${esc(issues)}</td><td class='observed-actions'>${uiButton({label:'Open',kind:'small-btn',action:'room.open',dataset:{'room-id':room.room_id}})}</td></tr>`;
 }
 
 function dashboardIssueRow(issue){
@@ -523,7 +1182,7 @@ return `<div class='dashboard-summary observed-summary'><span>Rooms <strong>${es
 function renderRoomsView(){
 setPage('Rooms','Room status and entry points');
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
-const create=isAdmin()?`<div class='actions' style='margin-bottom:14px'><button data-room-new='1'>Create room</button></div>`:'';
+const create=isAdmin()?`<div class='actions' style='margin-bottom:14px'>${uiButton({label:'Create room',action:'room.create'})}</div>`:'';
 return `${create}<div class='grid auto'>${rooms.length?rooms.map(roomCard).join(''):`<div class='card empty'>No rooms</div>`}</div>`;
 }
 
@@ -532,7 +1191,8 @@ const room=roomById(currentRoomId)||((gmState&&gmState.rooms&&gmState.rooms[0])?
 if(room)currentRoomId=room.room_id;
 setPage(room?`Room: ${room.title||room.room_id}`:'Room','Room control');
 if(!room)return `<div class='card empty'>No room selected</div>`;
-const adminActions=isAdmin()?`<div class='actions' style='margin-bottom:14px'><button class='danger' data-room-delete='${esc(room.room_id)}'>Delete room</button></div>`:'';
+const roomNameText=room.title||room.name||room.room_id;
+const adminActions=isAdmin()?`<div class='actions' style='margin-bottom:14px'>${uiButton({label:'Delete room',kind:'danger',action:'room.delete',dataset:{'room-id':room.room_id},confirm:`Delete room ${roomNameText}? This also removes profiles and scenarios for this room. Quest devices stay untouched.`})}</div>`:'';
 const devs=roomDevices(room.room_id);
 const questIds=roomScenarioDeviceIds(room);
 const questDevs=questIds.map(id=>questDeviceById(id)).filter(Boolean);
@@ -552,7 +1212,12 @@ else if(roomTab==='issues'){
 body=`<div class='list'>${issues.length?issues.map(issueRow).join(''):`<div class='card empty'>No issues for this room</div>`}</div>`;
 }
 else{
-body=`<div data-room-control-runtime='${esc(room.room_id)}'>${renderRoomOperatorConsole(room)}${isAdmin()?renderRoomScenarioControl(room):''}</div><div class='grid cols-2'><div class='card'><h2 class='section-title'>Hint</h2><div class='hint-row'><input id='gm_hint_input' value='${esc(room.hint_message||'')}' placeholder='Hint for players / operator note'><button data-room-hint='send' data-room-id='${esc(room.room_id)}'>Send hint</button><button data-room-hint='clear' data-room-id='${esc(room.room_id)}' ${room.hint_active?'':'disabled'}>Clear</button></div></div><div class='card'><h2 class='section-title'>Device issues</h2><div class='list'>${issues.length?issues.slice(0,5).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div><details class='scenario-advanced'><summary>Emergency controls</summary><div class='actions'><button data-room-game='stop' data-room-id='${esc(room.room_id)}' ${canFinish?'':'disabled'}>Stop game</button><button data-room-timer='reset' data-room-id='${esc(room.room_id)}' ${canReset?'':'disabled'}>Reset timer</button><button class='danger' data-room-timer='finish' data-room-id='${esc(room.room_id)}' ${canFinish?'':'disabled'}>Finish session</button><button class='danger' data-room-scenario-runtime='next' data-room-id='${esc(room.room_id)}' ${canScenarioNext?'':'disabled'}>Force next step</button></div></details>`;
+body=`<div data-room-control-runtime='${esc(room.room_id)}'>${renderRoomOperatorConsole(room)}${isAdmin()?renderRoomScenarioControl(room):''}</div><div class='grid cols-2'><div class='card'><h2 class='section-title'>Hint</h2><div class='hint-row'><input id='gm_hint_input' value='${esc(room.hint_message||'')}' placeholder='Hint for players / operator note'>${uiButton({label:'Send hint',action:'room.hint',dataset:{op:'send','room-id':room.room_id}})}${uiButton({label:'Clear',action:'room.hint',dataset:{op:'clear','room-id':room.room_id},disabled:!room.hint_active})}</div></div><div class='card'><h2 class='section-title'>Device issues</h2><div class='list'>${issues.length?issues.slice(0,5).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>${uiDetails({summary:'Emergency controls',content:uiActions([
+uiButton({label:'Stop game',action:'room.game',dataset:{op:'stop','room-id':room.room_id},disabled:!canFinish,confirm:'Stop this game session?'}),
+uiButton({label:'Reset timer',action:'room.timer',dataset:{op:'reset','room-id':room.room_id},disabled:!canReset}),
+uiButton({label:'Finish session',kind:'danger',action:'room.timer',dataset:{op:'finish','room-id':room.room_id},disabled:!canFinish}),
+uiButton({label:'Force next step',kind:'danger',action:'room.scenario.runtime',dataset:{op:'next','room-id':room.room_id},disabled:!canScenarioNext,confirm:'Force complete current scenario wait?'}),
+])})}`;
 }
 return `${adminActions}${tabs(roomTab,['control','overview','devices','issues'],'room')}<div>${body}</div>`;
 }
@@ -564,8 +1229,8 @@ const observed=observedItems();
 const registered=observed.filter(o=>knownDeviceIds().has(o.device_id)).length;
 const fault=savedQuestDevices.filter(d=>questDeviceHealth(d)==='fault').length;
 const degraded=savedQuestDevices.filter(d=>questDeviceHealth(d)==='degraded').length;
-const setupAction=isAdmin()?`<button data-open-device-setup='new'>Add device</button>`:'';
-const questRows=savedQuestDevices.length?savedQuestDevices.map(d=>{const observedClient=observedByClientId(d.client_id||d.id);const health=questDeviceHealth(d);const caps=`${(d.commands||[]).length} cmd / ${(d.events||[]).length} evt`;const setup=isAdmin()?`<button class='small-btn' data-open-device-setup='${esc(d.id||'1')}'>Setup</button>`:'';return `<tr><td><strong>${esc(questDeviceDisplayName(d))}</strong><span>${esc(d.id||'')}</span></td><td>${status(health)}</td><td>${esc(questDeviceStatusText(d))}</td><td>${esc(d.client_id||'none')}</td><td>${esc(caps)}</td><td>${observedClient?`${esc(observedClient.connectivity||'unknown')} / fw ${esc(observedClient.fw_version||'n/a')}`:'not observed'}</td><td>${d.enabled===false?'<span class="badge">disabled</span>':'<span class="badge selected-badge">enabled</span>'}</td><td class='observed-actions'>${setup}</td></tr>`;}).join(''):`<tr><td colspan='8' class='observed-empty'>No saved quest devices${isAdmin()?` <button class='small-btn' data-open-device-setup='new'>Add device</button>`:''}</td></tr>`;
+const setupAction=isAdmin()?uiButton({label:'Add device',action:'device.setup.open',dataset:{'device-id':'new'}}):'';
+const questRows=savedQuestDevices.length?savedQuestDevices.map(d=>{const observedClient=observedByClientId(d.client_id||d.id);const health=questDeviceHealth(d);const caps=`${(d.commands||[]).length} cmd / ${(d.events||[]).length} evt`;const setup=isAdmin()?uiButton({label:'Setup',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':d.id||'1'}}):'';return `<tr><td><strong>${esc(questDeviceDisplayName(d))}</strong><span>${esc(d.id||'')}</span></td><td>${status(health)}</td><td>${esc(questDeviceStatusText(d))}</td><td>${esc(d.client_id||'none')}</td><td>${esc(caps)}</td><td>${observedClient?`${esc(observedClient.connectivity||'unknown')} / fw ${esc(observedClient.fw_version||'n/a')}`:'not observed'}</td><td>${d.enabled===false?'<span class="badge">disabled</span>':'<span class="badge selected-badge">enabled</span>'}</td><td class='observed-actions'>${setup}</td></tr>`;}).join(''):`<tr><td colspan='8' class='observed-empty'>No saved quest devices${isAdmin()?` ${uiButton({label:'Add device',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':'new'}})}`:''}</td></tr>`;
 const observedRows=observed.length?observed.map(o=>{const reg=observedRegistration(o.device_id);return `<tr><td><strong>${esc(observedDisplayName(o))}</strong><span>${esc(o.device_id||'')}</span></td><td>${status(o.connectivity)}</td><td><span class='badge ${reg?'selected-badge':''}'>${reg?'registered':'unregistered'}</span></td><td>${esc(o.fw_version||'n/a')}</td><td>${esc(o.mode||'')}</td><td>${esc(o.state||'')}</td><td>${esc(o.boot_id||'n/a')}</td></tr>`;}).join(''):`<tr><td colspan='7' class='observed-empty'>No physical clients observed</td></tr>`;
 return `<div class='observed-toolbar'><div class='observed-summary'><span>Quest devices <strong>${esc(savedQuestDevices.length)}</strong></span><span>Observed <strong>${esc(observed.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Degraded <strong>${esc(degraded)}</strong></span><span>Offline/Fault <strong>${esc(fault)}</strong></span></div><div class='actions'>${setupAction}</div></div><section><h2 class='section-title'>Quest devices</h2><div class='observed-table-wrap'><table class='observed-table device-table'><thead><tr><th>Device</th><th>Health</th><th>Status</th><th>Client</th><th>Caps</th><th>Observed</th><th>Enabled</th><th></th></tr></thead><tbody>${questRows}</tbody></table></div></section><div style='height:12px'></div><section><h2 class='section-title'>Physical clients</h2><div class='observed-table-wrap'><table class='observed-table device-table'><thead><tr><th>Client</th><th>Status</th><th>Link</th><th>FW</th><th>Mode</th><th>State</th><th>Boot</th></tr></thead><tbody>${observedRows}</tbody></table></div></section>`;
 }
@@ -579,7 +1244,7 @@ const registered=all.filter(o=>known.has(o.device_id)).length;
 const unregistered=all.length-registered;
 const rows=items.length?items.map(o=>{
 const reg=observedRegistration(o.device_id);
-const action=reg&&reg.via==='quest_device'?`<button class='small-btn' data-open-device-setup='${esc(reg.device_id)}'>Setup</button>`:(reg?`<span class='muted'>linked</span>`:`<button class='small-btn' data-open-device-setup='new'>Add</button>`);
+const action=reg&&reg.via==='quest_device'?uiButton({label:'Setup',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':reg.device_id}}):(reg?`<span class='muted'>linked</span>`:uiButton({label:'Add',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':'new'}}));
 return `<tr><td><strong>${esc(observedDisplayName(o))}</strong><span>${esc(o.device_id||'')}</span></td><td>${status(o.connectivity)}</td><td><span class='badge ${reg?'selected-badge':''}'>${reg?'registered':'unregistered'}</span></td><td>${esc(o.fw_version||'n/a')}</td><td>${esc(o.mode||'')}</td><td>${esc(o.state||'')}</td><td>${esc(o.boot_id||'n/a')}</td><td class='observed-actions'>${action}</td></tr>`;
 }).join(''):`<tr><td colspan='8' class='observed-empty'>No observed clients</td></tr>`;
 return `<div class='observed-toolbar'><select class='scenario-select' data-observed-filter><option value='all' ${observedFilter==='all'?'selected':''}>All observed</option><option value='registered' ${observedFilter==='registered'?'selected':''}>Registered</option><option value='unregistered' ${observedFilter==='unregistered'?'selected':''}>Unregistered</option></select><div class='observed-summary'><span>Observed <strong>${esc(all.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Unregistered <strong>${esc(unregistered)}</strong></span></div></div><div class='observed-table-wrap'><table class='observed-table'><thead><tr><th>Client</th><th>Status</th><th>Link</th><th>FW</th><th>Mode</th><th>State</th><th>Boot</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -614,6 +1279,291 @@ setPage(title,sub);
 return `<div class='card empty'>Admin editor section is reserved for the next implementation step.</div>`;
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
+const HARDWARE_IO_RELAY_DEVICE='system_relay';
+const HARDWARE_IO_MOSFET_DEVICE='system_mosfet';
+const HARDWARE_IO_INPUT_DEVICE='system_input';
+const HARDWARE_IO_GPIO_DEVICE='system_gpio';
+
+const HARDWARE_IO_SCHEMAS={
+relayPulse:[{name:'duration_ms',label:'Pulse ms',type:'number',min:1,step:1,default:1000}],
+mosfetSet:[{name:'value',label:'Value 0-255',type:'number',min:0,max:255,step:1,default:255}],
+mosfetFade:[{name:'target',label:'Target 0-255',type:'number',min:0,max:255,step:1,default:255},{name:'duration_ms',label:'Fade ms',type:'number',min:1,step:1,default:1000}],
+mosfetPulse:[{name:'value',label:'Value 0-255',type:'number',min:0,max:255,step:1,default:255},{name:'duration_ms',label:'Pulse ms',type:'number',min:1,step:1,default:1000}],
+gpioPulse:[{name:'duration_ms',label:'Pulse ms',type:'number',min:1,step:1,default:1000}],
+};
+
+async function loadHardwareIoStatus(renderAfter){
+if(gmHardwareIo.loading)return;
+hardwareIoCaptureForms();
+gmHardwareIo.loading=true;
+try{
+const res=await api.hardwareIo.status();
+gmHardwareIo.data=res.ok?await res.json():null;
+gmHardwareIo.error=res.ok?'':await gmResponseText(res);
+gmHardwareIo.loaded=true;
+}
+catch(err){
+gmHardwareIo.error=err.message||'Hardware IO status failed';
+}
+gmHardwareIo.loading=false;
+if(renderAfter&&currentView==='hardware_io')render();
+}
+
+function hardwareIoStatusItem(kind,channel){
+const data=gmHardwareIo&&gmHardwareIo.data;
+const items=data&&Array.isArray(data[kind])?data[kind]:[];
+return items.find(item=>Number(item.channel)===Number(channel))||null;
+}
+
+function hardwareIoRelayStatusBadge(channel){
+const item=hardwareIoStatusItem('relays',channel);
+if(!item)return uiBadge('unknown');
+return uiBadge(item.enabled?(item.on?'on':'off'):'disabled',item.enabled?(item.on?'selected-badge':''):'');
+}
+
+function hardwareIoMosfetStatusBadge(channel){
+const item=hardwareIoStatusItem('mosfets',channel);
+if(!item)return uiBadge('unknown');
+if(!item.enabled)return uiBadge('disabled');
+const mode=item.fade_active?'fade':(item.pulse_active?'pulse':'value');
+return uiBadge(`${mode} ${item.value||0}`,item.value||item.fade_active||item.pulse_active?'selected-badge':'');
+}
+
+function hardwareIoInputStatusBadge(channel){
+const item=hardwareIoStatusItem('inputs',channel);
+if(!item)return uiBadge('unknown');
+if(!item.enabled)return uiBadge('disabled');
+return uiBadge(item.active?'pressed':'released',item.active?'selected-badge':'');
+}
+
+function hardwareIoGpioModeText(mode){
+const value=Number(mode)||0;
+if(value===1)return 'input';
+if(value===2)return 'output';
+return 'disabled';
+}
+
+function hardwareIoGpioStatusBadge(channel){
+const item=hardwareIoStatusItem('gpios',channel);
+if(!item)return uiBadge('unknown');
+if(!item.enabled)return uiBadge('disabled');
+const mode=hardwareIoGpioModeText(item.mode);
+if(mode==='output')return uiBadge(item.active?'active':'inactive',item.active?'selected-badge':'');
+return uiBadge(item.active?'active':'inactive',item.active?'selected-badge':'');
+}
+
+function hardwareIoChannelMeta(kind,channel){
+const item=hardwareIoStatusItem(kind,channel);
+if(!item)return 'Status not loaded yet';
+const parts=[`GPIO ${item.gpio}`,item.enabled?'enabled':'disabled'];
+if(kind==='relays')parts.push(item.active_low?'active low':'active high');
+if(kind==='mosfets')parts.push(`${item.pwm_freq_hz||0} Hz`);
+if(kind==='inputs')parts.push(item.active_low?'active low':'active high',`debounce ${item.debounce_ms||0} ms`,item.physical_high?'pin high':'pin low');
+if(kind==='gpios')parts.push(hardwareIoGpioModeText(item.mode),item.active_low?'active low':'active high',item.physical_high?'pin high':'pin low');
+return parts.join(' / ');
+}
+
+function hardwareIoCommand(deviceId,commandId){
+const dev=questDeviceById(deviceId);
+return dev&&Array.isArray(dev.commands)?dev.commands.find(cmd=>(cmd.id||'')===commandId):null;
+}
+
+function hardwareIoServiceAvailable(){
+const data=gmHardwareIo&&gmHardwareIo.data;
+return !!(data&&data.service&&data.service.available);
+}
+
+function hardwareIoServiceMessage(){
+const data=gmHardwareIo&&gmHardwareIo.data;
+if(!data||!data.service)return gmHardwareIo.error||'Hardware IO status is not loaded.';
+const svc=data.service;
+if(svc.available&&!svc.fault)return 'Hardware IO service is available.';
+if(svc.error)return svc.error;
+if(svc.last_error)return `hardware_io error ${svc.last_error}`;
+return 'hardware_io_unavailable';
+}
+
+function hardwareIoAvailable(deviceId,commandId){
+return hardwareIoServiceAvailable()&&!!hardwareIoCommand(deviceId,commandId);
+}
+
+function hardwareIoFormStore(){
+if(!gmHardwareIo.forms||typeof gmHardwareIo.forms!=='object')gmHardwareIo.forms={};
+return gmHardwareIo.forms;
+}
+
+function hardwareIoFormModel(scope,defaults){
+return {...(defaults||{}),...(hardwareIoFormStore()[scope]||{})};
+}
+
+function hardwareIoCaptureForms(){
+if(currentView!=='hardware_io'||typeof document==='undefined')return;
+document.querySelectorAll('[data-hardware-form]').forEach(form=>{
+const schemaName=form.dataset.hardwareSchema||'';
+const scope=form.dataset.hardwareScope||'';
+const schema=HARDWARE_IO_SCHEMAS[schemaName]||[];
+if(!scope||!schema.length)return;
+hardwareIoFormStore()[scope]=collectFormFields(form,schema,scope);
+});
+}
+
+function hardwareIoParams(el){
+let params={};
+if(el.dataset.params){
+try{
+params=JSON.parse(el.dataset.params);
+}
+catch(err){
+throw new Error('Invalid hardware action params');
+}
+}
+if(el.dataset.noForm==='1')return params;
+const form=el.closest('[data-hardware-form]');
+const schemaName=form&&form.dataset.hardwareSchema||'';
+const schema=HARDWARE_IO_SCHEMAS[schemaName]||[];
+const scope=form&&form.dataset.hardwareScope||'';
+const fields=collectFormFields(form,schema,scope);
+if(scope)hardwareIoFormStore()[scope]=fields;
+return {...params,...fields};
+}
+
+function hardwareIoButton(label,deviceId,commandId,params,opts){
+opts=opts||{};
+return uiButton({
+label,
+kind:opts.kind||'',
+action:'hardware.command',
+dataset:{
+'device-id':deviceId,
+'command-id':commandId,
+params:JSON.stringify(params||{}),
+noForm:opts.noForm?'1':undefined,
+},
+disabled:opts.disabled||!hardwareIoAvailable(deviceId,commandId),
+confirm:opts.confirm||'',
+});
+}
+
+function hardwareIoRelayChannel(channel){
+const scope=`relay_${channel}`;
+const pulseSchema=HARDWARE_IO_SCHEMAS.relayPulse;
+const channelStatus=hardwareIoStatusItem('relays',channel);
+const disabled=channelStatus?channelStatus.enabled===false:false;
+return `<section class='builder-step' data-hardware-form='relay' data-hardware-schema='relayPulse' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>Relay ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('relays',channel))}</div></div>${hardwareIoRelayStatusBadge(channel)}</div><div class='field-grid'>${renderFormFields(pulseSchema,hardwareIoFormModel(scope,{duration_ms:1000}),scope)}</div>${uiActions([
+hardwareIoButton('On',HARDWARE_IO_RELAY_DEVICE,'set',{channel,on:true},{kind:'approve',disabled,noForm:true}),
+hardwareIoButton('Off',HARDWARE_IO_RELAY_DEVICE,'set',{channel,on:false},{disabled,noForm:true}),
+hardwareIoButton('Pulse',HARDWARE_IO_RELAY_DEVICE,'pulse',{channel},{kind:'approve',disabled}),
+hardwareIoButton('Toggle',HARDWARE_IO_RELAY_DEVICE,'toggle',{channel},{disabled,noForm:true}),
+])}</section>`;
+}
+
+function hardwareIoMosfetChannel(channel){
+const scope=`mosfet_${channel}`;
+const channelStatus=hardwareIoStatusItem('mosfets',channel);
+const disabled=channelStatus?channelStatus.enabled===false:false;
+return `<section class='builder-step' data-hardware-channel='mosfet' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>MOSFET ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('mosfets',channel))}</div></div>${hardwareIoMosfetStatusBadge(channel)}</div><div class='grid cols-3'><div data-hardware-form='mosfet-set' data-hardware-schema='mosfetSet' data-hardware-scope='${esc(scope)}_set'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetSet,hardwareIoFormModel(`${scope}_set`,{value:255}),`${scope}_set`)}${uiActions([hardwareIoButton('Set',HARDWARE_IO_MOSFET_DEVICE,'set',{channel},{kind:'approve',disabled}),hardwareIoButton('Off',HARDWARE_IO_MOSFET_DEVICE,'set',{channel,value:0},{kind:'danger',disabled,noForm:true})])}</div><div data-hardware-form='mosfet-fade' data-hardware-schema='mosfetFade' data-hardware-scope='${esc(scope)}_fade'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetFade,hardwareIoFormModel(`${scope}_fade`,{target:255,duration_ms:1000}),`${scope}_fade`)}${uiActions([hardwareIoButton('Fade',HARDWARE_IO_MOSFET_DEVICE,'fade',{channel},{disabled})])}</div><div data-hardware-form='mosfet-pulse' data-hardware-schema='mosfetPulse' data-hardware-scope='${esc(scope)}_pulse'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetPulse,hardwareIoFormModel(`${scope}_pulse`,{value:255,duration_ms:1000}),`${scope}_pulse`)}${uiActions([hardwareIoButton('Pulse',HARDWARE_IO_MOSFET_DEVICE,'pulse',{channel},{disabled})])}</div></div></section>`;
+}
+
+function hardwareIoInputChannel(channel){
+const item=hardwareIoStatusItem('inputs',channel);
+const events=['changed','high','low','pressed','released'].map(name=>`ch${channel}_${name}`).join(', ');
+return `<section class='builder-step'><div class='builder-step-head'><div><div class='builder-step-title'>Input ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('inputs',channel))}</div></div>${hardwareIoInputStatusBadge(channel)}</div><div class='kvs'><div class='kv'><span class='k'>Logical</span><span class='v'>${esc(item&&item.active?'active':'inactive')}</span></div><div class='kv'><span class='k'>Physical</span><span class='v'>${esc(item&&item.physical_high?'HIGH':'LOW')}</span></div></div><div class='row-meta'>Events: ${esc(events)}</div></section>`;
+}
+
+function hardwareIoGpioChannel(channel){
+const scope=`gpio_${channel}`;
+const item=hardwareIoStatusItem('gpios',channel);
+const mode=hardwareIoGpioModeText(item&&item.mode);
+const disabled=!item||!item.enabled||mode!=='output';
+const events=['changed','high','low','active','inactive'].map(name=>`ch${channel}_${name}`).join(', ');
+return `<section class='builder-step' data-hardware-form='gpio' data-hardware-schema='gpioPulse' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>GPIO ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('gpios',channel))}</div></div>${hardwareIoGpioStatusBadge(channel)}</div><div class='kvs'><div class='kv'><span class='k'>Mode</span><span class='v'>${esc(mode)}</span></div><div class='kv'><span class='k'>Physical</span><span class='v'>${esc(item&&item.physical_high?'HIGH':'LOW')}</span></div></div><div class='field-grid'>${renderFormFields(HARDWARE_IO_SCHEMAS.gpioPulse,hardwareIoFormModel(scope,{duration_ms:1000}),scope)}</div>${uiActions([
+hardwareIoButton('Active',HARDWARE_IO_GPIO_DEVICE,'set',{channel,active:true},{kind:'approve',disabled,noForm:true}),
+hardwareIoButton('Inactive',HARDWARE_IO_GPIO_DEVICE,'set',{channel,active:false},{disabled,noForm:true}),
+hardwareIoButton('Pulse active',HARDWARE_IO_GPIO_DEVICE,'pulse',{channel,active:true},{kind:'approve',disabled}),
+hardwareIoButton('Toggle',HARDWARE_IO_GPIO_DEVICE,'toggle',{channel},{disabled,noForm:true}),
+])}<div class='row-meta'>Input events: ${esc(events)}</div></section>`;
+}
+
+function renderHardwareIoHeader(){
+const available=hardwareIoServiceAvailable();
+const statusText=gmHardwareIo.loading?'Loading hardware status...':(gmHardwareIo.error?`Status error: ${gmHardwareIo.error}`:hardwareIoServiceMessage());
+const content=!gmHardwareIo.loaded?'':(available?'':`<div class='row-meta bad-text'>Hardware controls are disabled because ${esc(hardwareIoServiceMessage())}.</div>`);
+return uiCard({
+title:'Hardware status',
+subtitle:statusText,
+status:gmHardwareIo.loaded?(available?status('ok'):status('fault')):'',
+actions:[uiButton({label:'Refresh status',action:'hardware.status.refresh'})],
+content,
+});
+}
+
+function renderHardwareIoDeviceSummary(deviceId,title,subtitle,statusHtml){
+const dev=questDeviceById(deviceId);
+const missingNotice=dev?'':`<div class='row-meta bad-text'>${esc(title)} quest device is missing. Hardware status is visible, but commands are unavailable.</div>`;
+const content=`<div class='kvs'><div class='kv'><span class='k'>Device</span><span class='v'>${esc(deviceId)}</span></div><div class='kv'><span class='k'>Commands</span><span class='v'>${esc(dev&&Array.isArray(dev.commands)?dev.commands.length:0)}</span></div></div>${missingNotice}`;
+return uiCard({title,subtitle,status:statusHtml,content});
+}
+
+function renderHardwareIoSummaryCards(){
+const relay=questDeviceById(HARDWARE_IO_RELAY_DEVICE);
+const mosfet=questDeviceById(HARDWARE_IO_MOSFET_DEVICE);
+const input=questDeviceById(HARDWARE_IO_INPUT_DEVICE);
+const gpio=questDeviceById(HARDWARE_IO_GPIO_DEVICE);
+const relayStatus=relay?status(questDeviceHealth(relay)):`<span class='status state-fault'>missing</span>`;
+const mosfetStatus=mosfet?status(questDeviceHealth(mosfet)):`<span class='status state-fault'>missing</span>`;
+const inputStatus=input?status(questDeviceHealth(input)):`<span class='status state-fault'>missing</span>`;
+const gpioStatus=gpio?status(questDeviceHealth(gpio)):`<span class='status state-fault'>missing</span>`;
+return `<div class='grid cols-2'>${renderHardwareIoDeviceSummary(HARDWARE_IO_RELAY_DEVICE,'System Relay','4 digital relay outputs. Logic level and GPIO pins are configured in menuconfig.',relayStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_MOSFET_DEVICE,'System MOSFET','4 PWM low-side outputs. Disabled channels keep value 0.',mosfetStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_INPUT_DEVICE,'System Input','4 debounced digital inputs. Use channel events in scenario waits.',inputStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_GPIO_DEVICE,'System GPIO','4 universal lines configured as disabled, input or output in menuconfig.',gpioStatus)}</div>`;
+}
+
+function renderHardwareRelaySection(){
+return `<section><h2 class='section-title'>Relays</h2><div class='grid cols-2'>${[1,2,3,4].map(hardwareIoRelayChannel).join('')}</div></section>`;
+}
+
+function renderHardwareMosfetSection(){
+return `<section><div class='card-head'><h2 class='section-title'>MOSFET PWM</h2><div class='actions'>${hardwareIoButton('All off',HARDWARE_IO_MOSFET_DEVICE,'all_off',{}, {kind:'danger'})}</div></div><div class='list'>${[1,2,3,4].map(hardwareIoMosfetChannel).join('')}</div></section>`;
+}
+
+function renderHardwareInputSection(){
+return `<section><h2 class='section-title'>Digital inputs</h2><div class='grid cols-2'>${[1,2,3,4].map(hardwareIoInputChannel).join('')}</div></section>`;
+}
+
+function renderHardwareGpioSection(){
+return `<section><h2 class='section-title'>Universal GPIO</h2><div class='grid cols-2'>${[1,2,3,4].map(hardwareIoGpioChannel).join('')}</div></section>`;
+}
+
+function renderHardwareIoView(){
+setPage('Hardware IO','Built-in relay, MOSFET, input and GPIO channels');
+if(!gmHardwareIo.loaded&&!gmHardwareIo.loading){
+setTimeout(()=>loadHardwareIoStatus(true),0);
+}
+return [
+renderHardwareIoHeader(),
+renderHardwareIoSummaryCards(),
+renderHardwareRelaySection(),
+renderHardwareMosfetSection(),
+renderHardwareInputSection(),
+renderHardwareGpioSection(),
+].join('<div style="height:14px"></div>');
+}
+
+gmRegisterAction('hardware.command',async el=>{
+const deviceId=el.dataset.deviceId||'';
+const commandId=el.dataset.commandId||'';
+if(!deviceId||!commandId)throw new Error('Hardware command is incomplete');
+const params=hardwareIoParams(el);
+setGMStatus('Sending hardware command...');
+const res=await api.device.runCommand(deviceId,commandId,params);
+await gmExpectOk(res);
+await loadHardwareIoStatus(true);
+setGMStatus('Hardware command sent','gm-ok');
+});
+
+gmRegisterAction('hardware.status.refresh',async()=>{
+await loadHardwareIoStatus(true);
+setGMStatus('Hardware status updated','gm-ok');
+});
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
 function renderProfilesAdminView(){
 setPage('Game Modes','Start presets for room scenarios');
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
@@ -634,7 +1584,7 @@ const scenarioValue=(editing&&editing.scenario_id)||(prefill&&prefill.scenario_i
 const scenarioMissing=!!(scenarioValue&&!scenarios.some(s=>s.id===scenarioValue));
 const scenarioInvalid=!!(scenarios.find(s=>s.id===scenarioValue&&s.valid===false));
 const scenarioOptions=scenarios.length?scenarios.map(s=>`<option value='${esc(s.id)}' ${s.id===scenarioValue?'selected':''} ${s.valid===false?'disabled':''}>${esc(s.name||s.id)}${s.valid===false?' (invalid)':''}</option>`).join('')+(scenarioMissing?`<option value='${esc(scenarioValue)}' selected>${esc(scenarioValue)} (missing)</option>`:''):`<option value=''>No scenarios</option>`;
-const scenarioHelp=!scenarios.length?`<div class='empty'>Create a room scenario before saving a game mode.</div><div class='actions'><button data-open-admin-view='scenarios' data-open-admin-room='${esc(roomId)}'>Create scenario</button></div>`:(scenarioMissing?`<div class='row-meta bad-text'>Selected scenario is missing. Choose another scenario before saving.</div>`:(scenarioInvalid?`<div class='row-meta bad-text'>Selected scenario has validation errors.</div>`:''));
+const scenarioHelp=!scenarios.length?`<div class='empty'>Create a room scenario before saving a game mode.</div><div class='actions'>${uiButton({label:'Create scenario',action:'admin.open',dataset:{view:'scenarios','room-id':roomId}})}</div>`:(scenarioMissing?`<div class='row-meta bad-text'>Selected scenario is missing. Choose another scenario before saving.</div>`:(scenarioInvalid?`<div class='row-meta bad-text'>Selected scenario has validation errors.</div>`:''));
 const minutes=Math.max(1,Math.round(((editing&&editing.duration_ms)||(prefill&&prefill.duration_ms)||3600000)/60000));
 const hintPack=(editing&&editing.hint_pack_id)||(prefill&&prefill.hint_pack_id)||'';
 const audioPack=(editing&&editing.audio_pack_id)||(prefill&&prefill.audio_pack_id)||'';
@@ -645,11 +1595,18 @@ const profileRows=profiles.length?profiles.map(p=>{
 const selected=p.id===selectedProfileId;
 const invalid=p.valid===false;
 const disabled=p.enabled===false;
-return `<div class='row-card profile-row ${selected?'selected-row':''}'><div class='row-main'><div class='row-title'>${esc(p.name||p.id)} ${selected?`<span class='badge selected-badge'>selected</span>`:''} ${disabled?`<span class='badge'>disabled</span>`:''} ${invalid?`<span class='badge scenario-issue-badge error'>invalid</span>`:''}</div><div class='profile-mode-summary'><span>${esc(scenarioName(roomId,p.scenario_id))}</span><span>${esc(fmtClock(p.duration_ms))}</span></div></div><div class='actions'><button data-profile-edit='${esc(p.id)}'>Edit</button><button data-profile-select='${esc(p.id)}' ${selected||invalid||disabled?'disabled':''}>Select</button><button class='danger' data-profile-delete='${esc(p.id)}'>Delete</button></div></div>`;
+return `<div class='row-card profile-row ${selected?'selected-row':''}'><div class='row-main'><div class='row-title'>${esc(p.name||p.id)} ${selected?`<span class='badge selected-badge'>selected</span>`:''} ${disabled?`<span class='badge'>disabled</span>`:''} ${invalid?`<span class='badge scenario-issue-badge error'>invalid</span>`:''}</div><div class='profile-mode-summary'><span>${esc(scenarioName(roomId,p.scenario_id))}</span><span>${esc(fmtClock(p.duration_ms))}</span></div></div>${uiActions([
+uiButton({label:'Edit',action:'profile.edit',dataset:{'profile-id':p.id}}),
+uiButton({label:'Select',action:'profile.select',dataset:{'profile-id':p.id},disabled:selected||invalid||disabled}),
+uiButton({label:'Delete',kind:'danger',action:'profile.delete',dataset:{'profile-id':p.id},confirm:`Delete game mode ${p.id}?`}),
+])}</div>`;
 }).join(''):`<div class='card empty'>No game modes for this room</div>`;
 const saveDisabled=!scenarios.length||scenarioMissing||scenarioInvalid;
-const editorHtml=editorOpen?`<div class='card'><div class='card-head'><div><h2 class='section-title'>${editing?'Edit game mode':'New game mode'}${profileEditor.dirty?' *':''}</h2><div class='card-sub'>A game mode selects one scenario and game duration for operators.</div></div><label class='row-meta'><input id='profile_enabled' type='checkbox' ${enabled?'checked':''} style='min-width:auto'> Enabled</label></div><div class='field-grid'><label class='field-stack'><span>Mode name</span><input id='profile_name' placeholder='Garri Potter' value='${esc(modeName)}'></label><label class='field-stack'><span>Duration, min</span><input id='profile_duration' type='number' min='1' step='1' placeholder='60' value='${minutes}'></label></div><div class='form-section'><label class='field-stack'><span>Scenario</span><select id='profile_scenario' class='scenario-select'>${scenarioOptions}</select></label><div class='profile-selected-summary'><div><span>Scenario</span><strong>${esc(scenarioName(roomId,scenarioValue))}</strong></div><div><span>Duration</span><strong>${esc(fmtClock(minutes*60000))}</strong></div></div></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input id='profile_id' placeholder='Mode ID' value='${esc(modeId)}'></div><div class='row'><input id='profile_hint_pack' placeholder='Hint pack ID' value='${esc(hintPack)}'><input id='profile_audio_pack' placeholder='Audio pack ID' value='${esc(audioPack)}'></div></details>${scenarioHelp}<div style='height:12px'></div><div class='actions'><button data-profile-save='1' ${saveDisabled?'disabled':''}>Save game mode</button>${editing?`<button data-profile-select='${esc(editing.id)}' ${editing.id===selectedProfileId||saveDisabled||enabled===false?'disabled':''}>Select for room</button>`:''}</div><div id='profile_editor_status' class='row-meta'></div></div>`:`<div class='card empty'><h2 class='section-title'>Game mode editor</h2><div class='row-meta'>Select a game mode or create a new one.</div></div>`;
-return `<div class='scenario-room-bar'><div><h2 class='section-title'>Room</h2><select class='scenario-select' data-profile-room-select>${rooms.map(r=>`<option value='${esc(r.room_id)}' ${r.room_id===roomId?'selected':''}>${esc(r.title||r.room_id)}</option>`).join('')}</select></div><div class='row-meta'>Selected: <strong>${esc((selectedProfile&&(selectedProfile.name||selectedProfile.id))||'none')}</strong></div></div><div class='profile-admin-layout'><section><div class='card-head'><h2 class='section-title'>Game modes</h2><div class='actions'><button data-profile-new='1'>Add game mode</button></div></div><div class='list'>${profileRows}</div></section><section>${editorHtml}</section></div>`;
+const editorHtml=editorOpen?`<div class='card'><div class='card-head'><div><h2 class='section-title'>${editing?'Edit game mode':'New game mode'}${profileEditor.dirty?' *':''}</h2><div class='card-sub'>A game mode selects one scenario and game duration for operators.</div></div><label class='row-meta'><input id='profile_enabled' type='checkbox' ${enabled?'checked':''} style='min-width:auto'> Enabled</label></div><div class='field-grid'><label class='field-stack'><span>Mode name</span><input id='profile_name' placeholder='Garri Potter' value='${esc(modeName)}'></label><label class='field-stack'><span>Duration, min</span><input id='profile_duration' type='number' min='1' step='1' placeholder='60' value='${minutes}'></label></div><div class='form-section'><label class='field-stack'><span>Scenario</span><select id='profile_scenario' class='scenario-select'>${scenarioOptions}</select></label><div class='profile-selected-summary'><div><span>Scenario</span><strong>${esc(scenarioName(roomId,scenarioValue))}</strong></div><div><span>Duration</span><strong>${esc(fmtClock(minutes*60000))}</strong></div></div></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input id='profile_id' placeholder='Mode ID' value='${esc(modeId)}'></div><div class='row'><input id='profile_hint_pack' placeholder='Hint pack ID' value='${esc(hintPack)}'><input id='profile_audio_pack' placeholder='Audio pack ID' value='${esc(audioPack)}'></div></details>${scenarioHelp}<div style='height:12px'></div>${uiActions([
+uiButton({label:'Save game mode',action:'profile.save',disabled:saveDisabled}),
+editing?uiButton({label:'Select for room',action:'profile.select',dataset:{'profile-id':editing.id},disabled:editing.id===selectedProfileId||saveDisabled||enabled===false}):'',
+])}<div id='profile_editor_status' class='row-meta'></div></div>`:`<div class='card empty'><h2 class='section-title'>Game mode editor</h2><div class='row-meta'>Select a game mode or create a new one.</div></div>`;
+return `<div class='scenario-room-bar'><div><h2 class='section-title'>Room</h2><select class='scenario-select' data-profile-room-select>${rooms.map(r=>`<option value='${esc(r.room_id)}' ${r.room_id===roomId?'selected':''}>${esc(r.title||r.room_id)}</option>`).join('')}</select></div><div class='row-meta'>Selected: <strong>${esc((selectedProfile&&(selectedProfile.name||selectedProfile.id))||'none')}</strong></div></div><div class='profile-admin-layout'><section><div class='card-head'><h2 class='section-title'>Game modes</h2>${uiActions([uiButton({label:'Add game mode',action:'profile.new'})])}</div><div class='list'>${profileRows}</div></section><section>${editorHtml}</section></div>`;
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 function normalizeScenarioEditorStep(step){
@@ -1046,6 +2003,9 @@ return device&&Array.isArray(device.commands)&&device.commands.length?device.com
 }
 
 function defaultParamsForCommand(device,command){
+if(command&&command.default_args&&typeof command.default_args==='object'){
+return JSON.parse(JSON.stringify(command.default_args));
+}
 const params={};
 const deviceId=device&&device.id||'';
 const commandId=command&&command.id||'';
@@ -1170,7 +2130,7 @@ scheduleGMAudioFilesLoad();
 const selected=value===undefined?'':String(value||'');
 const background=String(channel||'effect')==='background';
 const files=gmAudioFileItems().filter(item=>background?audioFileIsWav(item.path):audioFileIsPlayableEffect(item.path));
-const refresh=`<button data-audio-files-refresh='1' ${gmAudioFiles.loading?'disabled':''}>${gmAudioFiles.loading?'Loading files':'Refresh files'}</button>`;
+const refresh=uiButton({label:gmAudioFiles.loading?'Loading files':'Refresh files',action:'audio.files.refresh',disabled:gmAudioFiles.loading});
 if(files.length){
 const selectedKnown=files.some(item=>item.path===selected);
 const selectedAllowed=!selected||(background?audioFileIsWav(selected):audioFileIsPlayableEffect(selected));
@@ -1235,8 +2195,8 @@ const deviceControl=devices.length?`<select class='scenario-select' data-group-c
 const commandItems=deviceCommands.map(cmd=>({id:cmd.id,name:cmd.label||cmd.id}));
 const commandControl=deviceCommands.length?`<select class='scenario-select' data-group-command-field='command_id'>${optionList(commandItems,selectedCommand,'Select command')}</select>`:`<input data-group-command-field='command_id' placeholder='Command ID' value='${esc(selectedCommand)}'>`;
 const paramsHtml=renderCommandParams(command,item.params);
-return `<div class='command-group-item' data-command-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${commandControl}<button class='icon-btn danger' title='Remove command' aria-label='Remove command' data-scenario-step-action='group_delete' data-command-index='${index}'>&times;</button></div>${paramsHtml}</div>`;
-}).join('')}<button data-scenario-step-action='group_add'>Add command</button></div>`;
+return `<div class='command-group-item' data-command-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${commandControl}<button class='icon-btn danger' title='Remove command' aria-label='Remove command' data-action='scenario.step' data-op='group_delete' data-command-index='${index}'>&times;</button></div>${paramsHtml}</div>`;
+}).join('')}<button data-action='scenario.step' data-op='group_add'>Add command</button></div>`;
 }
 
 function renderEventGroupControl(step){
@@ -1251,8 +2211,8 @@ const selectedEvent=scenarioValidEventId(device,item.event_id);
 const deviceControl=devices.length?`<select class='scenario-select' data-event-group-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-event-group-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
 const eventItems=deviceEvents.map(event=>({id:event.id,name:event.label||event.id}));
 const eventControl=deviceEvents.length?`<select class='scenario-select' data-event-group-field='event_id'>${optionList(eventItems,selectedEvent,'Select event')}</select>`:`<input data-event-group-field='event_id' placeholder='Event ID' value='${esc(selectedEvent)}'>`;
-return `<div class='command-group-item' data-event-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${eventControl}<button class='icon-btn danger' title='Remove event' aria-label='Remove event' data-scenario-step-action='event_group_delete' data-event-index='${index}'>&times;</button></div></div>`;
-}).join('')}<button data-scenario-step-action='event_group_add'>Add event</button></div>`;
+return `<div class='command-group-item' data-event-group-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${deviceControl}${eventControl}<button class='icon-btn danger' title='Remove event' aria-label='Remove event' data-action='scenario.step' data-op='event_group_delete' data-event-index='${index}'>&times;</button></div></div>`;
+}).join('')}<button data-action='scenario.step' data-op='event_group_add'>Add event</button></div>`;
 }
 
 function normalizeScenarioFlagItem(item){
@@ -1265,7 +2225,7 @@ return {flag_name:'puzzle_done',value:true};
 
 function renderFlagListControl(step){
 const flags=Array.isArray(step.flags)&&step.flags.length?step.flags.map(normalizeScenarioFlagItem):[defaultScenarioFlagItem()];
-return `<div class='command-group-list'>${flags.map((item,index)=>`<div class='command-group-item' data-flag-list-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${renderScenarioFlagInput(item.flag_name,`data-flag-list-field='flag_name'`)}<select data-flag-list-field='value'><option value='true' ${item.value!==false?'selected':''}>is true</option><option value='false' ${item.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' title='Remove flag' aria-label='Remove flag' data-scenario-step-action='flag_list_delete' data-flag-index='${index}'>&times;</button></div></div>`).join('')}<button data-scenario-step-action='flag_list_add'>Add flag</button></div>`;
+return `<div class='command-group-list'>${flags.map((item,index)=>`<div class='command-group-item' data-flag-list-item='${index}'><div class='row compact-row'><span class='row-meta'>${index+1}.</span>${renderScenarioFlagInput(item.flag_name,`data-flag-list-field='flag_name'`)}<select data-flag-list-field='value'><option value='true' ${item.value!==false?'selected':''}>is true</option><option value='false' ${item.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' title='Remove flag' aria-label='Remove flag' data-action='scenario.step' data-op='flag_list_delete' data-flag-index='${index}'>&times;</button></div></div>`).join('')}<button data-action='scenario.step' data-op='flag_list_add'>Add flag</button></div>`;
 }
 
 function renderSetFlagPayload(step){
@@ -1389,17 +2349,6 @@ return `<div class='row'><input data-step-field='duration_ms' type='number' min=
 }
 
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
-function scenarioStepPresetButtons(branch){
-if(scenarioIsReactiveV2Branch(branch))return reactiveV2PresetButtons(branch);
-const allowed=scenarioAllowedStepTypesForBranch(branch);
-const allowedSet=allowed?new Set(allowed):null;
-const schemas=scenarioStepSchemas().filter(schema=>!allowedSet||allowedSet.has(schema.type||''));
-const title=allowedSet?(Array.isArray(branch&&branch.steps)&&branch.steps.length?'Add action':'Add trigger'):'Add step';
-const hasSteps=Array.isArray(branch&&branch.steps)&&branch.steps.length>0;
-const hint=allowedSet&&!hasSteps?`<div class='row-meta scenario-reaction-hint'>Add one trigger first. Actions become available after the trigger.</div>`:'';
-return `<h2 class='section-title'>${esc(title)}</h2>${hint}<div class='scenario-step-presets'>${schemas.map(schema=>`<div class='scenario-step-preset-row'><button data-scenario-step-action='add_schema' data-scenario-step-type='${esc(schema.type||'WAIT_TIME')}'>${esc(schema.label||schema.type)}</button><button class='icon-btn' title='Show example' aria-label='Show step example' data-scenario-step-help='${esc(schema.type||'WAIT_TIME')}'>?</button></div>`).join('')}</div>`;
-}
-
 function scenarioIsReactiveV2Branch(branch){
 return scenarioBranchTypeValue(branch)==='reactive'&&(Array.isArray(branch&&branch.variants)||!!(branch&&branch.trigger));
 }
@@ -1425,6 +2374,18 @@ function defaultReactiveV2BranchFields(){
 return {priority:0,max_fire_count:0,trigger:defaultReactiveV2Trigger(),guard_flags:[],policy:{mode:'single',cooldown_ms:0,max_fire_count:0},reentry:{mode:'ignore'},variants:[{id:'variant_1',label:'Actions',actions:[]}],result_policy:{on_done:'continue',on_fail:'fail_reaction',on_timeout:'fail_reaction'},on_complete:[]};
 }
 
+function normalizeReactiveV2RepeatPolicy(branch){
+if(!branch)return branch;
+branch.policy=branch.policy&&typeof branch.policy==='object'?branch.policy:{};
+branch.policy.mode=branch.policy.mode||'single';
+if(branch.policy.mode==='single'){
+branch.run_once=!!branch.run_once;
+branch.max_fire_count=branch.run_once?1:0;
+branch.policy.max_fire_count=branch.max_fire_count;
+}
+return branch;
+}
+
 function ensureReactiveV2Branch(branch){
 if(!branch)return branch;
 const defaults=defaultReactiveV2BranchFields();
@@ -1446,7 +2407,7 @@ branch.result_policy.on_timeout=branch.result_policy.on_timeout||'fail_reaction'
 branch.variants=Array.isArray(branch.variants)&&branch.variants.length?branch.variants:defaults.variants;
 branch.variants=branch.variants.map((variant,index)=>({id:variant&&variant.id||`variant_${index+1}`,label:variant&&variant.label||variant&&variant.name||(index===0?'Actions':`Variant ${index+1}`),actions:Array.isArray(variant&&variant.actions)?variant.actions:[]}));
 branch.on_complete=Array.isArray(branch.on_complete)?branch.on_complete:[];
-return branch;
+return normalizeReactiveV2RepeatPolicy(branch);
 }
 
 function reactiveV2PresetButtons(branch){
@@ -1483,7 +2444,8 @@ function renderReactiveV2Type(branch){
 const policy=branch.policy||{};
 const mode=String(policy.mode||'single');
 const item=(value,label,sub)=>`<label class='scenario-v2-type-option ${mode===value?'active':''}'><input data-v2-policy-field='mode' type='radio' name='reactive_v2_mode' value='${esc(value)}' ${mode===value?'checked':''}><span><strong>${esc(label)}</strong><em>${esc(sub)}</em></span></label>`;
-return `<section class='scenario-v2-type'><div class='scenario-v2-type-title'>Reaction type</div><div class='scenario-v2-type-grid'>${item('single','Same actions','Run the same action list on every trigger.')}${item('escalate','Escalate','Run level 1, then level 2, then the next levels.')}${item('rotate','Rotate','Cycle through variants on each trigger.')}${item('random','Random','Pick one variant randomly.')}</div></section>`;
+const repeat=mode==='single'?`<div class='scenario-v2-repeat-choice'><label class='field-stack'><span>Trigger behavior</span><select data-scenario-branch-field='run_once'><option value='false' ${branch.run_once?'':'selected'}>Can repeat</option><option value='true' ${branch.run_once?'selected':''}>Run once</option></select></label></div>`:'';
+return `<section class='scenario-v2-type'><div class='scenario-v2-type-title'>Reaction type</div><div class='scenario-v2-type-grid'>${item('single','Same actions','Run the same action list on every trigger.')}${item('escalate','Escalate','Run level 1, then level 2, then the next levels.')}${item('rotate','Rotate','Cycle through variants on each trigger.')}${item('random','Random','Pick one variant randomly.')}</div>${repeat}</section>`;
 }
 
 function renderReactiveV2Policy(branch){
@@ -1491,24 +2453,35 @@ const policy=branch.policy||{};
 const reentry=branch.reentry||{};
 const result=branch.result_policy||{};
 const reentryMode=String(reentry.mode||'ignore');
-const isEscalate=String(policy.mode||'single')==='escalate';
+const mode=String(policy.mode||'single');
+const isSingle=mode==='single';
+const isEscalate=mode==='escalate';
 const resultAction=value=>['continue','set_flag','fail_reaction','fail_scenario','retry'].map(item=>`<option value='${item}' ${String(value||'')===item?'selected':''}>${item}</option>`).join('');
-return `<details class='scenario-advanced scenario-v2-settings'><summary>Advanced reaction settings</summary><div class='scenario-v2-settings-grid'><label class='field-stack'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></label><label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><label class='field-stack'><span>Reentry while running</span><select data-v2-reentry-field='mode'><option value='ignore' ${reentryMode==='ignore'?'selected':''}>ignore</option><option value='queue_one' ${reentryMode==='queue_one'?'selected':''}>queue_one</option></select></label>${isEscalate?'':`<label class='field-stack'><span>Max fires</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(Number(policy.max_fire_count)||Number(branch.max_fire_count)||0)}'></label>`}<label class='field-stack'><span>Priority</span><input data-v2-branch-field='priority' type='number' step='1' value='${esc(Number(branch.priority)||0)}'></label><label class='field-stack'><span>On done</span><select data-v2-result-field='on_done'>${resultAction(result.on_done||'continue')}</select></label><label class='field-stack'><span>On fail</span><select data-v2-result-field='on_fail'>${resultAction(result.on_fail||'fail_reaction')}</select></label><label class='field-stack'><span>On timeout</span><select data-v2-result-field='on_timeout'>${resultAction(result.on_timeout||'fail_reaction')}</select></label><label class='field-stack'><span>Result flag</span>${renderScenarioFlagInput(result.timeout_flag||result.flag||'',`data-v2-result-field='timeout_flag'`)}</label></div></details>`;
+const runOnceAdvanced=isSingle?'':`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label>`;
+return `<details class='scenario-advanced scenario-v2-settings'><summary>Advanced reaction settings</summary><div class='scenario-v2-settings-grid'><label class='field-stack'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></label>${runOnceAdvanced}<label class='field-stack'><span>Reentry while running</span><select data-v2-reentry-field='mode'><option value='ignore' ${reentryMode==='ignore'?'selected':''}>ignore</option><option value='queue_one' ${reentryMode==='queue_one'?'selected':''}>queue_one</option></select></label>${isEscalate||isSingle?'':`<label class='field-stack'><span>Max fires</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(Number(policy.max_fire_count)||Number(branch.max_fire_count)||0)}'></label>`}<label class='field-stack'><span>Priority</span><input data-v2-branch-field='priority' type='number' step='1' value='${esc(Number(branch.priority)||0)}'></label><label class='field-stack'><span>On done</span><select data-v2-result-field='on_done'>${resultAction(result.on_done||'continue')}</select></label><label class='field-stack'><span>On fail</span><select data-v2-result-field='on_fail'>${resultAction(result.on_fail||'fail_reaction')}</select></label><label class='field-stack'><span>On timeout</span><select data-v2-result-field='on_timeout'>${resultAction(result.on_timeout||'fail_reaction')}</select></label><label class='field-stack'><span>Result flag</span>${renderScenarioFlagInput(result.timeout_flag||result.flag||'',`data-v2-result-field='timeout_flag'`)}</label></div></details>`;
 }
 
 function renderReactiveV2Guards(branch){
 const guards=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
-return `<section class='scenario-v2-rule'><div class='scenario-v2-rule-label'>If</div><div class='scenario-v2-rule-body'><div class='scenario-v2-guard-list'>${guards.length?guards.map((guard,index)=>`<div class='scenario-v2-guard' data-v2-guard-item='${index}'><span class='row-meta'>Flag</span>${renderScenarioFlagInput(guard.flag||guard.flag_name||guard.name||'',`data-v2-guard-field='flag'`)}<select data-v2-guard-field='value'><option value='true' ${guard.value!==false?'selected':''}>is true</option><option value='false' ${guard.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' data-reactive-v2-action='delete_guard' data-guard-index='${index}'>&times;</button></div>`).join(''):`<div class='empty compact-empty'>No guard flags. The reaction can run whenever the trigger arrives.</div>`}</div><button data-reactive-v2-action='add_guard'>Add condition</button></div></section>`;
+return `<section class='scenario-v2-rule'><div class='scenario-v2-rule-label'>If</div><div class='scenario-v2-rule-body'><div class='scenario-v2-guard-list'>${guards.length?guards.map((guard,index)=>`<div class='scenario-v2-guard' data-v2-guard-item='${index}'><span class='row-meta'>Flag</span>${renderScenarioFlagInput(guard.flag||guard.flag_name||guard.name||'',`data-v2-guard-field='flag'`)}<select data-v2-guard-field='value'><option value='true' ${guard.value!==false?'selected':''}>is true</option><option value='false' ${guard.value===false?'selected':''}>is false</option></select><button class='icon-btn danger' data-action='scenario.reactive_v2' data-op='delete_guard' data-guard-index='${index}'>&times;</button></div>`).join(''):`<div class='empty compact-empty'>No guard flags. The reaction can run whenever the trigger arrives.</div>`}</div>${uiButton({label:'Add condition',action:'scenario.reactive_v2',dataset:{op:'add_guard'}})}</div></section>`;
 }
 
 function renderReactiveV2Action(action,variantIndex,actionIndex){
 const type=scenarioStepTypeValue(action);
 const summary=scenarioStepSummaryText(action);
-return `<div class='builder-step scenario-step-row scenario-step-${scenarioStepVisualType(action)} compact-step scenario-v2-action' data-v2-action='${actionIndex}' data-variant-index='${variantIndex}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${actionIndex+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(action)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge'>${esc(scenarioStepBadgeLabel(action))}</span></div><div class='actions compact-actions'><button class='icon-btn danger' data-reactive-v2-action='delete_action' data-variant-index='${variantIndex}' data-action-index='${actionIndex}'>&times;</button></div></div><div class='scenario-step-edit'><div class='scenario-v2-action-fields'><input data-step-field='label' placeholder='Action label' value='${esc(action.label||'')}'><select data-step-field='type'>${reactiveV2ActionTypeOptions(type)}</select></div>${renderScenarioStepPayload(action,type)}</div></div>`;
+const key=reactiveV2ActionKey(variantIndex,actionIndex);
+const expanded=scenarioEditor.expanded_v2_action===key;
+const controls=`<button class='icon-btn' data-action='scenario.reactive_v2' data-op='edit_action' data-variant-index='${variantIndex}' data-action-index='${actionIndex}' title='Edit'>${expanded?'&times;':'&#9998;'}</button><button class='icon-btn danger' data-action='scenario.reactive_v2' data-op='delete_action' data-variant-index='${variantIndex}' data-action-index='${actionIndex}'>&times;</button>`;
+const body=expanded?`<div class='scenario-step-edit'><div class='scenario-v2-action-fields'><input data-step-field='label' placeholder='Action label' value='${esc(action.label||'')}'><select data-step-field='type'>${reactiveV2ActionTypeOptions(type)}</select></div>${renderScenarioStepPayload(action,type)}</div>`:'';
+return `<div class='builder-step scenario-step-row scenario-step-${scenarioStepVisualType(action)} compact-step scenario-v2-action ${expanded?'scenario-step-expanded':''}' data-v2-action='${actionIndex}' data-variant-index='${variantIndex}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${actionIndex+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(action)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge'>${esc(scenarioStepBadgeLabel(action))}</span></div><div class='actions compact-actions'>${controls}</div></div>${body}</div>`;
+}
+
+function reactiveV2ActionKey(variantIndex,actionIndex){
+return `${Number(variantIndex)||0}:${Number(actionIndex)||0}`;
 }
 
 function renderReactiveV2ActionAddButtons(variantIndex){
-return `<div class='scenario-v2-action-add'><button data-reactive-v2-action='add_action' data-action-type='DEVICE_COMMAND' data-variant-index='${variantIndex}'>Add device command</button><button data-reactive-v2-action='add_action' data-action-type='WAIT_TIME' data-variant-index='${variantIndex}'>Add wait</button><button data-reactive-v2-action='add_action' data-action-type='SET_FLAG' data-variant-index='${variantIndex}'>Add flag</button><button data-reactive-v2-action='add_action' data-action-type='SHOW_OPERATOR_MESSAGE' data-variant-index='${variantIndex}'>Add message</button></div>`;
+return `<div class='scenario-v2-action-add'>${uiButton({label:'Add device command',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'DEVICE_COMMAND','variant-index':variantIndex}})}${uiButton({label:'Add wait',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'WAIT_TIME','variant-index':variantIndex}})}${uiButton({label:'Add flag',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'SET_FLAG','variant-index':variantIndex}})}${uiButton({label:'Add message',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'SHOW_OPERATOR_MESSAGE','variant-index':variantIndex}})}</div>`;
 }
 
 function renderReactiveV2Variants(branch){
@@ -1521,7 +2494,7 @@ const addLabel=isEscalate?'Add level':'Add variant';
 const shown=isSingle?(variants.length?[variants[0]]:[{id:'variant_1',label:'Actions',actions:[]}]):variants;
 const maxFireValue=Number(branch.policy&&branch.policy.max_fire_count)||Number(branch.max_fire_count)||shown.length||1;
 const escalateControls=isEscalate?`<label class='scenario-v2-max-fire'><span>Stop after level</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(maxFireValue)}'></label>`:'';
-return `<section class='scenario-v2-rule scenario-v2-then'><div class='scenario-v2-rule-label'>Then</div><div class='scenario-v2-rule-body'><div class='scenario-v2-subtitle-row'><div class='scenario-v2-subtitle'>${esc(title)}</div>${escalateControls}</div><div class='scenario-v2-variant-list'>${shown.map((variant,index)=>{const originalIndex=isSingle?0:index;const label=isEscalate?`Level ${index+1}`:(isSingle?'Actions':`Variant ${index+1}`);const nameValue=isSingle?'Actions':(variant.label||variant.name||label);return `<div class='scenario-v2-variant' data-v2-variant='${originalIndex}'><div class='scenario-v2-variant-head'><label class='field-stack'><span>${esc(label)}</span><input data-v2-variant-field='label' placeholder='${esc(label)} label' value='${esc(nameValue)}' ${isSingle?'readonly':''}></label><div class='actions'>${isSingle?'':`<button class='danger' data-reactive-v2-action='delete_variant' data-variant-index='${originalIndex}' ${variants.length<=1?'disabled':''}>Delete ${isEscalate?'level':'variant'}</button>`}</div></div><details class='scenario-advanced compact-advanced scenario-v2-variant-id'><summary>${esc(isEscalate?'Level id':'Variant id')}</summary><div class='row'><input data-v2-variant-field='id' placeholder='Variant ID' value='${esc(variant.id||'')}'></div></details><div class='scenario-v2-action-list'>${(Array.isArray(variant.actions)?variant.actions:[]).map((action,actionIndex)=>renderReactiveV2Action(action,originalIndex,actionIndex)).join('')||`<div class='empty'>No actions yet. Add one or more actions below.</div>`}</div>${renderReactiveV2ActionAddButtons(originalIndex)}</div>`;}).join('')}</div>${isSingle?'':`<button data-reactive-v2-action='add_variant'>${esc(addLabel)}</button>`}</div></section>`;
+return `<section class='scenario-v2-rule scenario-v2-then'><div class='scenario-v2-rule-label'>Then</div><div class='scenario-v2-rule-body'><div class='scenario-v2-subtitle-row'><div class='scenario-v2-subtitle'>${esc(title)}</div>${escalateControls}</div><div class='scenario-v2-variant-list'>${shown.map((variant,index)=>{const originalIndex=isSingle?0:index;const label=isEscalate?`Level ${index+1}`:(isSingle?'Actions':`Variant ${index+1}`);const nameValue=isSingle?'Actions':(variant.label||variant.name||label);return `<div class='scenario-v2-variant' data-v2-variant='${originalIndex}'><div class='scenario-v2-variant-head'><label class='field-stack'><span>${esc(label)}</span><input data-v2-variant-field='label' placeholder='${esc(label)} label' value='${esc(nameValue)}' ${isSingle?'readonly':''}></label><div class='actions'>${isSingle?'':uiButton({label:`Delete ${isEscalate?'level':'variant'}`,kind:'danger',action:'scenario.reactive_v2',dataset:{op:'delete_variant','variant-index':originalIndex},disabled:variants.length<=1})}</div></div><details class='scenario-advanced compact-advanced scenario-v2-variant-id'><summary>${esc(isEscalate?'Level id':'Variant id')}</summary><div class='row'><input data-v2-variant-field='id' placeholder='Variant ID' value='${esc(variant.id||'')}'></div></details><div class='scenario-v2-action-list'>${(Array.isArray(variant.actions)?variant.actions:[]).map((action,actionIndex)=>renderReactiveV2Action(action,originalIndex,actionIndex)).join('')||`<div class='empty'>No actions yet. Add one or more actions below.</div>`}</div>${renderReactiveV2ActionAddButtons(originalIndex)}</div>`;}).join('')}</div>${isSingle?'':uiButton({label:addLabel,action:'scenario.reactive_v2',dataset:{op:'add_variant'}})}</div></section>`;
 }
 
 function renderReactiveV2Editor(branch){
@@ -1529,49 +2502,221 @@ ensureReactiveV2Branch(branch);
 return `<div class='scenario-v2-editor'>${renderReactiveV2Type(branch)}${renderReactiveV2Trigger(branch)}${renderReactiveV2Guards(branch)}${renderReactiveV2Variants(branch)}${renderReactiveV2Policy(branch)}</div>`;
 }
 
-function scenarioDeviceById(deviceId){
-return scenarioCatalogDevices().find(device=>device.id===deviceId)||null;
+function collectReactiveActionFromElement(el,previous,index){
+if(!el.querySelector(`[data-step-field='type']`)&&previous&&previous.type)return JSON.parse(JSON.stringify(previous));
+const get=name=>{const n=el.querySelector(`[data-step-field='${name}']`);return n?n.value:'';};
+const type=get('type')||previous.type||'SET_FLAG';
+if(scenarioStepTypeValue(previous)!==scenarioStepTypeValue({type})){
+previous=newScenarioStepForType(index,type);
+}
+let label=get('label')||previous.label||'';
+const action={id:previous.id||slugifyId(label||`action_${index+1}`,'action'),label,type};
+if(type==='DEVICE_COMMAND'){
+action.device_id=get('device_id')||previous.device_id||'';
+const device=scenarioDeviceById(action.device_id);
+action.command_id=scenarioValidCommandId(device,get('command_id')||previous.command_id||'');
+const commandName=scenarioCommandName(action.device_id,action.command_id);
+if(!label||label===previous.label||label.indexOf(' - ')>=0){
+label=action.device_id==='system_audio'?commandName:`${scenarioRoomNameForDevice(device)}: ${scenarioDeviceName(device)} - ${commandName}`;
+action.label=label;
+}
+const command=scenarioCommandById(action.device_id,action.command_id);
+const params=commandSupportsScenarioParams(command)?{...(previous.params&&typeof previous.params==='object'?previous.params:{})}:{};
+el.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});
+if(Object.keys(params).length)action.params=params;
+}else if(type==='DEVICE_COMMAND_GROUP'){
+action.mode=previous.mode||'sequential';
+action.commands=[];
+el.querySelectorAll('[data-command-group-item]').forEach((item,itemIndex)=>{const deviceField=item.querySelector('[data-group-command-field="device_id"]');const commandField=item.querySelector('[data-group-command-field="command_id"]');const previousItem=Array.isArray(previous.commands)?(previous.commands[itemIndex]||{}):{};const deviceId=(deviceField?deviceField.value:'')||previousItem.device_id||'';const device=scenarioDeviceById(deviceId);const commandId=scenarioValidCommandId(device,(commandField?commandField.value:'')||previousItem.command_id||'');const command=scenarioCommandById(deviceId,commandId);const params=commandSupportsScenarioParams(command)?{...(previousItem.params&&typeof previousItem.params==='object'?previousItem.params:{})}:{};item.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});const out={device_id:deviceId,command_id:commandId};if(Object.keys(params).length)out.params=params;action.commands.push(out);});
+}else if(type==='WAIT_TIME'){
+action.duration_ms=get('duration_ms')?durationSecondsToMs(get('duration_ms')):(previous.duration_ms||1000);
+}else if(type==='SHOW_OPERATOR_MESSAGE'){
+action.message=get('message')||previous.message||'';
+}else if(type==='SET_FLAG'){
+const valueField=el.querySelector(`[data-step-field='value']`);
+action.flag_name=get('flag_name')||previous.flag_name||previous.flag||'';
+action.value=valueField?(valueField.type==='checkbox'?valueField.checked:valueField.value!=='false'):(previous.value!==false);
+}
+return action;
 }
 
-function scenarioCommandById(deviceId,commandId){
-const device=scenarioDeviceById(deviceId);
-return device&&Array.isArray(device.commands)?device.commands.find(cmd=>cmd.id===commandId)||null:null;
+function collectReactiveV2BranchFromDom(branch,root){
+if(!branch||!root)return branch;
+ensureReactiveV2Branch(branch);
+const value=(selector,def='')=>{const nodes=Array.from(root.querySelectorAll(selector));if(!nodes.length)return def;const checked=nodes.find(n=>n.type==='radio'&&n.checked);const n=checked||nodes[0];return n?n.value:def;};
+const runOnceField=root.querySelector('[data-scenario-branch-field="run_once"]');
+branch.priority=Number(value('[data-v2-branch-field="priority"]',branch.priority))||0;
+branch.policy=branch.policy&&typeof branch.policy==='object'?branch.policy:{};
+branch.policy.mode=value('[data-v2-policy-field="mode"]',branch.policy.mode||'single')||'single';
+if(branch.policy.mode==='single'&&runOnceField){
+branch.run_once=runOnceField.type==='checkbox'?!!runOnceField.checked:String(runOnceField.value)==='true';
+}
+branch.policy.cooldown_ms=Number(branch.cooldown_ms)||Number(branch.policy.cooldown_ms)||0;
+branch.policy.max_fire_count=Math.max(0,Math.round(Number(value('[data-v2-policy-field="max_fire_count"]',branch.policy.max_fire_count||0))||0));
+branch.max_fire_count=branch.policy.max_fire_count;
+normalizeReactiveV2RepeatPolicy(branch);
+branch.reentry={mode:value('[data-v2-reentry-field="mode"]',branch.reentry&&branch.reentry.mode||'ignore')||'ignore'};
+branch.result_policy={
+on_done:value('[data-v2-result-field="on_done"]',branch.result_policy&&branch.result_policy.on_done||'continue')||'continue',
+on_fail:value('[data-v2-result-field="on_fail"]',branch.result_policy&&branch.result_policy.on_fail||'fail_reaction')||'fail_reaction',
+on_timeout:value('[data-v2-result-field="on_timeout"]',branch.result_policy&&branch.result_policy.on_timeout||'fail_reaction')||'fail_reaction'}
+;const resultFlag=value('[data-v2-result-field="timeout_flag"]',branch.result_policy&&branch.result_policy.timeout_flag||branch.result_policy&&branch.result_policy.flag||'');if(resultFlag){branch.result_policy.flag=resultFlag;branch.result_policy.timeout_flag=resultFlag;}
+const kind=value('[data-v2-trigger-field="kind"]',branch.trigger&&branch.trigger.kind||'device_event')||'device_event';
+branch.trigger={kind};
+if(kind==='device_event'){branch.trigger.device_id=value('[data-v2-trigger-field="device_id"]',branch.trigger.device_id||'');const device=scenarioDeviceById(branch.trigger.device_id);branch.trigger.event_id=scenarioValidEventId(device,value('[data-v2-trigger-field="event_id"]',branch.trigger.event_id||''));}
+else if(kind==='flag_changed')branch.trigger.flag_name=value('[data-v2-trigger-field="flag_name"]',branch.trigger.flag_name||'');
+else if(kind==='operator_event')branch.trigger.operator_event=value('[data-v2-trigger-field="operator_event"]',branch.trigger.operator_event||'');
+else if(kind==='runtime_event')branch.trigger.runtime_event=value('[data-v2-trigger-field="runtime_event"]',branch.trigger.runtime_event||'');
+branch.guard_flags=[];
+root.querySelectorAll('[data-v2-guard-item]').forEach(item=>{const name=(item.querySelector('[data-v2-guard-field="flag"]')||{}).value||'';const val=(item.querySelector('[data-v2-guard-field="value"]')||{}).value;if(name)branch.guard_flags.push({flag:name,value:val!=='false'});});
+const previousVariants=Array.isArray(branch.variants)?branch.variants.map(variant=>JSON.parse(JSON.stringify(variant))):[];
+branch.variants=[];
+root.querySelectorAll('[data-v2-variant]').forEach((variantEl,variantIndex)=>{const id=(variantEl.querySelector('[data-v2-variant-field="id"]')||{}).value||`variant_${variantIndex+1}`;const label=(variantEl.querySelector('[data-v2-variant-field="label"]')||{}).value||`Variant ${variantIndex+1}`;const previous=previousVariants[variantIndex]||{};const variant={id,label,actions:[]};variantEl.querySelectorAll('[data-v2-action]').forEach((actionEl,actionIndex)=>{const previousAction=Array.isArray(previous.actions)?(previous.actions[actionIndex]||{}):{};variant.actions.push(collectReactiveActionFromElement(actionEl,previousAction,actionIndex));});branch.variants.push(variant);});
+if(!branch.variants.length)branch.variants=defaultReactiveV2BranchFields().variants;
+branch.steps=[];
+if(!Array.isArray(branch.on_complete)||!branch.on_complete.length)delete branch.on_complete;
+return normalizeReactiveV2RepeatPolicy(branch);
 }
 
-function scenarioValidCommandId(device,commandId){
-const commands=device&&Array.isArray(device.commands)?device.commands:[];
-if(commandId&&commands.some(cmd=>cmd.id===commandId))return commandId;
-return commands[0]&&commands[0].id||'';
+function applyReactiveV2Action(action,variantIndex,actionIndex,actionType){
+const draft=collectScenarioEditor();
+const branch=scenarioActiveBranch(draft);
+if(!scenarioIsReactiveV2Branch(branch))return;
+ensureReactiveV2Branch(branch);
+variantIndex=Number.isFinite(Number(variantIndex))?Number(variantIndex):0;
+actionIndex=Number.isFinite(Number(actionIndex))?Number(actionIndex):0;
+if(action==='add_guard'){
+branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+branch.guard_flags.push({flag:'puzzle_done',value:true});
+}else if(action==='delete_guard'){
+branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
+branch.guard_flags.splice(actionIndex,1);
+}else if(action==='add_variant'){
+branch.variants=Array.isArray(branch.variants)?branch.variants:[];
+const n=branch.variants.length+1;
+const mode=String(branch.policy&&branch.policy.mode||'single');
+branch.variants.push({id:`variant_${n}`,label:mode==='escalate'?`Level ${n}`:`Variant ${n}`,actions:[]});
+}else if(action==='delete_variant'){
+branch.variants=Array.isArray(branch.variants)?branch.variants:[];
+if(branch.variants.length>1)branch.variants.splice(variantIndex,1);
+scenarioEditor.expanded_v2_action='';
+}else if(action==='add_action'){
+const variant=branch.variants[variantIndex];
+if(variant){
+variant.actions=Array.isArray(variant.actions)?variant.actions:[];
+variant.actions.push(newScenarioStepForType(variant.actions.length,actionType||'DEVICE_COMMAND'));
+scenarioEditor.expanded_v2_action=reactiveV2ActionKey(variantIndex,variant.actions.length-1);
+}
+}else if(action==='delete_action'){
+const variant=branch.variants[variantIndex];
+if(variant){
+variant.actions=Array.isArray(variant.actions)?variant.actions:[];
+variant.actions.splice(actionIndex,1);
+scenarioEditor.expanded_v2_action='';
+}
+}else if(action==='edit_action'){
+const key=reactiveV2ActionKey(variantIndex,actionIndex);
+scenarioEditor.expanded_v2_action=scenarioEditor.expanded_v2_action===key?'':key;
+}else if(action==='group_add'||action==='group_delete'){
+const variant=branch.variants[variantIndex];
+const item=variant&&Array.isArray(variant.actions)?variant.actions[actionIndex]:null;
+if(item&&scenarioStepTypeValue(item)==='DEVICE_COMMAND_GROUP'){
+item.commands=Array.isArray(item.commands)?item.commands:[];
+if(action==='group_add'){
+item.commands.push(defaultScenarioCommandItem());
+}else{
+const commandIndex=Number.isFinite(Number(actionType))?Number(actionType):0;
+item.commands.splice(commandIndex,1);
+if(!item.commands.length)item.commands.push(defaultScenarioCommandItem());
+}
+}
+}
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
+skipNextScenarioDomSync();
+render();
+}
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+function renderScenarioBranchTabs(base,activeIndex){
+const branches=Array.isArray(base&&base.branches)?base.branches:[];
+if(!branches.length)return '';
+const flow=branches.map((branch,index)=>({branch,index})).filter(item=>scenarioBranchTypeValue(item.branch)==='normal');
+const reactions=branches.map((branch,index)=>({branch,index})).filter(item=>scenarioBranchTypeValue(item.branch)==='reactive');
+const tab=item=>`<button class='scenario-branch-tab ${item.index===activeIndex?'active':''}' data-action='scenario.branch' data-op='select' data-branch-index='${item.index}'><span>${esc(item.branch.name||item.branch.id||`Branch ${item.index+1}`)}</span><em>${esc(scenarioIsReactiveV2Branch(item.branch)?(Array.isArray(item.branch.variants)?item.branch.variants.length:0):(Array.isArray(item.branch.steps)?item.branch.steps.length:0))}</em></button>`;
+return `<div class='scenario-branch-tabs grouped'><div class='scenario-branch-tab-group'><span class='row-meta'>Scenario flow</span>${flow.map(tab).join('')}${uiButton({label:'+ Branch',kind:'scenario-branch-add',action:'scenario.branch',dataset:{op:'add'}})}</div><div class='scenario-branch-tab-group'><span class='row-meta'>Reactions</span>${reactions.map(tab).join('')}${uiButton({label:'+ Reaction',kind:'scenario-branch-add',action:'scenario.branch',dataset:{op:'add_reactive'}})}</div></div>`;
 }
 
-function scenarioValidEventId(device,eventId){
-const events=device&&Array.isArray(device.events)?device.events:[];
-if(eventId&&events.some(ev=>ev.id===eventId))return eventId;
-return events[0]&&events[0].id||'';
+function renderScenarioBranchSettings(branch,index,total){
+if(!branch)return '';
+const branchIdKey=`scenario:branch:${scenarioEditor.room_id}:${branch.id||index}`;
+const type=scenarioBranchTypeValue(branch);
+const isV2=scenarioIsReactiveV2Branch(branch);
+const typeField=type==='normal'?`<div class='field-stack'><span>Type</span><select data-scenario-branch-field='type'><option value='normal' selected>Scenario flow</option><option value='reactive'>Reaction</option></select></div>`:`<input type='hidden' data-scenario-branch-field='type' value='reactive'>`;
+const controls=type==='normal'?`<label class='row-meta branch-toggle'><input data-scenario-branch-field='required_for_completion' type='checkbox' ${branch.required_for_completion!==false?'checked':''}> Required for finish</label>`:(isV2?'':`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><div class='field-stack compact-field'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></div>`);
+return `<div class='scenario-branch-settings ${type==='reactive'?'reactive':''}'><div class='field-stack branch-name-field'><span>${type==='reactive'?'Reaction name':'Branch name'}</span><input data-scenario-branch-field='name' placeholder='${type==='reactive'?'Reaction name':'Branch name'}' value='${esc(branch.name||'')}'></div>${typeField}<label class='row-meta branch-toggle'><input data-scenario-branch-field='enabled' type='checkbox' ${branch.enabled!==false?'checked':''}> Enabled</label>${controls}${uiButton({label:'Delete',kind:'danger scenario-branch-delete',action:'scenario.branch',dataset:{op:'delete','branch-index':index},disabled:total<=1})}<details class='scenario-advanced compact-advanced' ${detailsAttrs(branchIdKey,false)}><summary>Branch id</summary><div class='row'><input data-scenario-branch-field='id' placeholder='Branch ID' value='${esc(branch.id||'')}'></div></details></div>`;
 }
 
-function scenarioEventById(deviceId,eventId){
-const device=scenarioDeviceById(deviceId);
-return device&&Array.isArray(device.events)?device.events.find(ev=>ev.id===eventId)||null:null;
+function applyScenarioBranchAction(action,index){
+const wasDirty=!!scenarioEditor.dirty;
+const draft=collectScenarioEditor();
+draft.branches=Array.isArray(draft.branches)&&draft.branches.length?draft.branches:[defaultScenarioBranch(0,[])];
+if(action==='select'){
+scenarioEditor.active_branch=Number.isFinite(index)?index:0;
+scenarioEditor.expanded_step=-1;
+scenarioEditor.expanded_v2_action='';
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=wasDirty;
+skipNextScenarioDomSync();
+render();
+return;
 }
+if(action==='add'||action==='add_reactive'){
+const nextIndex=draft.branches.length;
+if(nextIndex>=8){
+alert('A scenario can have up to 8 branches.');
+return;
+}
+const branchType=action==='add_reactive'?'reactive':'normal';
+const branchId=uniqueScenarioBranchId(draft.branches,branchType);
+const branch=defaultScenarioBranch(nextIndex,[],branchType);
 
-function scenarioCommandName(deviceId,commandId){
-const command=scenarioCommandById(deviceId,commandId);
-return command&&(command.label||command.id)||commandId||'command';
+branch.id=branchId;
+branch.name=defaultScenarioBranchName(branchId,branchType);
+if(branchType==='reactive')ensureReactiveV2Branch(branch);
+draft.branches.push(branch);
+scenarioEditor.active_branch=draft.branches.length-1;
+scenarioEditor.expanded_step=-1;
+scenarioEditor.expanded_v2_action='';
 }
-
-function scenarioAudioCommandSummary(step){
-const commandId=String(step&&step.command_id||'');
-if(commandId==='play'){
-const params=step&&step.params||{};
-return audioChannelValue(params)==='background'?(params.repeat?'Play background repeat':'Play background'):'Play audio';
+else if(action==='delete'){
+const removeIndex=Number.isFinite(index)?index:scenarioActiveBranchIndex(draft);
+if(draft.branches.length<=1)return;
+if(!confirm('Delete this scenario branch?'))return;
+draft.branches.splice(removeIndex,1);
+scenarioEditor.branch_count_shrink_allowed=true;
+scenarioEditor.branch_count_shrink_floor=draft.branches.length;
+scenarioEditor.active_branch=Math.max(0,Math.min(removeIndex,draft.branches.length-1));
+scenarioEditor.expanded_step=-1;
+scenarioEditor.expanded_v2_action='';
 }
-return scenarioCommandName('system_audio',commandId);
+else return;
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
+skipNextScenarioDomSync();
+render();
 }
-
-function scenarioDeviceEventName(deviceId,eventId){
-const event=scenarioEventById(deviceId,eventId);
-return event&&(event.label||event.id)||eventId||'event';
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+function scenarioStepPresetButtons(branch){
+if(scenarioIsReactiveV2Branch(branch))return reactiveV2PresetButtons(branch);
+const allowed=scenarioAllowedStepTypesForBranch(branch);
+const allowedSet=allowed?new Set(allowed):null;
+const schemas=scenarioStepSchemas().filter(schema=>!allowedSet||allowedSet.has(schema.type||''));
+const title=allowedSet?(Array.isArray(branch&&branch.steps)&&branch.steps.length?'Add action':'Add trigger'):'Add step';
+const hasSteps=Array.isArray(branch&&branch.steps)&&branch.steps.length>0;
+const hint=allowedSet&&!hasSteps?`<div class='row-meta scenario-reaction-hint'>Add one trigger first. Actions become available after the trigger.</div>`:'';
+return `<h2 class='section-title'>${esc(title)}</h2>${hint}<div class='scenario-step-presets'>${schemas.map(schema=>`<div class='scenario-step-preset-row'><button data-action='scenario.step' data-op='add_schema' data-step-type='${esc(schema.type||'WAIT_TIME')}'>${esc(schema.label||schema.type)}</button><button class='icon-btn' title='Show example' aria-label='Show step example' data-action='scenario.step.help' data-step-type='${esc(schema.type||'WAIT_TIME')}'>?</button></div>`).join('')}</div>`;
 }
 
 function scenarioStepPreviewText(step,index){
@@ -1722,6 +2867,130 @@ if(visual==='end-game')return 'End';
 return 'Command';
 }
 
+function renderScenarioStepEditor(step,index,total,expanded,issues){
+const type=scenarioStepTypeValue(step);
+const summary=scenarioStepSummaryText(step);
+const visual=scenarioStepVisualType(step);
+const badge=scenarioStepBadgeLabel(step);
+const fullType=scenarioStepTypeLabel(type);
+const stepIssues=Array.isArray(issues)?issues:[];
+const hasErrors=stepIssues.some(scenarioIssueIsError);
+const hasWarnings=stepIssues.length&&!hasErrors;
+const validationClass=hasErrors?'has-validation-error':(hasWarnings?'has-validation-warning':'');
+const issueBadge=stepIssues.length?`<span class='badge scenario-issue-badge ${hasErrors?'error':'warning'}'>${hasErrors?'Error':'Warning'} ${stepIssues.length}</span>`:'';
+const controls=`<div class='actions compact-actions'><button class='icon-btn' title='${expanded?'Close':'Edit'}' aria-label='${expanded?'Close':'Edit'}' data-action='scenario.step' data-op='edit' data-step-index='${index}'>${expanded?'&#10005;':'&#9998;'}</button><button class='icon-btn' title='Move up' aria-label='Move up' data-action='scenario.step' data-op='up' data-step-index='${index}' ${index<=0?'disabled':''}>&uarr;</button><button class='icon-btn' title='Move down' aria-label='Move down' data-action='scenario.step' data-op='down' data-step-index='${index}' ${index>=total-1?'disabled':''}>&darr;</button><button class='icon-btn danger' title='Delete' aria-label='Delete' data-action='scenario.step' data-op='delete' data-step-index='${index}'>&times;</button></div>`;
+if(!expanded){
+return `<div class='builder-step scenario-step-row scenario-step-${visual} ${validationClass} compact-step' data-scenario-step='${index}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${index+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(step)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge' title='${esc(fullType)}'>${esc(badge)}</span>${issueBadge}${step.enabled===false?`<span class='badge'>disabled</span>`:''}</div>${controls}</div>${renderScenarioInlineIssues(stepIssues)}</div>`;
+}
+return `<div class='builder-step scenario-step-row scenario-step-${visual} scenario-step-expanded ${validationClass} compact-step' data-scenario-step='${index}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${index+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(step)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge' title='${esc(fullType)}'>${esc(badge)}</span>${issueBadge}</div>${controls}</div>${renderScenarioInlineIssues(stepIssues)}<div class='scenario-step-edit'><div class='row compact-row'><input data-step-field='label' placeholder='Step label' value='${esc(step.label||'')}'><select data-step-field='type'>${scenarioTypeOptions(type)}</select><label class='row-meta enabled-inline'><input data-step-field='enabled' type='checkbox' ${step.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label></div>${renderScenarioStepPayload(step,type)}</div></div>`;
+}
+
+function applyScenarioStepAction(action,index,type){
+const wasDirty=!!scenarioEditor.dirty;
+const draft=collectScenarioEditor();
+const activeBranch=scenarioActiveBranch(draft);
+const steps=scenarioActiveSteps(draft);
+const nextIndex=scenarioNextStepLocalIndex(steps);
+if(action==='add_schema'){
+const allowed=scenarioAllowedStepTypesForBranch(activeBranch);
+if(allowed&&!allowed.includes(scenarioStepTypeValue({type:type||'WAIT_TIME'}))){
+alert(steps.length?'This reaction can only add action steps after its trigger.':'Add a reaction trigger first.');
+return;
+}
+steps.push(newScenarioStepForType(nextIndex,type||'WAIT_TIME'));
+scenarioEditor.expanded_step=steps.length-1;
+}
+else if(action==='add'){
+steps.push(newScenarioStep(nextIndex,'wait_time'));
+scenarioEditor.expanded_step=steps.length-1;
+}
+else if(action==='add_run'){
+steps.push(newScenarioStep(nextIndex,'device_command'));
+scenarioEditor.expanded_step=steps.length-1;
+}
+else if(action==='add_command'){
+steps.push(newScenarioStep(nextIndex,'device_command'));
+scenarioEditor.expanded_step=steps.length-1;
+}
+else if(action==='add_wait_device_event'){
+steps.push(newScenarioStep(nextIndex,'wait_device_event'));
+scenarioEditor.expanded_step=steps.length-1;
+}
+else if(action==='add_wait_time'){
+steps.push(newScenarioStep(nextIndex,'wait_time'));
+scenarioEditor.expanded_step=steps.length-1;
+}
+else if(action==='add_operator'){
+steps.push(newScenarioStep(nextIndex,'operator'));
+scenarioEditor.expanded_step=steps.length-1;
+}
+else if(action==='group_add'&&index>=0&&steps[index]){
+steps[index].commands=Array.isArray(steps[index].commands)?steps[index].commands:[];
+steps[index].commands.push(defaultScenarioCommandItem());
+scenarioEditor.expanded_step=index;
+}
+else if(action==='group_delete'&&index>=0&&steps[index]){
+const commandIndex=Number(type);
+steps[index].commands=Array.isArray(steps[index].commands)?steps[index].commands:[];
+if(Number.isFinite(commandIndex))steps[index].commands.splice(commandIndex,1);
+if(!steps[index].commands.length)steps[index].commands.push(defaultScenarioCommandItem());
+scenarioEditor.expanded_step=index;
+}
+else if(action==='event_group_add'&&index>=0&&steps[index]){
+steps[index].events=Array.isArray(steps[index].events)?steps[index].events:[];
+steps[index].events.push(defaultScenarioEventItem());
+scenarioEditor.expanded_step=index;
+}
+else if(action==='event_group_delete'&&index>=0&&steps[index]){
+const eventIndex=Number(type);
+steps[index].events=Array.isArray(steps[index].events)?steps[index].events:[];
+if(Number.isFinite(eventIndex))steps[index].events.splice(eventIndex,1);
+if(!steps[index].events.length)steps[index].events.push(defaultScenarioEventItem());
+scenarioEditor.expanded_step=index;
+}
+else if(action==='flag_list_add'&&index>=0&&steps[index]){
+steps[index].flags=Array.isArray(steps[index].flags)?steps[index].flags:[];
+steps[index].flags.push(defaultScenarioFlagItem());
+scenarioEditor.expanded_step=index;
+}
+else if(action==='flag_list_delete'&&index>=0&&steps[index]){
+const flagIndex=Number(type);
+steps[index].flags=Array.isArray(steps[index].flags)?steps[index].flags:[];
+if(Number.isFinite(flagIndex))steps[index].flags.splice(flagIndex,1);
+if(!steps[index].flags.length)steps[index].flags.push(defaultScenarioFlagItem());
+scenarioEditor.expanded_step=index;
+}
+else if(action==='delete'&&index>=0){
+steps.splice(index,1);
+if(scenarioEditor.expanded_step>=steps.length)scenarioEditor.expanded_step=Math.max(0,steps.length-1);
+else if(scenarioEditor.expanded_step>index)scenarioEditor.expanded_step--;
+}
+else if(action==='up'&&index>0){
+const t=steps[index-1];
+steps[index-1]=steps[index];
+steps[index]=t;
+scenarioEditor.expanded_step=index-1;
+}
+else if(action==='down'&&index>=0&&index<steps.length-1){
+const t=steps[index+1];
+steps[index+1]=steps[index];
+steps[index]=t;
+scenarioEditor.expanded_step=index+1;
+}
+else if(action==='edit'&&index>=0){
+scenarioEditor.expanded_step=scenarioEditor.expanded_step===index?-1:index;
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=wasDirty;
+skipNextScenarioDomSync();
+render();
+return;
+}
+scenarioEditor.draft=draft;
+scenarioEditor.dirty=true;
+skipNextScenarioDomSync();
+render();
+}
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
 function scenarioActiveValidationIssues(savedIssues){
 const report=scenarioEditor.validation_report;
 if(report&&Array.isArray(report.issues))return report.issues;
@@ -1837,160 +3106,50 @@ out[local.step_index].push(local);
 });
 return out;
 }
-
-function renderScenarioBranchTabs(base,activeIndex){
-const branches=Array.isArray(base&&base.branches)?base.branches:[];
-if(!branches.length)return '';
-const flow=branches.map((branch,index)=>({branch,index})).filter(item=>scenarioBranchTypeValue(item.branch)==='normal');
-const reactions=branches.map((branch,index)=>({branch,index})).filter(item=>scenarioBranchTypeValue(item.branch)==='reactive');
-const tab=item=>`<button class='scenario-branch-tab ${item.index===activeIndex?'active':''}' data-scenario-branch-action='select' data-branch-index='${item.index}'><span>${esc(item.branch.name||item.branch.id||`Branch ${item.index+1}`)}</span><em>${esc(scenarioIsReactiveV2Branch(item.branch)?(Array.isArray(item.branch.variants)?item.branch.variants.length:0):(Array.isArray(item.branch.steps)?item.branch.steps.length:0))}</em></button>`;
-return `<div class='scenario-branch-tabs grouped'><div class='scenario-branch-tab-group'><span class='row-meta'>Scenario flow</span>${flow.map(tab).join('')}<button class='scenario-branch-add' data-scenario-branch-action='add'>+ Branch</button></div><div class='scenario-branch-tab-group'><span class='row-meta'>Reactions</span>${reactions.map(tab).join('')}<button class='scenario-branch-add' data-scenario-branch-action='add_reactive'>+ Reaction</button></div></div>`;
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+function scenarioDeviceById(deviceId){
+return scenarioCatalogDevices().find(device=>device.id===deviceId)||null;
 }
 
-function renderScenarioBranchSettings(branch,index,total){
-if(!branch)return '';
-const branchIdKey=`scenario:branch:${scenarioEditor.room_id}:${branch.id||index}`;
-const type=scenarioBranchTypeValue(branch);
-const isV2=scenarioIsReactiveV2Branch(branch);
-const typeField=type==='normal'?`<div class='field-stack'><span>Type</span><select data-scenario-branch-field='type'><option value='normal' selected>Scenario flow</option><option value='reactive'>Reaction</option></select></div>`:`<input type='hidden' data-scenario-branch-field='type' value='reactive'>`;
-const controls=type==='normal'?`<label class='row-meta branch-toggle'><input data-scenario-branch-field='required_for_completion' type='checkbox' ${branch.required_for_completion!==false?'checked':''}> Required for finish</label>`:(isV2?'':`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><div class='field-stack compact-field'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></div>`);
-return `<div class='scenario-branch-settings ${type==='reactive'?'reactive':''}'><div class='field-stack branch-name-field'><span>${type==='reactive'?'Reaction name':'Branch name'}</span><input data-scenario-branch-field='name' placeholder='${type==='reactive'?'Reaction name':'Branch name'}' value='${esc(branch.name||'')}'></div>${typeField}<label class='row-meta branch-toggle'><input data-scenario-branch-field='enabled' type='checkbox' ${branch.enabled!==false?'checked':''}> Enabled</label>${controls}<button class='danger scenario-branch-delete' data-scenario-branch-action='delete' data-branch-index='${index}' ${total<=1?'disabled':''}>Delete</button><details class='scenario-advanced compact-advanced' ${detailsAttrs(branchIdKey,false)}><summary>Branch id</summary><div class='row'><input data-scenario-branch-field='id' placeholder='Branch ID' value='${esc(branch.id||'')}'></div></details></div>`;
+function scenarioCommandById(deviceId,commandId){
+const device=scenarioDeviceById(deviceId);
+return device&&Array.isArray(device.commands)?device.commands.find(cmd=>cmd.id===commandId)||null:null;
 }
 
-function applyScenarioBranchAction(action,index){
-const wasDirty=!!scenarioEditor.dirty;
-const draft=collectScenarioEditor();
-draft.branches=Array.isArray(draft.branches)&&draft.branches.length?draft.branches:[defaultScenarioBranch(0,[])];
-if(action==='select'){
-scenarioEditor.active_branch=Number.isFinite(index)?index:0;
-scenarioEditor.expanded_step=-1;
-scenarioEditor.draft=draft;
-scenarioEditor.dirty=wasDirty;
-skipNextScenarioDomSync();
-render();
-return;
-}
-if(action==='add'||action==='add_reactive'){
-const nextIndex=draft.branches.length;
-if(nextIndex>=8){
-alert('A scenario can have up to 8 branches.');
-return;
-}
-const branchType=action==='add_reactive'?'reactive':'normal';
-const branchId=uniqueScenarioBranchId(draft.branches,branchType);
-const branch=defaultScenarioBranch(nextIndex,[],branchType);
-
-branch.id=branchId;
-branch.name=defaultScenarioBranchName(branchId,branchType);
-if(branchType==='reactive')ensureReactiveV2Branch(branch);
-draft.branches.push(branch);
-scenarioEditor.active_branch=draft.branches.length-1;
-scenarioEditor.expanded_step=-1;
-}
-else if(action==='delete'){
-const removeIndex=Number.isFinite(index)?index:scenarioActiveBranchIndex(draft);
-if(draft.branches.length<=1)return;
-if(!confirm('Delete this scenario branch?'))return;
-draft.branches.splice(removeIndex,1);
-scenarioEditor.branch_count_shrink_allowed=true;
-scenarioEditor.branch_count_shrink_floor=draft.branches.length;
-scenarioEditor.active_branch=Math.max(0,Math.min(removeIndex,draft.branches.length-1));
-scenarioEditor.expanded_step=-1;
-}
-else return;
-scenarioEditor.draft=draft;
-scenarioEditor.dirty=true;
-scenarioEditor.validation_report=null;
-skipNextScenarioDomSync();
-render();
+function scenarioValidCommandId(device,commandId){
+const commands=device&&Array.isArray(device.commands)?device.commands:[];
+if(commandId&&commands.some(cmd=>cmd.id===commandId))return commandId;
+return commands[0]&&commands[0].id||'';
 }
 
-function renderScenarioStepEditor(step,index,total,expanded,issues){
-const type=scenarioStepTypeValue(step);
-const summary=scenarioStepSummaryText(step);
-const visual=scenarioStepVisualType(step);
-const badge=scenarioStepBadgeLabel(step);
-const fullType=scenarioStepTypeLabel(type);
-const stepIssues=Array.isArray(issues)?issues:[];
-const hasErrors=stepIssues.some(scenarioIssueIsError);
-const hasWarnings=stepIssues.length&&!hasErrors;
-const validationClass=hasErrors?'has-validation-error':(hasWarnings?'has-validation-warning':'');
-const issueBadge=stepIssues.length?`<span class='badge scenario-issue-badge ${hasErrors?'error':'warning'}'>${hasErrors?'Error':'Warning'} ${stepIssues.length}</span>`:'';
-const controls=`<div class='actions compact-actions'><button class='icon-btn' title='${expanded?'Close':'Edit'}' aria-label='${expanded?'Close':'Edit'}' data-scenario-step-action='edit' data-step-index='${index}'>${expanded?'&#10005;':'&#9998;'}</button><button class='icon-btn' title='Move up' aria-label='Move up' data-scenario-step-action='up' data-step-index='${index}' ${index<=0?'disabled':''}>&uarr;</button><button class='icon-btn' title='Move down' aria-label='Move down' data-scenario-step-action='down' data-step-index='${index}' ${index>=total-1?'disabled':''}>&darr;</button><button class='icon-btn danger' title='Delete' aria-label='Delete' data-scenario-step-action='delete' data-step-index='${index}'>&times;</button></div>`;
-if(!expanded){
-return `<div class='builder-step scenario-step-row scenario-step-${visual} ${validationClass} compact-step' data-scenario-step='${index}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${index+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(step)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge' title='${esc(fullType)}'>${esc(badge)}</span>${issueBadge}${step.enabled===false?`<span class='badge'>disabled</span>`:''}</div>${controls}</div>${renderScenarioInlineIssues(stepIssues)}</div>`;
-}
-return `<div class='builder-step scenario-step-row scenario-step-${visual} scenario-step-expanded ${validationClass} compact-step' data-scenario-step='${index}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${index+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(step)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge' title='${esc(fullType)}'>${esc(badge)}</span>${issueBadge}</div>${controls}</div>${renderScenarioInlineIssues(stepIssues)}<div class='scenario-step-edit'><div class='row compact-row'><input data-step-field='label' placeholder='Step label' value='${esc(step.label||'')}'><select data-step-field='type'>${scenarioTypeOptions(type)}</select><label class='row-meta enabled-inline'><input data-step-field='enabled' type='checkbox' ${step.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label></div>${renderScenarioStepPayload(step,type)}</div></div>`;
+function scenarioValidEventId(device,eventId){
+const events=device&&Array.isArray(device.events)?device.events:[];
+if(eventId&&events.some(ev=>ev.id===eventId))return eventId;
+return events[0]&&events[0].id||'';
 }
 
-function collectReactiveActionFromElement(el,previous,index){
-const get=name=>{const n=el.querySelector(`[data-step-field='${name}']`);return n?n.value:'';};
-const type=get('type')||previous.type||'SET_FLAG';
-if(scenarioStepTypeValue(previous)!==scenarioStepTypeValue({type})){
-previous=newScenarioStepForType(index,type);
-}
-let label=get('label')||previous.label||'';
-const action={id:previous.id||slugifyId(label||`action_${index+1}`,'action'),label,type};
-if(type==='DEVICE_COMMAND'){
-action.device_id=get('device_id')||previous.device_id||'';
-const device=scenarioDeviceById(action.device_id);
-action.command_id=scenarioValidCommandId(device,get('command_id')||previous.command_id||'');
-const commandName=scenarioCommandName(action.device_id,action.command_id);
-if(!label||label===previous.label||label.indexOf(' - ')>=0){
-label=action.device_id==='system_audio'?commandName:`${scenarioRoomNameForDevice(device)}: ${scenarioDeviceName(device)} - ${commandName}`;
-action.label=label;
-}
-const command=scenarioCommandById(action.device_id,action.command_id);
-const params=commandSupportsScenarioParams(command)?{...(previous.params&&typeof previous.params==='object'?previous.params:{})}:{};
-el.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});
-if(Object.keys(params).length)action.params=params;
-}else if(type==='DEVICE_COMMAND_GROUP'){
-action.mode=previous.mode||'sequential';
-action.commands=[];
-el.querySelectorAll('[data-command-group-item]').forEach((item,itemIndex)=>{const deviceField=item.querySelector('[data-group-command-field="device_id"]');const commandField=item.querySelector('[data-group-command-field="command_id"]');const previousItem=Array.isArray(previous.commands)?(previous.commands[itemIndex]||{}):{};const deviceId=(deviceField?deviceField.value:'')||previousItem.device_id||'';const device=scenarioDeviceById(deviceId);const commandId=scenarioValidCommandId(device,(commandField?commandField.value:'')||previousItem.command_id||'');const command=scenarioCommandById(deviceId,commandId);const params=commandSupportsScenarioParams(command)?{...(previousItem.params&&typeof previousItem.params==='object'?previousItem.params:{})}:{};item.querySelectorAll('[data-step-param]').forEach(input=>{const key=input.dataset.stepParam||'';if(!key)return;const typeAttr=(input.getAttribute('type')||'').toLowerCase();if(input.type==='checkbox')params[key]=input.checked;else if(typeAttr==='number')params[key]=Number(input.value)||0;else params[key]=input.value;});const out={device_id:deviceId,command_id:commandId};if(Object.keys(params).length)out.params=params;action.commands.push(out);});
-}else if(type==='WAIT_TIME'){
-action.duration_ms=get('duration_ms')?durationSecondsToMs(get('duration_ms')):(previous.duration_ms||1000);
-}else if(type==='SHOW_OPERATOR_MESSAGE'){
-action.message=get('message')||previous.message||'';
-}else if(type==='SET_FLAG'){
-const valueField=el.querySelector(`[data-step-field='value']`);
-action.flag_name=get('flag_name')||previous.flag_name||previous.flag||'';
-action.value=valueField?(valueField.type==='checkbox'?valueField.checked:valueField.value!=='false'):(previous.value!==false);
-}
-return action;
+function scenarioEventById(deviceId,eventId){
+const device=scenarioDeviceById(deviceId);
+return device&&Array.isArray(device.events)?device.events.find(ev=>ev.id===eventId)||null:null;
 }
 
-function collectReactiveV2BranchFromDom(branch,root){
-if(!branch||!root)return branch;
-ensureReactiveV2Branch(branch);
-const value=(selector,def='')=>{const nodes=Array.from(root.querySelectorAll(selector));if(!nodes.length)return def;const checked=nodes.find(n=>n.type==='radio'&&n.checked);const n=checked||nodes[0];return n?n.value:def;};
-branch.priority=Number(value('[data-v2-branch-field="priority"]',branch.priority))||0;
-branch.policy=branch.policy&&typeof branch.policy==='object'?branch.policy:{};
-branch.policy.mode=value('[data-v2-policy-field="mode"]',branch.policy.mode||'single')||'single';
-branch.policy.cooldown_ms=Number(branch.cooldown_ms)||Number(branch.policy.cooldown_ms)||0;
-branch.policy.max_fire_count=Math.max(0,Math.round(Number(value('[data-v2-policy-field="max_fire_count"]',branch.policy.max_fire_count||0))||0));
-branch.max_fire_count=branch.policy.max_fire_count;
-branch.reentry={mode:value('[data-v2-reentry-field="mode"]',branch.reentry&&branch.reentry.mode||'ignore')||'ignore'};
-branch.result_policy={
-on_done:value('[data-v2-result-field="on_done"]',branch.result_policy&&branch.result_policy.on_done||'continue')||'continue',
-on_fail:value('[data-v2-result-field="on_fail"]',branch.result_policy&&branch.result_policy.on_fail||'fail_reaction')||'fail_reaction',
-on_timeout:value('[data-v2-result-field="on_timeout"]',branch.result_policy&&branch.result_policy.on_timeout||'fail_reaction')||'fail_reaction'}
-;const resultFlag=value('[data-v2-result-field="timeout_flag"]',branch.result_policy&&branch.result_policy.timeout_flag||branch.result_policy&&branch.result_policy.flag||'');if(resultFlag){branch.result_policy.flag=resultFlag;branch.result_policy.timeout_flag=resultFlag;}
-const kind=value('[data-v2-trigger-field="kind"]',branch.trigger&&branch.trigger.kind||'device_event')||'device_event';
-branch.trigger={kind};
-if(kind==='device_event'){branch.trigger.device_id=value('[data-v2-trigger-field="device_id"]',branch.trigger.device_id||'');const device=scenarioDeviceById(branch.trigger.device_id);branch.trigger.event_id=scenarioValidEventId(device,value('[data-v2-trigger-field="event_id"]',branch.trigger.event_id||''));}
-else if(kind==='flag_changed')branch.trigger.flag_name=value('[data-v2-trigger-field="flag_name"]',branch.trigger.flag_name||'');
-else if(kind==='operator_event')branch.trigger.operator_event=value('[data-v2-trigger-field="operator_event"]',branch.trigger.operator_event||'');
-else if(kind==='runtime_event')branch.trigger.runtime_event=value('[data-v2-trigger-field="runtime_event"]',branch.trigger.runtime_event||'');
-branch.guard_flags=[];
-root.querySelectorAll('[data-v2-guard-item]').forEach(item=>{const name=(item.querySelector('[data-v2-guard-field="flag"]')||{}).value||'';const val=(item.querySelector('[data-v2-guard-field="value"]')||{}).value;if(name)branch.guard_flags.push({flag:name,value:val!=='false'});});
-const previousVariants=Array.isArray(branch.variants)?branch.variants.map(variant=>JSON.parse(JSON.stringify(variant))):[];
-branch.variants=[];
-root.querySelectorAll('[data-v2-variant]').forEach((variantEl,variantIndex)=>{const id=(variantEl.querySelector('[data-v2-variant-field="id"]')||{}).value||`variant_${variantIndex+1}`;const label=(variantEl.querySelector('[data-v2-variant-field="label"]')||{}).value||`Variant ${variantIndex+1}`;const previous=previousVariants[variantIndex]||{};const variant={id,label,actions:[]};variantEl.querySelectorAll('[data-v2-action]').forEach((actionEl,actionIndex)=>{const previousAction=Array.isArray(previous.actions)?(previous.actions[actionIndex]||{}):{};variant.actions.push(collectReactiveActionFromElement(actionEl,previousAction,actionIndex));});branch.variants.push(variant);});
-if(!branch.variants.length)branch.variants=defaultReactiveV2BranchFields().variants;
-branch.steps=[];
-if(!Array.isArray(branch.on_complete)||!branch.on_complete.length)delete branch.on_complete;
-return branch;
+function scenarioCommandName(deviceId,commandId){
+const command=scenarioCommandById(deviceId,commandId);
+return command&&(command.label||command.id)||commandId||'command';
+}
+
+function scenarioAudioCommandSummary(step){
+const commandId=String(step&&step.command_id||'');
+if(commandId==='play'){
+const params=step&&step.params||{};
+return audioChannelValue(params)==='background'?(params.repeat?'Play background repeat':'Play background'):'Play audio';
+}
+return scenarioCommandName('system_audio',commandId);
+}
+
+function scenarioDeviceEventName(deviceId,eventId){
+const event=scenarioEventById(deviceId,eventId);
+return event&&(event.label||event.id)||eventId||'event';
 }
 
 function scenarioEditorSource(){
@@ -2004,54 +3163,13 @@ source=scenarioEditableJson(editing,roomId);
 return scenarioRestoreMissingOriginalBranches(source);
 }
 
-function collectScenarioEditor(){
-const source=scenarioEditorSource();
-if(!Array.isArray(source.branches)||!source.branches.length)source.branches=normalizeScenarioBranches(source);
-const editor=document.querySelector('[data-scenario-editor]');
-const renderedBranchIndex=Number(editor&&editor.dataset.activeBranchIndex);
-const branchIndex=Number.isFinite(renderedBranchIndex)
-  ? Math.max(0,Math.min(source.branches.length-1,Math.floor(renderedBranchIndex)))
-  : scenarioActiveBranchIndex(source);
-const branches=source.branches.map((branch,index)=>({
-...normalizeScenarioBranch(branch,index),
-steps:Array.isArray(branch.steps)?branch.steps.map(step=>JSON.parse(JSON.stringify(step))):[]}
-));
-const activeBranch=branches[branchIndex]||branches[0];
-const root=editor||document;
-const branchName=root.querySelector('[data-scenario-branch-field="name"]');
-const branchId=root.querySelector('[data-scenario-branch-field="id"]');
-const branchType=root.querySelector('[data-scenario-branch-field="type"]');
-const branchEnabled=root.querySelector('[data-scenario-branch-field="enabled"]');
-const branchRequired=root.querySelector('[data-scenario-branch-field="required_for_completion"]');
-const branchCooldown=root.querySelector('[data-scenario-branch-field="cooldown_sec"]');
-const branchRunOnce=root.querySelector('[data-scenario-branch-field="run_once"]');
-const previousActiveSteps=activeBranch&&Array.isArray(activeBranch.steps)?activeBranch.steps.map(step=>JSON.parse(JSON.stringify(step))):[];
-if(activeBranch){
-activeBranch.name=(branchName&&branchName.value)||activeBranch.name||`Branch ${branchIndex+1}`;
-activeBranch.id=(branchId&&branchId.value)||activeBranch.id||slugifyId(activeBranch.name,`branch_${branchIndex+1}`);
-activeBranch.type=branchType?scenarioBranchTypeValue({type:branchType.value}):scenarioBranchTypeValue(activeBranch);
-activeBranch.enabled=branchEnabled?branchEnabled.checked:activeBranch.enabled!==false;
-activeBranch.required_for_completion=activeBranch.type==='normal'&&(branchRequired?branchRequired.checked:activeBranch.required_for_completion!==false);
-activeBranch.cooldown_ms=activeBranch.type==='reactive'?Math.max(0,Math.round(Number(branchCooldown&&branchCooldown.value)||0))*1000:0;
-if(activeBranch.type==='reactive'&&activeBranch.policy&&typeof activeBranch.policy==='object')activeBranch.policy.cooldown_ms=activeBranch.cooldown_ms;
-activeBranch.run_once=activeBranch.type==='reactive'&&!!(branchRunOnce&&branchRunOnce.checked);
-activeBranch.steps=[];
-if(scenarioIsReactiveV2Branch(activeBranch)){
-collectReactiveV2BranchFromDom(activeBranch,root);
-}
-}
-const scenario={
-id:(root.querySelector('#scenario_id')||{}).value||'',
-name:(root.querySelector('#scenario_name')||{}).value||'',
-room_id:scenarioEditor.room_id,
-branches}
-;
-
+function collectScenarioStepsFromDom(activeBranch,root,previousActiveSteps){
 const stepsPanel=root.querySelector('.scenario-steps-panel');
-if(!scenarioIsReactiveV2Branch(activeBranch))(stepsPanel?stepsPanel.querySelectorAll('[data-scenario-step]'):[]).forEach((el,index)=>{
+if(!activeBranch||scenarioIsReactiveV2Branch(activeBranch))return;
+(stepsPanel?stepsPanel.querySelectorAll('[data-scenario-step]'):[]).forEach((el,index)=>{
 const previous=previousActiveSteps[index]?JSON.parse(JSON.stringify(previousActiveSteps[index])):{};
 if(!el.querySelector(`[data-step-field='type']`)&&previous.type){
-if(activeBranch)activeBranch.steps.push(previous);
+activeBranch.steps.push(previous);
 return;
 }
 const get=name=>{
@@ -2105,170 +3223,59 @@ step.allow_operator_skip=skipField?skipField.checked:!!previous.allow_operator_s
 step.operator_skip_label=get('operator_skip_label')||previous.operator_skip_label||'';
 if(!step.allow_operator_skip)delete step.operator_skip_label;
 }
-if(activeBranch)activeBranch.steps.push(step);}
+activeBranch.steps.push(step);}
 );
+}
+
+function collectScenarioBranchSettingsFromDom(activeBranch,branchIndex,root){
+if(!activeBranch)return;
+const branchName=root.querySelector('[data-scenario-branch-field="name"]');
+const branchId=root.querySelector('[data-scenario-branch-field="id"]');
+const branchType=root.querySelector('[data-scenario-branch-field="type"]');
+const branchEnabled=root.querySelector('[data-scenario-branch-field="enabled"]');
+const branchRequired=root.querySelector('[data-scenario-branch-field="required_for_completion"]');
+const branchCooldown=root.querySelector('[data-scenario-branch-field="cooldown_sec"]');
+const branchRunOnce=root.querySelector('[data-scenario-branch-field="run_once"]');
+activeBranch.name=(branchName&&branchName.value)||activeBranch.name||`Branch ${branchIndex+1}`;
+activeBranch.id=(branchId&&branchId.value)||activeBranch.id||slugifyId(activeBranch.name,`branch_${branchIndex+1}`);
+activeBranch.type=branchType?scenarioBranchTypeValue({type:branchType.value}):scenarioBranchTypeValue(activeBranch);
+activeBranch.enabled=branchEnabled?branchEnabled.checked:activeBranch.enabled!==false;
+activeBranch.required_for_completion=activeBranch.type==='normal'&&(branchRequired?branchRequired.checked:activeBranch.required_for_completion!==false);
+activeBranch.cooldown_ms=activeBranch.type==='reactive'?Math.max(0,Math.round(Number(branchCooldown&&branchCooldown.value)||0))*1000:0;
+if(activeBranch.type==='reactive'&&activeBranch.policy&&typeof activeBranch.policy==='object')activeBranch.policy.cooldown_ms=activeBranch.cooldown_ms;
+activeBranch.run_once=activeBranch.type==='reactive'&&!!(branchRunOnce&&(branchRunOnce.type==='checkbox'?branchRunOnce.checked:String(branchRunOnce.value)==='true'));
+activeBranch.steps=[];
+if(scenarioIsReactiveV2Branch(activeBranch)){
+collectReactiveV2BranchFromDom(activeBranch,root);
+}
+}
+
+function collectScenarioEditor(){
+const source=scenarioEditorSource();
+if(!Array.isArray(source.branches)||!source.branches.length)source.branches=normalizeScenarioBranches(source);
+const editor=document.querySelector('[data-scenario-editor]');
+const renderedBranchIndex=Number(editor&&editor.dataset.activeBranchIndex);
+const branchIndex=Number.isFinite(renderedBranchIndex)
+  ? Math.max(0,Math.min(source.branches.length-1,Math.floor(renderedBranchIndex)))
+  : scenarioActiveBranchIndex(source);
+const branches=source.branches.map((branch,index)=>({
+...normalizeScenarioBranch(branch,index),
+steps:Array.isArray(branch.steps)?branch.steps.map(step=>JSON.parse(JSON.stringify(step))):[]}
+));
+const activeBranch=branches[branchIndex]||branches[0];
+const root=editor||document;
+const previousActiveSteps=activeBranch&&Array.isArray(activeBranch.steps)?activeBranch.steps.map(step=>JSON.parse(JSON.stringify(step))):[];
+collectScenarioBranchSettingsFromDom(activeBranch,branchIndex,root);
+const scenario={
+id:(root.querySelector('#scenario_id')||{}).value||'',
+name:(root.querySelector('#scenario_name')||{}).value||'',
+room_id:scenarioEditor.room_id,
+branches}
+;
+
+collectScenarioStepsFromDom(activeBranch,root,previousActiveSteps);
 if(!scenario.id&&scenario.name)scenario.id=slugifyId(scenario.name,'scenario');
 return scenario;
-}
-
-function applyScenarioStepAction(action,index,type){
-const wasDirty=!!scenarioEditor.dirty;
-const draft=collectScenarioEditor();
-const activeBranch=scenarioActiveBranch(draft);
-const steps=scenarioActiveSteps(draft);
-const nextIndex=scenarioNextStepLocalIndex(steps);
-if(action==='add_schema'){
-const allowed=scenarioAllowedStepTypesForBranch(activeBranch);
-if(allowed&&!allowed.includes(scenarioStepTypeValue({type:type||'WAIT_TIME'}))){
-alert(steps.length?'This reaction can only add action steps after its trigger.':'Add a reaction trigger first.');
-return;
-}
-steps.push(newScenarioStepForType(nextIndex,type||'WAIT_TIME'));
-scenarioEditor.expanded_step=steps.length-1;
-}
-else if(action==='add'){
-steps.push(newScenarioStep(nextIndex,'wait_time'));
-scenarioEditor.expanded_step=steps.length-1;
-}
-else if(action==='add_run'){
-steps.push(newScenarioStep(nextIndex,'device_command'));
-scenarioEditor.expanded_step=steps.length-1;
-}
-else if(action==='add_command'){
-steps.push(newScenarioStep(nextIndex,'device_command'));
-scenarioEditor.expanded_step=steps.length-1;
-}
-else if(action==='add_wait_device_event'){
-steps.push(newScenarioStep(nextIndex,'wait_device_event'));
-scenarioEditor.expanded_step=steps.length-1;
-}
-else if(action==='add_wait_time'){
-steps.push(newScenarioStep(nextIndex,'wait_time'));
-scenarioEditor.expanded_step=steps.length-1;
-}
-else if(action==='add_operator'){
-steps.push(newScenarioStep(nextIndex,'operator'));
-scenarioEditor.expanded_step=steps.length-1;
-}
-else if(action==='group_add'&&index>=0&&steps[index]){
-steps[index].commands=Array.isArray(steps[index].commands)?steps[index].commands:[];
-steps[index].commands.push(defaultScenarioCommandItem());
-scenarioEditor.expanded_step=index;
-}
-else if(action==='group_delete'&&index>=0&&steps[index]){
-const commandIndex=Number(type);
-steps[index].commands=Array.isArray(steps[index].commands)?steps[index].commands:[];
-if(Number.isFinite(commandIndex))steps[index].commands.splice(commandIndex,1);
-if(!steps[index].commands.length)steps[index].commands.push(defaultScenarioCommandItem());
-scenarioEditor.expanded_step=index;
-}
-else if(action==='event_group_add'&&index>=0&&steps[index]){
-steps[index].events=Array.isArray(steps[index].events)?steps[index].events:[];
-steps[index].events.push(defaultScenarioEventItem());
-scenarioEditor.expanded_step=index;
-}
-else if(action==='event_group_delete'&&index>=0&&steps[index]){
-const eventIndex=Number(type);
-steps[index].events=Array.isArray(steps[index].events)?steps[index].events:[];
-if(Number.isFinite(eventIndex))steps[index].events.splice(eventIndex,1);
-if(!steps[index].events.length)steps[index].events.push(defaultScenarioEventItem());
-scenarioEditor.expanded_step=index;
-}
-else if(action==='flag_list_add'&&index>=0&&steps[index]){
-steps[index].flags=Array.isArray(steps[index].flags)?steps[index].flags:[];
-steps[index].flags.push(defaultScenarioFlagItem());
-scenarioEditor.expanded_step=index;
-}
-else if(action==='flag_list_delete'&&index>=0&&steps[index]){
-const flagIndex=Number(type);
-steps[index].flags=Array.isArray(steps[index].flags)?steps[index].flags:[];
-if(Number.isFinite(flagIndex))steps[index].flags.splice(flagIndex,1);
-if(!steps[index].flags.length)steps[index].flags.push(defaultScenarioFlagItem());
-scenarioEditor.expanded_step=index;
-}
-else if(action==='delete'&&index>=0){
-steps.splice(index,1);
-if(scenarioEditor.expanded_step>=steps.length)scenarioEditor.expanded_step=Math.max(0,steps.length-1);
-else if(scenarioEditor.expanded_step>index)scenarioEditor.expanded_step--;
-}
-else if(action==='up'&&index>0){
-const t=steps[index-1];
-steps[index-1]=steps[index];
-steps[index]=t;
-scenarioEditor.expanded_step=index-1;
-}
-else if(action==='down'&&index>=0&&index<steps.length-1){
-const t=steps[index+1];
-steps[index+1]=steps[index];
-steps[index]=t;
-scenarioEditor.expanded_step=index+1;
-}
-else if(action==='edit'&&index>=0){
-scenarioEditor.expanded_step=scenarioEditor.expanded_step===index?-1:index;
-scenarioEditor.draft=draft;
-scenarioEditor.dirty=wasDirty;
-skipNextScenarioDomSync();
-render();
-return;
-}
-scenarioEditor.draft=draft;
-scenarioEditor.dirty=true;
-skipNextScenarioDomSync();
-render();
-}
-
-function applyReactiveV2Action(action,variantIndex,actionIndex,actionType){
-const draft=collectScenarioEditor();
-const branch=scenarioActiveBranch(draft);
-if(!scenarioIsReactiveV2Branch(branch))return;
-ensureReactiveV2Branch(branch);
-variantIndex=Number.isFinite(Number(variantIndex))?Number(variantIndex):0;
-actionIndex=Number.isFinite(Number(actionIndex))?Number(actionIndex):0;
-if(action==='add_guard'){
-branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
-branch.guard_flags.push({flag:'puzzle_done',value:true});
-}else if(action==='delete_guard'){
-branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
-branch.guard_flags.splice(actionIndex,1);
-}else if(action==='add_variant'){
-branch.variants=Array.isArray(branch.variants)?branch.variants:[];
-const n=branch.variants.length+1;
-const mode=String(branch.policy&&branch.policy.mode||'single');
-branch.variants.push({id:`variant_${n}`,label:mode==='escalate'?`Level ${n}`:`Variant ${n}`,actions:[]});
-}else if(action==='delete_variant'){
-branch.variants=Array.isArray(branch.variants)?branch.variants:[];
-if(branch.variants.length>1)branch.variants.splice(variantIndex,1);
-}else if(action==='add_action'){
-const variant=branch.variants[variantIndex];
-if(variant){
-variant.actions=Array.isArray(variant.actions)?variant.actions:[];
-variant.actions.push(newScenarioStepForType(variant.actions.length,actionType||'DEVICE_COMMAND'));
-}
-}else if(action==='delete_action'){
-const variant=branch.variants[variantIndex];
-if(variant){
-variant.actions=Array.isArray(variant.actions)?variant.actions:[];
-variant.actions.splice(actionIndex,1);
-}
-}else if(action==='group_add'||action==='group_delete'){
-const variant=branch.variants[variantIndex];
-const item=variant&&Array.isArray(variant.actions)?variant.actions[actionIndex]:null;
-if(item&&scenarioStepTypeValue(item)==='DEVICE_COMMAND_GROUP'){
-item.commands=Array.isArray(item.commands)?item.commands:[];
-if(action==='group_add'){
-item.commands.push(defaultScenarioCommandItem());
-}else{
-const commandIndex=Number.isFinite(Number(actionType))?Number(actionType):0;
-item.commands.splice(commandIndex,1);
-if(!item.commands.length)item.commands.push(defaultScenarioCommandItem());
-}
-}
-}
-scenarioEditor.draft=draft;
-scenarioEditor.dirty=true;
-scenarioEditor.validation_report=null;
-skipNextScenarioDomSync();
-render();
 }
 
 function renderScenariosAdminView(){
@@ -2299,7 +3306,7 @@ const activeIssues=scenarioActiveValidationIssues(issues);
 const totalStepCount=scenarioTotalStepCount(base.branches);
 const issuesByStep=scenarioIssuesForBranch(activeIssues,base.branches,activeBranchIndex);
 const issueHtml=renderScenarioValidationSummary(activeIssues,totalStepCount);
-const rows=scenarios.length?scenarios.map(s=>`<div class='row-card'><div class='row-main'><div class='row-title'>${esc(s.name||s.id)} ${s.valid===false?`<span class='badge'>invalid</span>`:''}</div><div class='row-meta'>${esc(s.step_count||0)} steps / ${esc(Array.isArray(s.branches)?s.branches.length:1)} branch${(Array.isArray(s.branches)&&s.branches.length===1)?'':'es'} / ${esc(scenarioValidationText(s))}</div></div><div class='actions'><button data-scenario-edit='${esc(s.id)}'>Edit</button><button data-scenario-mode='${esc(s.id)}'>Create game mode</button><button class='danger' data-scenario-delete='${esc(s.id)}'>Delete</button></div></div>`).join(''):`<div class='card empty'>No scenarios for this room</div>`;
+const rows=scenarios.length?scenarios.map(s=>`<div class='row-card'><div class='row-main'><div class='row-title'>${esc(s.name||s.id)} ${s.valid===false?`<span class='badge'>invalid</span>`:''}</div><div class='row-meta'>${esc(s.step_count||0)} steps / ${esc(Array.isArray(s.branches)?s.branches.length:1)} branch${(Array.isArray(s.branches)&&s.branches.length===1)?'':'es'} / ${esc(scenarioValidationText(s))}</div></div><div class='actions'>${uiButton({label:'Edit',action:'scenario.edit',dataset:{'scenario-id':s.id||''}})}${uiButton({label:'Create game mode',action:'scenario.create_game_mode',dataset:{'scenario-id':s.id||''}})}${uiButton({label:'Delete',kind:'danger',action:'scenario.delete',dataset:{'scenario-id':s.id||''},confirm:`Delete scenario ${s.id||''}?`})}</div></div>`).join(''):`<div class='card empty'>No scenarios for this room</div>`;
 const scenarioIdKey=`scenario:id:${roomId}:${base.id||'new'}`;
 const jsonKey=`scenario:json:${roomId}:${base.id||'new'}`;
 const emptyStepsText=scenarioBranchTypeValue(activeBranch)==='reactive'?'Add a trigger first. This reaction will listen for it, then run the actions you add after it.':'No steps yet';
@@ -2307,17 +3314,22 @@ const activeBranchIsV2=scenarioIsReactiveV2Branch(activeBranch);
 const branchEditorBody=activeBranchIsV2
 ?renderReactiveV2Editor(activeBranch)
 :`<section class='scenario-steps-panel'><h2 class='section-title'>Steps: ${esc(activeBranch&&activeBranch.name||'Branch')}</h2><div>${activeSteps.length?activeSteps.map((step,i)=>renderScenarioStepEditor(step,i,activeSteps.length,Number(scenarioEditor.expanded_step)===i,issuesByStep[i]||[])).join(''):`<div class='empty'>${esc(emptyStepsText)}</div>`}</div></section>`;
-const editorHtml=editorOpen?`<div class='card scenario-editor-card' data-scenario-editor='1' data-active-branch-index='${activeBranchIndex}'><div class='scenario-editor-head'><div><h2 class='section-title'>${editing?'Edit scenario':'New scenario'}${scenarioEditor.dirty?' *':''}</h2><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'><button data-scenario-validate='1'>Validate</button><button data-scenario-save='1'>Save</button></div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(scenarioIdKey,false)}><summary>Scenario id</summary><div class='row'><input id='scenario_id' placeholder='Scenario ID' value='${esc(base.id||'')}'></div></details>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout ${activeBranchIsV2?'scenario-editor-layout-v2':''}'>${activeBranchIsV2?'':`<aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside>`}${branchEditorBody}</div><details style='margin-top:10px' ${detailsAttrs(jsonKey,false)}><summary class='row-meta'>Debug JSON</summary><textarea id='scenario_json' class='builder-json' readonly>${esc(json)}</textarea></details></div>`:`<div class='card empty'><h2 class='section-title'>Scenario editor</h2><div class='row-meta'>Select a scenario or create a new one.</div></div>`;
+const editorHtml=editorOpen?`<div class='card scenario-editor-card' data-scenario-editor='1' data-active-branch-index='${activeBranchIndex}'><div class='scenario-editor-head'><div><h2 class='section-title'>${editing?'Edit scenario':'New scenario'}${scenarioEditor.dirty?' *':''}</h2><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'>${uiButton({label:'Validate',action:'scenario.validate'})}${uiButton({label:'Save',action:'scenario.save'})}</div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(scenarioIdKey,false)}><summary>Scenario id</summary><div class='row'><input id='scenario_id' placeholder='Scenario ID' value='${esc(base.id||'')}'></div></details>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout ${activeBranchIsV2?'scenario-editor-layout-v2':''}'>${activeBranchIsV2?'':`<aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside>`}${branchEditorBody}</div><details style='margin-top:10px' ${detailsAttrs(jsonKey,false)}><summary class='row-meta'>Debug JSON</summary><textarea id='scenario_json' class='builder-json' readonly>${esc(json)}</textarea></details></div>`:`<div class='card empty'><h2 class='section-title'>Scenario editor</h2><div class='row-meta'>Select a scenario or create a new one.</div></div>`;
 return `<div class='scenario-room-bar'><div><span class='row-meta'>Room</span><select class='scenario-select' data-scenario-room-select>${rooms.map(r=>`<option value='${esc(r.room_id)}' ${
 r.room_id===roomId?'selected':''}
 >${
 esc(r.title||r.room_id)}
-</option>`).join('')}</select></div><div class='row-meta'>Steps can target devices in any room.</div></div><div class='scenario-admin-layout'><section><div class='card-head'><h2 class='section-title'>Scenarios</h2><div class='actions'><button data-scenario-new='1'>Add scenario</button></div></div><div class='list'>${rows}</div></section><section>${editorHtml}</section></div>`;
+</option>`).join('')}</select></div><div class='row-meta'>Steps can target devices in any room.</div></div><div class='scenario-admin-layout'><section><div class='card-head'><h2 class='section-title'>Scenarios</h2><div class='actions'>${uiButton({label:'Add scenario',action:'scenario.new'})}</div></div><div class='list'>${rows}</div></section><section>${editorHtml}</section></div>`;
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 function renderStorageAdminView(){
 setPage('Storage','Import, export, save and load');
-return `<div class='grid cols-2'><div class='card'><h2 class='section-title'>Quest devices</h2><div class='actions'><button data-storage-action='device_save'>Save to SD</button><button data-storage-action='device_load'>Load from SD</button><button data-storage-action='device_export'>Export JSON</button></div><div style='height:12px'></div><div class='row'><input id='storage_devices_file' type='file' accept='.json,application/json'><button data-storage-action='device_import'>Import JSON</button></div><div class='row-meta'>Path: /sdcard/quest/quest_devices.json</div></div><div class='card'><h2 class='section-title'>Room scenarios</h2><div class='actions'><button data-storage-action='scenario_save'>Save to SD</button><button data-storage-action='scenario_load'>Load from SD</button><button data-storage-action='scenario_export'>Export JSON</button></div><div style='height:12px'></div><div class='row'><input id='storage_scenarios_file' type='file' accept='.json,application/json'><button data-storage-action='scenario_import'>Import JSON</button></div><div class='row-meta'>Path: /sdcard/quest/room_scenarios.json</div></div><div class='card'><h2 class='section-title'>Game modes</h2><div class='actions'><button data-storage-action='profile_save'>Save to SD</button><button data-storage-action='profile_load'>Load from SD</button><button data-storage-action='profile_export'>Export JSON</button></div><div style='height:12px'></div><div class='row'><input id='storage_profiles_file' type='file' accept='.json,application/json'><button data-storage-action='profile_import'>Import JSON</button></div><div class='row-meta'>Path: /sdcard/quest/game_profiles.json</div></div></div>`;
+const storageButtons=prefix=>uiActions([
+uiButton({label:'Save to SD',action:'storage.run',dataset:{op:`${prefix}_save`}}),
+uiButton({label:'Load from SD',action:'storage.run',dataset:{op:`${prefix}_load`}}),
+uiButton({label:'Export JSON',action:'storage.run',dataset:{op:`${prefix}_export`}}),
+]);
+return `<div class='grid cols-2'><div class='card'><h2 class='section-title'>Quest devices</h2>${storageButtons('device')}<div style='height:12px'></div><div class='row'><input id='storage_devices_file' type='file' accept='.json,application/json'>${uiButton({label:'Import JSON',action:'storage.run',dataset:{op:'device_import'}})}</div><div class='row-meta'>Path: /sdcard/quest/quest_devices.json</div></div><div class='card'><h2 class='section-title'>Room scenarios</h2>${storageButtons('scenario')}<div style='height:12px'></div><div class='row'><input id='storage_scenarios_file' type='file' accept='.json,application/json'>${uiButton({label:'Import JSON',action:'storage.run',dataset:{op:'scenario_import'}})}</div><div class='row-meta'>Path: /sdcard/quest/room_scenarios.json</div></div><div class='card'><h2 class='section-title'>Game modes</h2>${storageButtons('profile')}<div style='height:12px'></div><div class='row'><input id='storage_profiles_file' type='file' accept='.json,application/json'>${uiButton({label:'Import JSON',action:'storage.run',dataset:{op:'profile_import'}})}</div><div class='row-meta'>Path: /sdcard/quest/game_profiles.json</div></div></div>`;
 }
 
 function questEditableDevices(){
@@ -2354,7 +3366,7 @@ if(!d||!d.device)return '';
 const dev=d.device;
 const commands=Array.isArray(dev.commands)?dev.commands:[];
 const events=Array.isArray(dev.events)?dev.events:[];
-return `<div class='builder-step'><div class='card-head'><div><h2 class='section-title'>Discovered config</h2><div class='row-meta'>${esc(d.client_id||'')} / ${commands.length} commands / ${events.length} events</div></div><div class='actions'><button data-quest-discovery-apply='1'>Import</button><button data-quest-discovery-discard='1'>Discard</button></div></div><div class='kvs'><div class='kv'><span class='k'>Commands</span><span class='v'>${esc(commands.map(c=>c.label||c.id).join(', ')||'none')}</span></div><div class='kv'><span class='k'>Events</span><span class='v'>${esc(events.map(e=>e.label||e.id).join(', ')||'none')}</span></div></div></div>`;
+return `<div class='builder-step'><div class='card-head'><div><h2 class='section-title'>Discovered config</h2><div class='row-meta'>${esc(d.client_id||'')} / ${commands.length} commands / ${events.length} events</div></div><div class='actions'>${uiButton({label:'Import',action:'quest.discovery.apply'})}${uiButton({label:'Discard',action:'quest.discovery.discard'})}</div></div><div class='kvs'><div class='kv'><span class='k'>Commands</span><span class='v'>${esc(commands.map(c=>c.label||c.id).join(', ')||'none')}</span></div><div class='kv'><span class='k'>Events</span><span class='v'>${esc(events.map(e=>e.label||e.id).join(', ')||'none')}</span></div></div></div>`;
 }
 
 function renderQuestCommandRow(cmd,index){
@@ -2363,43 +3375,43 @@ const p=c.policy&&typeof c.policy==='object'?c.policy:{};
 const params=Array.isArray(c.args_schema)?c.args_schema:[];
 const paramsNote=params.length?`<div class='row-meta'>Args: ${esc(params.map(p=>p.label||p.key).join(', '))}</div>`:'';
 const defaultArgs=c.default_args&&typeof c.default_args==='object'?JSON.stringify(c.default_args):'';
-return `<div class='builder-step' data-quest-command='${index}'><div class='builder-step-head'><div class='builder-step-title'>Command ${index+1}${params.length?` <span class='badge'>${params.length} args</span>`:''}</div><div class='actions'><button class='danger' data-quest-command-delete='${index}'>Delete</button></div></div><div class='row'><input data-quest-command-field='label' placeholder='Button label' value='${esc(c.label||'')}'><input data-quest-command-field='command' placeholder='Command, e.g. relay.pulse' value='${esc(c.command||'')}'></div><div class='row'><input data-quest-command-field='capability' placeholder='Capability, e.g. relay' value='${esc(c.capability||'')}'><input data-quest-command-field='default_args' placeholder='Default args JSON' value='${esc(defaultArgs)}'></div><div class='row'><input data-quest-command-field='timeout_ms' placeholder='Timeout ms' value='${esc(p.timeout_ms||3000)}'><input data-quest-command-field='danger_level' placeholder='Danger level' value='${esc(p.danger_level||'normal')}'></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-command-field='id' placeholder='Command ID' value='${esc(c.id||'')}'></div>${paramsNote}</details><label class='row-meta'><input data-quest-command-field='manual_allowed' type='checkbox' ${p.manual_allowed!==false?'checked':''} style='min-width:auto'> Allow manual control</label><label class='row-meta'><input data-quest-command-field='scenario_allowed' type='checkbox' ${p.scenario_allowed!==false?'checked':''} style='min-width:auto'> Allow scenario control</label><label class='row-meta'><input data-quest-command-field='requires_confirmation' type='checkbox' ${p.requires_confirmation?'checked':''} style='min-width:auto'> Require confirmation</label><label class='row-meta'><input data-quest-command-field='result_required' type='checkbox' ${p.result_required!==false?'checked':''} style='min-width:auto'> Wait for result</label></div>`;
+return `<div class='builder-step' data-quest-command='${index}'><div class='builder-step-head'><div class='builder-step-title'>Command ${index+1}${params.length?` <span class='badge'>${params.length} args</span>`:''}</div><div class='actions'>${uiButton({label:'Delete',action:'quest.command.delete',kind:'danger',dataset:{index}})}</div></div><div class='row'><input data-quest-command-field='label' placeholder='Button label' value='${esc(c.label||'')}'><input data-quest-command-field='command' placeholder='Command, e.g. relay.pulse' value='${esc(c.command||'')}'></div><div class='row'><input data-quest-command-field='capability' placeholder='Capability, e.g. relay' value='${esc(c.capability||'')}'><input data-quest-command-field='default_args' placeholder='Default args JSON' value='${esc(defaultArgs)}'></div><div class='row'><input data-quest-command-field='timeout_ms' placeholder='Timeout ms' value='${esc(p.timeout_ms||3000)}'><input data-quest-command-field='danger_level' placeholder='Danger level' value='${esc(p.danger_level||'normal')}'></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-command-field='id' placeholder='Command ID' value='${esc(c.id||'')}'></div>${paramsNote}</details><label class='row-meta'><input data-quest-command-field='manual_allowed' type='checkbox' ${p.manual_allowed!==false?'checked':''} style='min-width:auto'> Allow manual control</label><label class='row-meta'><input data-quest-command-field='scenario_allowed' type='checkbox' ${p.scenario_allowed!==false?'checked':''} style='min-width:auto'> Allow scenario control</label><label class='row-meta'><input data-quest-command-field='requires_confirmation' type='checkbox' ${p.requires_confirmation?'checked':''} style='min-width:auto'> Require confirmation</label><label class='row-meta'><input data-quest-command-field='result_required' type='checkbox' ${p.result_required!==false?'checked':''} style='min-width:auto'> Wait for result</label></div>`;
 }
 
 function renderQuestEventRow(ev,index){
 const e=ev||{};
 const match=e.match&&typeof e.match==='object'?JSON.stringify(e.match):'';
-return `<div class='builder-step' data-quest-event='${index}'><div class='builder-step-head'><div class='builder-step-title'>Event ${index+1}</div><div class='actions'><button class='danger' data-quest-event-delete='${index}'>Delete</button></div></div><div class='row'><input data-quest-event-field='label' placeholder='Event label' value='${esc(e.label||'')}'><input data-quest-event-field='event' placeholder='Event, e.g. input.pressed' value='${esc(e.event||'')}'></div><div class='row'><input data-quest-event-field='capability' placeholder='Capability, e.g. input' value='${esc(e.capability||'')}'><input data-quest-event-field='match' placeholder='Match JSON' value='${esc(match)}'></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-event-field='id' placeholder='Event ID' value='${esc(e.id||'')}'></div></details></div>`;
+return `<div class='builder-step' data-quest-event='${index}'><div class='builder-step-head'><div class='builder-step-title'>Event ${index+1}</div><div class='actions'>${uiButton({label:'Delete',action:'quest.event.delete',kind:'danger',dataset:{index}})}</div></div><div class='row'><input data-quest-event-field='label' placeholder='Event label' value='${esc(e.label||'')}'><input data-quest-event-field='event' placeholder='Event, e.g. input.pressed' value='${esc(e.event||'')}'></div><div class='row'><input data-quest-event-field='capability' placeholder='Capability, e.g. input' value='${esc(e.capability||'')}'><input data-quest-event-field='match' placeholder='Match JSON' value='${esc(match)}'></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-event-field='id' placeholder='Event ID' value='${esc(e.id||'')}'></div></details></div>`;
 }
 
 function renderQuestDeviceListRow(d){
 const health=questDeviceHealth(d);
-return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(d.name||d.id)} ${d.enabled===false?`<span class='badge'>disabled</span>`:''}</div><div class='row-meta'>${esc((d.commands||[]).length)} commands / ${esc((d.events||[]).length)} events</div><div class='row-meta'>${esc(questDeviceStatusText(d))}</div><details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(d.id||'')}</div><div class='row-meta'>Client: ${esc(d.client_id||'')}</div></details></div><div>${status(health)}</div><div class='actions'><button data-quest-device-edit='${esc(d.id)}'>Edit</button><button class='danger' data-quest-device-delete='${esc(d.id)}'>Delete</button></div></div>`;
+return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(d.name||d.id)} ${d.enabled===false?`<span class='badge'>disabled</span>`:''}</div><div class='row-meta'>${esc((d.commands||[]).length)} commands / ${esc((d.events||[]).length)} events</div><div class='row-meta'>${esc(questDeviceStatusText(d))}</div><details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(d.id||'')}</div><div class='row-meta'>Client: ${esc(d.client_id||'')}</div></details></div><div>${status(health)}</div><div class='actions'>${uiButton({label:'Edit',action:'quest.device.edit',dataset:{'device-id':d.id||''}})}${uiButton({label:'Delete',action:'quest.device.delete',kind:'danger',dataset:{'device-id':d.id||''},confirm:`Delete device ${d.id||''}?`})}</div></div>`;
 }
 
 function renderQuestDeviceEditor(draft){
 if(!draft){
-return `<div class='card empty-state'><h2 class='section-title'>Device editor</h2><div class='empty-title'>Select a quest device or create a new one</div><div class='row-meta'>Quest devices are physical client capabilities: commands, events and manual buttons. They are used later in room scenarios.</div><div class='actions'><button data-quest-device-new='1'>Add device</button></div></div>`;
+return `<div class='card empty-state'><h2 class='section-title'>Device editor</h2><div class='empty-title'>Select a quest device or create a new one</div><div class='row-meta'>Quest devices are physical client capabilities: commands, events and manual buttons. They are used later in room scenarios.</div><div class='actions'>${uiButton({label:'Add device',action:'quest.device.new'})}</div></div>`;
 }
 const clientControl=observedItems().length?`<select class='scenario-select' data-quest-device-field='client_id'>${physicalClientOptions(draft&&draft.client_id||'')}</select>`:`<input data-quest-device-field='client_id' placeholder='Physical client ID' value='${esc(draft&&draft.client_id||'')}'>`;
 const commandRows=(draft.commands||[]).length?draft.commands.map(renderQuestCommandRow).join(''):`<div class='empty'>No commands. Import config from the client or add a command manually.</div>`;
 const eventRows=(draft.events||[]).length?draft.events.map(renderQuestEventRow).join(''):`<div class='empty'>No events. Import config from the client or add an event manually.</div>`;
-return `<div class='card' data-quest-device-editor='1'><div class='card-head'><div><h2 class='section-title'>${questDeviceEditor.device_id?'Edit quest device':'New quest device'}${questDeviceEditor.dirty?' *':''}</h2><div class='card-sub'>Define what this physical client can do and report.</div></div><label class='row-meta'><input data-quest-device-field='enabled' type='checkbox' ${draft.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label></div><div class='form-section'><h2 class='section-title'>Basics</h2><div class='field-grid'><label class='field-stack'><span>Device name</span><input data-quest-device-field='name' placeholder='Altar controller' value='${esc(draft.name||'')}'></label><label class='field-stack'><span>Physical client</span>${clientControl}</label></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-device-field='id' placeholder='Device ID' value='${esc(draft.id||'')}'></div></details></div><div class='form-section import-panel'><div><h2 class='section-title'>Import capabilities</h2><div class='row-meta'>Ask the selected physical client for its supported commands and events.</div></div><div class='actions'><button class='approve' data-quest-device-discover='1'>Get config</button></div></div>${renderQuestDiscoveryPreview()}<div class='form-section'><div class='card-head'><div><h2 class='section-title'>Commands</h2><div class='row-meta'>Commands can become scenario actions and manual buttons.</div></div><div class='actions'><button data-quest-command-add='1'>Add command</button></div></div><div>${commandRows}</div></div><div class='form-section'><div class='card-head'><div><h2 class='section-title'>Events</h2><div class='row-meta'>Events are available as scenario waits.</div></div><div class='actions'><button data-quest-event-add='1'>Add event</button></div></div><div>${eventRows}</div></div><div class='actions sticky-actions'><button data-quest-device-save='1'>Save device</button>${questDeviceEditor.device_id?`<button class='danger' data-quest-device-delete='${esc(questDeviceEditor.device_id)}'>Delete</button>`:''}</div></div>`;
+return `<div class='card' data-quest-device-editor='1'><div class='card-head'><div><h2 class='section-title'>${questDeviceEditor.device_id?'Edit quest device':'New quest device'}${questDeviceEditor.dirty?' *':''}</h2><div class='card-sub'>Define what this physical client can do and report.</div></div><label class='row-meta'><input data-quest-device-field='enabled' type='checkbox' ${draft.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label></div><div class='form-section'><h2 class='section-title'>Basics</h2><div class='field-grid'><label class='field-stack'><span>Device name</span><input data-quest-device-field='name' placeholder='Altar controller' value='${esc(draft.name||'')}'></label><label class='field-stack'><span>Physical client</span>${clientControl}</label></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-device-field='id' placeholder='Device ID' value='${esc(draft.id||'')}'></div></details></div><div class='form-section import-panel'><div><h2 class='section-title'>Import capabilities</h2><div class='row-meta'>Ask the selected physical client for its supported commands and events.</div></div><div class='actions'>${uiButton({label:'Get config',action:'quest.device.discover',kind:'approve'})}</div></div>${renderQuestDiscoveryPreview()}<div class='form-section'><div class='card-head'><div><h2 class='section-title'>Commands</h2><div class='row-meta'>Commands can become scenario actions and manual buttons.</div></div><div class='actions'>${uiButton({label:'Add command',action:'quest.command.add'})}</div></div><div>${commandRows}</div></div><div class='form-section'><div class='card-head'><div><h2 class='section-title'>Events</h2><div class='row-meta'>Events are available as scenario waits.</div></div><div class='actions'>${uiButton({label:'Add event',action:'quest.event.add'})}</div></div><div>${eventRows}</div></div><div class='actions sticky-actions'>${uiButton({label:'Save device',action:'quest.device.save'})}${questDeviceEditor.device_id?uiButton({label:'Delete',action:'quest.device.delete',kind:'danger',dataset:{'device-id':questDeviceEditor.device_id},confirm:`Delete device ${questDeviceEditor.device_id}?`}):''}</div></div>`;
 }
 
 function renderDeviceSetupAdminView(){
 setPage('Quest Devices','Device capabilities and manual controls');
 const devices=questEditableDevices();
 const draft=questDeviceEditor.open?currentQuestDeviceDraft():null;
-const rows=devices.length?devices.map(renderQuestDeviceListRow).join(''):`<div class='card empty-state'><div class='empty-title'>No quest devices yet</div><div class='row-meta'>Add a device, select its physical client and import capabilities.</div><div class='actions'><button data-quest-device-new='1'>Add device</button></div></div>`;
-return `<div class='device-setup-layout'><section><div class='card-head'><div><h2 class='section-title'>Quest devices</h2><div class='card-sub'>Saved device capability sets</div></div><div class='actions'><button data-quest-device-new='1'>Add device</button></div></div><div class='list'>${rows}</div></section><section>${renderQuestDeviceEditor(draft)}</section></div>`;
+const rows=devices.length?devices.map(renderQuestDeviceListRow).join(''):`<div class='card empty-state'><div class='empty-title'>No quest devices yet</div><div class='row-meta'>Add a device, select its physical client and import capabilities.</div><div class='actions'>${uiButton({label:'Add device',action:'quest.device.new'})}</div></div>`;
+return `<div class='device-setup-layout'><section><div class='card-head'><div><h2 class='section-title'>Quest devices</h2><div class='card-sub'>Saved device capability sets</div></div><div class='actions'>${uiButton({label:'Add device',action:'quest.device.new'})}</div></div><div class='list'>${rows}</div></section><section>${renderQuestDeviceEditor(draft)}</section></div>`;
 }
 
 function initDeviceSetupWizard(){
 return;
 }
 
-function render(){
+function renderMainContent(){
 const root=document.getElementById('gm_content');
 if(!root)return;
 if(gmSkipScenarioDomSync)gmSkipScenarioDomSync=false;
@@ -2419,49 +3431,112 @@ else if(currentView==='audit')html=renderAuditView();
 else if(currentView==='profiles')html=renderProfilesAdminView();
 else if(currentView==='scenarios')html=renderScenariosAdminView();
 else if(currentView==='device_setup')html=renderDeviceSetupAdminView();
+else if(currentView==='hardware_io')html=renderHardwareIoView();
 else if(currentView==='storage')html=renderStorageAdminView();
 root.innerHTML=html;
 injectRoomScenarios();
 const navView=currentView==='room'?'rooms':currentView;
 
 document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.view===navView));
-renderRightSidebar();
+}
+
+function render(){
+renderMainContent();
+renderRightSidebar(false);
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
-async function loadObserved(){
+const GM_STATIC_TTL_MS=30000;
+const gmLoadTimes={observed:0,audit:0,timeline:0,questDevices:0,roomScenarios:0,roomProfiles:0,scenarioCatalogs:0};
+const gmRuntimeRenderKeys={};
+const gmRuntimeRequestSeq={};
+let gmLastVersions=null;
+let gmSnapshotRequestSeq=0;
+
+function gmStaticFresh(key,ttl){
+return !!gmLoadTimes[key]&&performance.now()-gmLoadTimes[key]<(ttl||GM_STATIC_TTL_MS);
+}
+
+function gmMarkStaticLoaded(key){
+gmLoadTimes[key]=performance.now();
+}
+
+function gmVersionsKey(versions){
+if(!versions)return '';
+return [
+versions.rooms||0,
+versions.devices||0,
+versions.scenarios||0,
+versions.profiles||0,
+versions.ingest||0,
+versions.session||0,
+versions.static||0,
+versions.runtime||0,
+].join(':');
+}
+
+function gmVersionChanged(prev,next,fields){
+if(!prev||!next)return true;
+return fields.some(field=>(prev[field]||0)!==(next[field]||0));
+}
+
+function gmCurrentViewUsesQuestDeviceStatic(){
+return ['dashboard','room','devices','observed','device_setup','scenarios','hardware_io'].includes(currentView);
+}
+
+function gmCurrentViewUsesScenarioStatic(){
+return ['room','scenarios','profiles'].includes(currentView);
+}
+
+function gmCurrentViewUsesProfileStatic(){
+return ['room','profiles'].includes(currentView);
+}
+
+async function loadGMVersions(){
+return await api.gm.versionsJson();
+}
+
+async function loadObserved(force){
+if(!force&&gmStaticFresh('observed'))return;
 try{
-const res=await gmFetch('/api/orchestrator/control/devices');
-gmObserved=res.ok?await res.json():null;
+const res=await api.orchestrator.controlDevices();
+gmObserved=await gmJsonOrNull(res);
+gmMarkStaticLoaded('observed');
 }
 catch(err){
 gmObserved=null;
 }
 }
 
-async function loadAudit(){
+async function loadAudit(force){
+if(!force&&gmStaticFresh('audit'))return;
 try{
-const res=await gmFetch('/api/orchestrator/audit/recent');
-gmAudit=res.ok?await res.json():null;
+const res=await api.orchestrator.auditRecent();
+gmAudit=await gmJsonOrNull(res);
+gmMarkStaticLoaded('audit');
 }
 catch(err){
 gmAudit=null;
 }
 }
 
-async function loadTimeline(){
+async function loadTimeline(force){
+if(!force&&gmStaticFresh('timeline'))return;
 try{
-const res=await gmFetch('/api/orchestrator/timeline/recent');
-gmTimeline=res.ok?await res.json():null;
+const res=await api.orchestrator.timelineRecent();
+gmTimeline=await gmJsonOrNull(res);
+gmMarkStaticLoaded('timeline');
 }
 catch(err){
 gmTimeline=null;
 }
 }
 
-async function loadQuestDevices(){
+async function loadQuestDevices(force){
+if(!force&&gmStaticFresh('questDevices'))return;
 try{
-const res=await gmFetch('/api/gm/devices?include_system=1');
-gmQuestDevices=res.ok?await res.json():null;
+const res=await api.device.list(true);
+gmQuestDevices=await gmJsonOrNull(res);
+gmMarkStaticLoaded('questDevices');
 }
 catch(err){
 gmQuestDevices=null;
@@ -2475,7 +3550,7 @@ return gmAudioFiles&&Array.isArray(gmAudioFiles.items)?gmAudioFiles.items:[];
 async function gmFetchAudioDir(path,depth,seen){
 if(depth<0||seen.has(path))return [];
 seen.add(path);
-const res=await gmFetch(`/api/files?path=${encodeURIComponent(path)}`);
+const res=await api.files.list(path);
 if(!res.ok)throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 const list=await res.json();
 const files=[];
@@ -2531,32 +3606,35 @@ loadGMAudioFiles(false);
 }
 
 window.__gmRefreshManualSidebar=async function(){
-await loadQuestDevices();
-renderRightSidebar();
+await loadQuestDevices(true);
+renderRightSidebar(true);
 };
 
-async function loadRoomScenarios(){
+async function loadRoomScenarios(force){
+if(!force&&gmStaticFresh('roomScenarios'))return;
 gmRoomScenarios={
 }
 ;
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
 await Promise.all(rooms.map(async r=>{
 try{
-const res=await gmFetch(`/api/gm/room/scenarios?room_id=${encodeURIComponent(r.room_id)}`);const data=res.ok?await res.json():null;gmRoomScenarios[r.room_id]=(data&&Array.isArray(data.scenarios))?data.scenarios:[];}
+const res=await api.room.scenarios(r.room_id);const data=res.ok?await res.json():null;gmRoomScenarios[r.room_id]=(data&&Array.isArray(data.scenarios))?data.scenarios:[];}
 catch(err){
 gmRoomScenarios[r.room_id]=[];}
 }
 ));
+gmMarkStaticLoaded('roomScenarios');
 }
 
-async function loadRoomProfiles(){
+async function loadRoomProfiles(force){
+if(!force&&gmStaticFresh('roomProfiles'))return;
 gmRoomProfiles={
 }
 ;
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
 await Promise.all(rooms.map(async r=>{
 try{
-const res=await gmFetch(`/api/gm/room/profiles?room_id=${encodeURIComponent(r.room_id)}`);const data=res.ok?await res.json():null;gmRoomProfiles[r.room_id]=data&&Array.isArray(data.profiles)?data:{
+const res=await api.room.profiles(r.room_id);const data=res.ok?await res.json():null;gmRoomProfiles[r.room_id]=data&&Array.isArray(data.profiles)?data:{
 profiles:[],selected_profile_id:''}
 ;}
 catch(err){
@@ -2565,17 +3643,22 @@ profiles:[],selected_profile_id:''}
 ;}
 }
 ));
+gmMarkStaticLoaded('roomProfiles');
 }
 
-async function loadScenarioEditorCatalogs(){
+async function loadScenarioEditorCatalogs(force){
+if(!force&&gmStaticFresh('scenarioCatalogs'))return;
 gmScenarioEditorCatalogs={
 }
 ;
-if(!isAdmin())return;
+if(!isAdmin()){
+gmMarkStaticLoaded('scenarioCatalogs');
+return;
+}
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
 await Promise.all(rooms.map(async r=>{
 try{
-const res=await gmFetch(`/api/gm/room/scenario-editor/catalog?room_id=${encodeURIComponent(r.room_id)}`);const data=res.ok?await res.json():null;gmScenarioEditorCatalogs[r.room_id]=data&&Array.isArray(data.quest_devices)?data:{
+const res=await api.room.scenarioEditorCatalog(r.room_id);const data=res.ok?await res.json():null;gmScenarioEditorCatalogs[r.room_id]=data&&Array.isArray(data.quest_devices)?data:{
 quest_devices:[],step_schemas:[]}
 ;}
 catch(err){
@@ -2584,22 +3667,48 @@ quest_devices:[],step_schemas:[]}
 ;}
 }
 ));
+gmMarkStaticLoaded('scenarioCatalogs');
 }
 
-async function loadGM(silent,forceRender){
+async function loadGMLightStaticData(force){
+await Promise.all([loadObserved(force),loadQuestDevices(force),loadRoomScenarios(force),loadRoomProfiles(force)]);
+}
+
+async function loadGMViewData(force){
+if(currentView==='audit')await loadAudit(force);
+else if(currentView==='timeline')await loadTimeline(force);
+else if(currentView==='scenarios')await Promise.all([loadRoomScenarios(force),loadQuestDevices(force),loadScenarioEditorCatalogs(force)]);
+else if(currentView==='profiles')await Promise.all([loadRoomProfiles(force),loadRoomScenarios(force)]);
+else if(currentView==='room')await Promise.all([loadRoomProfiles(force),loadRoomScenarios(force),loadQuestDevices(force)]);
+else if(currentView==='device_setup'||currentView==='devices'||currentView==='observed')await Promise.all([loadObserved(force),loadQuestDevices(force)]);
+else if(currentView==='dashboard')await Promise.all([loadObserved(force),loadQuestDevices(force)]);
+}
+
+async function loadGMStaticData(force){
+await loadGMLightStaticData(force);
+await loadGMViewData(force);
+}
+
+async function loadGM(silent,forceRender,opts){
+opts=opts||{};
+const requestSeq=++gmSnapshotRequestSeq;
 if(!silent){
 setStatus('loading','state-unknown');
 }
 try{
-const res=await gmFetch('/api/gm/state');
-if(!res.ok)throw new Error('HTTP '+res.status);
-gmState=await res.json();
+const data=await api.gm.stateJson();
+if(requestSeq!==gmSnapshotRequestSeq)return;
+gmState=data;
 syncRoomTimerBaselines();
-await Promise.all([loadObserved(),loadAudit(),loadTimeline(),loadQuestDevices(),loadRoomScenarios(),loadRoomProfiles(),loadScenarioEditorCatalogs()]);
+loadGMVersions().then(v=>{gmLastVersions=v;}).catch(()=>{});
+if(!opts.runtimeOnly){
+await loadGMStaticData(!silent||!!forceRender||!!opts.forceStatic);
+if(requestSeq!==gmSnapshotRequestSeq)return;
+}
 applyInitialOperatorRoute();
 if(silent&&!forceRender&&shouldDeferAutoRender()){
 gmAutoRenderDeferred=true;
-renderRightSidebar();
+renderRightSidebar(false);
 return;
 }
 gmAutoRenderDeferred=false;
@@ -2609,7 +3718,7 @@ catch(err){
 setStatus('load failed','state-fault');
 
 document.getElementById('gm_content').innerHTML='<div class="card empty">Failed to load GM state</div>';
-renderRightSidebar();
+renderRightSidebar(false);
 }
 }
 
@@ -2620,12 +3729,9 @@ room._timer_synced_at_ms=now;
 });
 }
 
-function mergeRoomRuntimeState(roomId,data){
-if(!gmState||!Array.isArray(gmState.rooms)||!roomId||!data)return false;
-const room=gmState.rooms.find(r=>(r.room_id||'')===roomId);
-if(!room)return false;
-[
-'session_state','timer_state','timer_duration_ms','timer_remaining_ms',
+const ROOM_RUNTIME_FIELDS=[
+'runtime_schema_version',
+'session_present','session_state','timer_state','timer_duration_ms','timer_remaining_ms',
 'hint_active','hint_sent_count','hint_message',
 'selected_profile_id','selected_profile_name','selected_profile_scenario_id','selected_profile_duration_ms',
 'selected_scenario_id','selected_scenario_name',
@@ -2644,7 +3750,19 @@ if(!room)return false;
 'asset_prepare_state','asset_audio_total','asset_audio_ready',
 'asset_audio_missing','asset_audio_bad','asset_audio_unsupported',
 'asset_audio_io_error','asset_audio_unknown'
-].forEach(key=>{
+];
+
+const ROOM_RUNTIME_CLOCK_FIELDS=new Set([
+'timer_remaining_ms',
+'scenario_wait_until_ms',
+'scenario_wait_started_at_ms'
+]);
+
+function mergeRoomRuntimeState(roomId,data){
+if(!gmState||!Array.isArray(gmState.rooms)||!roomId||!data)return false;
+const room=gmState.rooms.find(r=>(r.room_id||'')===roomId);
+if(!room)return false;
+ROOM_RUNTIME_FIELDS.forEach(key=>{
 if(Object.prototype.hasOwnProperty.call(data,key))room[key]=data[key];
 });
 room._timer_synced_at_ms=performance.now();
@@ -2663,6 +3781,15 @@ if(el.textContent!==text)el.textContent=text;
 });
 }
 
+function roomRuntimeRenderKey(room){
+const key={};
+ROOM_RUNTIME_FIELDS.forEach(field=>{
+if(ROOM_RUNTIME_CLOCK_FIELDS.has(field))return;
+key[field]=room[field]===undefined?null:room[field];
+});
+return JSON.stringify(key);
+}
+
 function renderRoomRuntimePanel(roomId){
 if(currentView!=='room'||currentRoomId!==roomId||roomTab!=='control')return false;
 const room=roomById(roomId);
@@ -2670,8 +3797,10 @@ if(!room)return false;
 const panels=Array.from(document.querySelectorAll('[data-room-control-runtime]'));
 const panel=panels.find(el=>(el.dataset.roomControlRuntime||'')===roomId);
 if(!panel)return false;
+const key=roomRuntimeRenderKey(room);
+if(gmRuntimeRenderKeys[roomId]===key)return true;
+gmRuntimeRenderKeys[roomId]=key;
 panel.innerHTML=`${renderRoomOperatorConsole(room)}${isAdmin()?renderRoomScenarioControl(room):''}`;
-renderRightSidebar();
 return true;
 }
 
@@ -2680,15 +3809,97 @@ if(!roomId||!gmState){
 await loadGM(true,true);
 return;
 }
-const res=await gmFetch(`/api/gm/room/runtime?room_id=${encodeURIComponent(roomId)}`);
-if(!res.ok)throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-const data=await res.json();
+const requestSeq=(gmRuntimeRequestSeq[roomId]||0)+1;
+gmRuntimeRequestSeq[roomId]=requestSeq;
+const data=await api.room.runtimeJson(roomId);
+if(gmRuntimeRequestSeq[roomId]!==requestSeq)return;
 if(!mergeRoomRuntimeState(roomId,data)){
 await loadGM(true,true);
 return;
 }
 if(!forceFullRender&&renderRoomRuntimePanel(roomId))return;
 render();
+}
+
+let gmRuntimePollBusy=false;
+let gmStatePollBusy=false;
+
+async function pollActiveRoomRuntime(){
+if(gmRuntimePollBusy)return;
+if(currentView!=='room'||roomTab!=='control'||!currentRoomId||!gmState)return;
+gmRuntimePollBusy=true;
+try{
+await loadGMRuntimeOnly(currentRoomId,false);
+}
+catch(err){
+setGMStatus('Runtime refresh failed','gm-bad');
+}
+finally{
+gmRuntimePollBusy=false;
+}
+}
+
+async function pollGMStateSnapshot(){
+if(gmStatePollBusy)return;
+gmStatePollBusy=true;
+try{
+const versions=await loadGMVersions();
+await refreshGMByVersions(versions);
+}
+finally{
+gmStatePollBusy=false;
+}
+}
+
+async function refreshGMByVersions(versions){
+if(!versions)return;
+const prev=gmLastVersions;
+if(!prev){
+gmLastVersions=versions;
+return;
+}
+if(gmVersionsKey(versions)===gmVersionsKey(prev))return;
+gmLastVersions=versions;
+if(gmVersionChanged(prev,versions,['rooms'])){
+await loadGM(true,true,{forceStatic:true});
+return;
+}
+let shouldRender=false;
+let shouldPatchSidebar=false;
+if(gmVersionChanged(prev,versions,['devices','ingest'])){
+await Promise.all([loadObserved(true),loadQuestDevices(true)]);
+shouldPatchSidebar=true;
+shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
+}
+if(gmVersionChanged(prev,versions,['scenarios'])){
+await loadRoomScenarios(true);
+shouldRender=shouldRender||gmCurrentViewUsesScenarioStatic();
+}
+if(gmVersionChanged(prev,versions,['profiles'])){
+await loadRoomProfiles(true);
+shouldRender=shouldRender||gmCurrentViewUsesProfileStatic();
+}
+if(gmVersionChanged(prev,versions,['session','runtime'])){
+if(currentView==='room'&&roomTab==='control'&&currentRoomId){
+await loadGMRuntimeOnly(currentRoomId,false);
+}
+else if(!shouldRender){
+await loadGM(true,false,{runtimeOnly:true});
+return;
+}
+}
+if(shouldRender){
+if(shouldDeferAutoRender()){
+gmAutoRenderDeferred=true;
+renderRightSidebar(shouldPatchSidebar);
+}
+else{
+render();
+}
+}
+else if(shouldPatchSidebar){
+renderRightSidebar(true);
+}
 }
 
 async function refreshAfterRuntimeAction(roomId,forceFullRender){
@@ -2699,23 +3910,13 @@ await loadGMRuntimeOnly(roomId,forceFullRender);
 async function runManualDeviceCommand(deviceId,commandId){
 if(!deviceId||!commandId)throw new Error('Manual button is incomplete');
 setGMStatus('Triggering button...');
-const res=await gmFetch('/api/gm/device/command/run',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-device_id:deviceId,command_id:commandId}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
+const command=scenarioCommandById(deviceId,commandId);
+const body={device_id:deviceId,command_id:commandId};
+if(command&&command.default_args&&typeof command.default_args==='object'){
+body.params=command.default_args;
 }
-clearTransientFieldDirty();
-if(currentRoomId){
-await loadGMRuntimeOnly(currentRoomId);
-}
-else{
-renderRightSidebar();
-}
+const res=await api.device.runCommand(body.device_id,body.command_id,body.params);
+await gmExpectOk(res);
 setGMStatus('Button sent','gm-ok');
 }
 
@@ -2725,12 +3926,8 @@ const name=(prompt('Room name')||'').trim();
 if(!name)return;
 const roomId=slugifyId(name,'room');
 setGMStatus('Saving room...');
-const res=await gmFetch('/api/gm/room/save',{
-method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room_id:roomId,name})}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.save({room_id:roomId,name});
+await gmExpectOk(res);
 clearTransientFieldDirty();
 await loadGM(true,true);
 if(typeof window.__gmRefreshManualSidebar==='function'){
@@ -2739,19 +3936,15 @@ await window.__gmRefreshManualSidebar();
 setGMStatus('Room saved','gm-ok');
 }
 
-async function deleteRoom(roomId){
+async function deleteRoom(roomId,confirmHandled){
 if(!isAdmin())return;
 if(!roomId)throw new Error('Room is not selected');
 const room=roomById(roomId);
 const name=room&&(room.title||room.name)||roomId;
-if(!confirm(`Delete room ${name}? This also removes profiles and scenarios for this room. Quest devices stay untouched.`))return;
+if(!confirmHandled&&!confirm(`Delete room ${name}? This also removes profiles and scenarios for this room. Quest devices stay untouched.`))return;
 setGMStatus('Deleting room...');
-const res=await gmFetch('/api/gm/room/delete',{
-method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room_id:roomId,delete_content:true})}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.delete({room_id:roomId,delete_content:true});
+await gmExpectOk(res);
 currentRoomId='';
 delete currentRoomProfileId[roomId];
 delete currentRoomScenarioId[roomId];
@@ -2764,39 +3957,36 @@ setGMStatus('Room deleted','gm-ok');
 }
 
 async function runRoomTimer(action,roomId){
-let url='';
+let res=null;
+setGMStatus('Updating timer...');
 if(action==='start'){
 const input=document.getElementById('gm_timer_minutes');
 const minutes=Number(input&&input.value);
 if(!Number.isFinite(minutes)||minutes<=0)throw new Error('Duration must be greater than 0');
 const durationMs=Math.round(minutes*60000);
-url=`/api/gm/room/timer/start?room_id=${encodeURIComponent(roomId)}&duration_ms=${durationMs}`;
+res=await api.room.timerStart(roomId,durationMs);
 }
 else if(action==='pause'){
-url=`/api/gm/room/timer/pause?room_id=${encodeURIComponent(roomId)}`;
+res=await api.room.timer(roomId,'pause');
 }
 else if(action==='resume'){
-url=`/api/gm/room/timer/resume?room_id=${encodeURIComponent(roomId)}`;
+res=await api.room.timer(roomId,'resume');
 }
 else if(action==='reset'){
-url=`/api/gm/room/timer/reset?room_id=${encodeURIComponent(roomId)}`;
+res=await api.room.timer(roomId,'reset');
 }
 else if(action==='finish'){
-url=`/api/gm/room/session/finish?room_id=${encodeURIComponent(roomId)}`;
+res=await api.room.sessionFinish(roomId);
 }
 else if(action==='plus1'){
-url=`/api/gm/room/timer/add?room_id=${encodeURIComponent(roomId)}&delta_ms=60000`;
+res=await api.room.timerAdd(roomId,60000);
 }
 else if(action==='minus1'){
-url=`/api/gm/room/timer/add?room_id=${encodeURIComponent(roomId)}&delta_ms=-60000`;
+res=await api.room.timerAdd(roomId,-60000);
 }
 else{
 throw new Error('Unsupported timer action');
 }
-setGMStatus('Updating timer...');
-const res=await gmFetch(url,{
-method:'POST'}
-);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
@@ -2811,22 +4001,14 @@ const input=document.getElementById('gm_hint_input');
 const message=(input&&input.value||'').trim();
 if(!message)throw new Error('Hint message is empty');
 setGMStatus('Sending hint...');
-const res=await gmFetch('/api/gm/room/hint/send',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-room_id:roomId,message}
-)}
-);
+const res=await api.room.hintSend({room_id:roomId,message});
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 }
 else if(action==='clear'){
 setGMStatus('Clearing hint...');
-const res=await gmFetch(`/api/gm/room/hint/clear?room_id=${encodeURIComponent(roomId)}`,{
-method:'POST'}
-);
+const res=await api.room.hintClear(roomId);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
@@ -2842,30 +4024,20 @@ setGMStatus('Hint updated','gm-ok');
 async function selectRoomProfile(roomId,profileId){
 if(!roomId||!profileId)throw new Error('Game mode selection is incomplete');
 setGMStatus('Selecting game mode...');
-const res=await gmFetch('/api/gm/room/profile/select',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-room_id:roomId,profile_id:profileId}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.profileSelect({room_id:roomId,profile_id:profileId});
+await gmExpectOk(res);
 currentRoomProfileId[roomId]=profileId;
 clearTransientFieldDirty();
 await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Game mode selected','gm-ok');
 }
 
-async function runRoomGame(action,roomId){
+async function runRoomGame(action,roomId,confirmHandled){
 if(!roomId||!action)throw new Error('Game command is incomplete');
-if(action==='stop'&&!confirm('Stop this game session?'))return;
-if(action==='reset'&&!confirm('Reset this game session?'))return;
+if(!confirmHandled&&action==='stop'&&!confirm('Stop this game session?'))return;
+if(!confirmHandled&&action==='reset'&&!confirm('Reset this game session?'))return;
 setGMStatus('Updating game...');
-const res=await gmFetch(`/api/gm/room/game/${encodeURIComponent(action)}?room_id=${encodeURIComponent(roomId)}`,{
-method:'POST'}
-);
+const res=await api.room.game(roomId,action);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
@@ -2998,9 +4170,7 @@ const current=collectQuestDeviceEditor(false);
 const clientId=(current.client_id||'').trim();
 if(!clientId)throw new Error('Select physical client');
 setGMStatus('Requesting device config...');
-const res=await gmFetch('/api/gm/device/describe-interface',{
-method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:clientId})}
-);
+const res=await api.device.describeInterface(clientId);
 let body=null;
 try{body=await res.json();}catch(err){}
 if(!res.ok){
@@ -3071,12 +4241,8 @@ if(!isAdmin())throw new Error('Admin role required');
 const device=collectQuestDeviceEditor(true);
 if(!device.commands.length&&!device.events.length)throw new Error('Add at least one command or event');
 setGMStatus('Saving device...');
-const res=await gmFetch('/api/gm/device/save',{
-method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device})}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.device.save(device);
+await gmExpectOk(res);
 questDeviceEditor.device_id=device.id;
 questDeviceEditor.open=true;
 clearQuestDeviceDirty();
@@ -3085,17 +4251,13 @@ if(typeof window.__gmRefreshManualSidebar==='function')await window.__gmRefreshM
 setGMStatus('Device saved','gm-ok');
 }
 
-async function deleteQuestDeviceEditor(deviceId){
+async function deleteQuestDeviceEditor(deviceId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!deviceId)return;
-if(!confirm(`Delete device ${deviceId}?`))return;
+if(!confirmHandled&&!confirm(`Delete device ${deviceId}?`))return;
 setGMStatus('Deleting device...');
-const res=await gmFetch('/api/gm/device/delete',{
-method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:deviceId})}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.device.delete(deviceId);
+await gmExpectOk(res);
 if(questDeviceEditor.device_id===deviceId){
 questDeviceEditor.device_id='';
 questDeviceEditor.open=false;
@@ -3121,16 +4283,8 @@ const profile={
 id,name,room_id:profileEditor.room_id,scenario_id:scenarioId,duration_ms:Math.round(minutes*60000),hint_pack_id:hintPack,audio_pack_id:audioPack,enabled}
 ;
 setGMStatus('Saving game mode...');
-const res=await gmFetch('/api/gm/room/profile/save',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-profile}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.profileSave({profile});
+await gmExpectOk(res);
 profileEditor.profile_id=id;
 profileEditor.open=true;
 clearProfileDirty();
@@ -3138,21 +4292,13 @@ await loadGM(true,true);
 setGMStatus('Game mode saved','gm-ok');
 }
 
-async function deleteProfileEditor(profileId){
+async function deleteProfileEditor(profileId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!profileId)return;
-if(!confirm(`Delete game mode ${profileId}?`))return;
+if(!confirmHandled&&!confirm(`Delete game mode ${profileId}?`))return;
 setGMStatus('Deleting game mode...');
-const res=await gmFetch('/api/gm/room/profile/delete',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-profile_id:profileId}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.profileDelete(profileId);
+await gmExpectOk(res);
 if(profileEditor.profile_id===profileId){
 profileEditor.profile_id='';
 profileEditor.open=false;
@@ -3208,16 +4354,8 @@ render();
 return localReport;
 }
 setGMStatus('Validating scenario...');
-const res=await gmFetch('/api/gm/room/scenario/validate',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-scenario:draft}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.scenarioValidate(draft);
+await gmExpectOk(res);
 const report=await res.json();
 scenarioEditor.validation_report=report;
 scenarioEditor.draft=draft;
@@ -3251,16 +4389,8 @@ render();
 return;
 }
 setGMStatus('Saving scenario...');
-const res=await gmFetch('/api/gm/room/scenario/save',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-scenario}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.scenarioSave(scenario);
+await gmExpectOk(res);
 scenarioEditor.scenario_id=scenario.id;
 scenarioEditor.open=true;
 clearScenarioDirty();
@@ -3268,21 +4398,13 @@ await loadGM(true,true);
 setGMStatus('Scenario saved','gm-ok');
 }
 
-async function deleteScenarioEditor(scenarioId){
+async function deleteScenarioEditor(scenarioId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!scenarioId)return;
-if(!confirm(`Delete scenario ${scenarioId}?`))return;
+if(!confirmHandled&&!confirm(`Delete scenario ${scenarioId}?`))return;
 setGMStatus('Deleting scenario...');
-const res=await gmFetch('/api/gm/room/scenario/delete',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-scenario_id:scenarioId}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.scenarioDelete(scenarioId);
+await gmExpectOk(res);
 if(scenarioEditor.scenario_id===scenarioId){
 scenarioEditor.scenario_id='';
 scenarioEditor.open=false;
@@ -3298,11 +4420,7 @@ if(!input||!input.files||!input.files[0])throw new Error('Select JSON file');
 const text=await input.files[0].text();
 JSON.parse(text);
 setGMStatus(`Importing ${label}...`);
-const res=await gmFetch(url,{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:text}
-);
+const res=await api.storage.importJson(url,text);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
@@ -3313,9 +4431,7 @@ setGMStatus(`${label} imported`,'gm-ok');
 
 async function postStorageCommand(url,label){
 setGMStatus(`${label}...`);
-const res=await gmFetch(url,{
-method:'POST'}
-);
+const res=await api.storage.post(url);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
@@ -3327,57 +4443,45 @@ setGMStatus(`${label} done`,'gm-ok');
 async function runStorageAction(action){
 if(!isAdmin())throw new Error('Admin role required');
 if(action==='scenario_export'){
-window.location='/api/gm/room/scenarios/export';
+window.location=api.storage.exportUrl('scenario');
 return;
 }
 if(action==='device_export'){
-window.location='/api/gm/devices/export';
+window.location=api.storage.exportUrl('device');
 return;
 }
 if(action==='profile_export'){
-window.location='/api/gm/profiles/export';
+window.location=api.storage.exportUrl('profile');
 return;
 }
 if(action==='device_import')return importStorageJson('storage_devices_file','/api/gm/devices/import','Devices');
 if(action==='scenario_import')return importStorageJson('storage_scenarios_file','/api/gm/room/scenarios/import','Scenarios');
 if(action==='profile_import')return importStorageJson('storage_profiles_file','/api/gm/profiles/import','Game modes');
-if(action==='device_save')return postStorageCommand('/api/gm/devices/save','Save devices');
-if(action==='device_load')return postStorageCommand('/api/gm/devices/load','Load devices');
-if(action==='scenario_save')return postStorageCommand('/api/gm/room/scenarios/save','Save scenarios');
-if(action==='scenario_load')return postStorageCommand('/api/gm/room/scenarios/load','Load scenarios');
-if(action==='profile_save')return postStorageCommand('/api/gm/profiles/save','Save game modes');
-if(action==='profile_load')return postStorageCommand('/api/gm/profiles/load','Load game modes');
+if(action==='device_save')return postStorageCommand(api.storage.commandUrl('device','save'),'Save devices');
+if(action==='device_load')return postStorageCommand(api.storage.commandUrl('device','load'),'Load devices');
+if(action==='scenario_save')return postStorageCommand(api.storage.commandUrl('scenario','save'),'Save scenarios');
+if(action==='scenario_load')return postStorageCommand(api.storage.commandUrl('scenario','load'),'Load scenarios');
+if(action==='profile_save')return postStorageCommand(api.storage.commandUrl('profile','save'),'Save game modes');
+if(action==='profile_load')return postStorageCommand(api.storage.commandUrl('profile','load'),'Load game modes');
 throw new Error('Unsupported storage action');
 }
 
 async function selectRoomScenario(roomId,scenarioId){
 if(!roomId||!scenarioId)throw new Error('Scenario selection is incomplete');
 setGMStatus('Selecting scenario...');
-const res=await gmFetch('/api/gm/room/scenario/select',{
-method:'POST',headers:{
-'Content-Type':'application/json'}
-,body:JSON.stringify({
-room_id:roomId,scenario_id:scenarioId}
-)}
-);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
+const res=await api.room.scenarioSelect({room_id:roomId,scenario_id:scenarioId});
+await gmExpectOk(res);
 currentRoomScenarioId[roomId]=scenarioId;
 clearTransientFieldDirty();
 await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Scenario selected','gm-ok');
 }
 
-async function runRoomScenarioRuntime(action,roomId,branchId){
+async function runRoomScenarioRuntime(action,roomId,branchId,confirmHandled){
 if(!roomId||!action)throw new Error('Scenario command is incomplete');
-if(action==='next'&&!confirm(branchId?'Force complete this branch wait?':'Force complete current scenario wait?'))return;
+if(!confirmHandled&&action==='next'&&!confirm(branchId?'Force complete this branch wait?':'Force complete current scenario wait?'))return;
 setGMStatus('Updating scenario...');
-let url=`/api/gm/room/scenario/${encodeURIComponent(action)}?room_id=${encodeURIComponent(roomId)}`;
-if(branchId)url+=`&branch_id=${encodeURIComponent(branchId)}`;
-const res=await gmFetch(url,{
-method:'POST'}
-);
+const res=await api.room.scenarioRuntime(roomId,action,branchId);
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
@@ -3386,461 +4490,36 @@ await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Scenario updated','gm-ok');
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
-function setGMStatus(text,cls){
-setStatus(text,cls==='gm-bad'?'state-fault':(cls==='gm-ok'?'state-ok':'state-unknown'));
-}
-
-document.getElementById('gm_nav').onclick=e=>{
-const btn=e.target.closest('.nav-btn');
-if(!btn)return;
-const view=btn.dataset.view||'dashboard';
-if(!canOpenView(view))return;
-if(view!==currentView&&!confirmDiscardEditorChanges())return;
-currentView=view;
-render();
-}
-;
-
-document.getElementById('gm_content').onclick=async e=>{
-const room=e.target.closest('[data-open-room]');
-const roomNew=e.target.closest('button[data-room-new]');
-const roomDelete=e.target.closest('button[data-room-delete]');
-const setup=e.target.closest('[data-open-device-setup]');
-const adminView=e.target.closest('button[data-open-admin-view]');
-const tab=e.target.closest('[data-tab-scope]');
-const timer=e.target.closest('button[data-room-timer]');
-const hint=e.target.closest('button[data-room-hint]');
-const game=e.target.closest('button[data-room-game]');
-const profileEdit=e.target.closest('button[data-profile-edit]');
-const profileDelete=e.target.closest('button[data-profile-delete]');
-const profileNew=e.target.closest('button[data-profile-new]');
-const profileSave=e.target.closest('button[data-profile-save]');
-const profileSelect=e.target.closest('button[data-profile-select]');
-const scenarioEdit=e.target.closest('button[data-scenario-edit]');
-const scenarioDelete=e.target.closest('button[data-scenario-delete]');
-const scenarioMode=e.target.closest('button[data-scenario-mode]');
-const scenarioNew=e.target.closest('button[data-scenario-new]');
-const scenarioSave=e.target.closest('button[data-scenario-save]');
-const scenarioValidate=e.target.closest('button[data-scenario-validate]');
-const scenarioBranchAction=e.target.closest('button[data-scenario-branch-action]');
-const scenarioStepAction=e.target.closest('button[data-scenario-step-action]');
-const reactiveV2Action=e.target.closest('button[data-reactive-v2-action]');
-const scenarioStepHelp=e.target.closest('button[data-scenario-step-help]');
-const audioFilesRefresh=e.target.closest('button[data-audio-files-refresh]');
-const storageAction=e.target.closest('button[data-storage-action]');
-const scenarioRuntime=e.target.closest('button[data-room-scenario-runtime]');
-const questDeviceEdit=e.target.closest('button[data-quest-device-edit]');
-const questDeviceNew=e.target.closest('button[data-quest-device-new]');
-const questDeviceSave=e.target.closest('button[data-quest-device-save]');
-const questDeviceDelete=e.target.closest('button[data-quest-device-delete]');
-const questDeviceDiscover=e.target.closest('button[data-quest-device-discover]');
-const questDiscoveryApply=e.target.closest('button[data-quest-discovery-apply]');
-const questDiscoveryDiscard=e.target.closest('button[data-quest-discovery-discard]');
-const questCommandAdd=e.target.closest('button[data-quest-command-add]');
-const questCommandDelete=e.target.closest('button[data-quest-command-delete]');
-const questEventAdd=e.target.closest('button[data-quest-event-add]');
-const questEventDelete=e.target.closest('button[data-quest-event-delete]');
-try{
-if(roomNew&&isAdmin()){
-await createRoomFromPrompt();
-return;
-}
-if(roomDelete&&isAdmin()){
-if(!confirmDiscardEditorChanges())return;
-await deleteRoom(roomDelete.dataset.roomDelete||'');
-return;
-}
-if(room){
-const nextRoomId=room.dataset.openRoom||'';
-if((currentView!=='room'||currentRoomId!==nextRoomId)&&!confirmDiscardEditorChanges())return;
-currentRoomId=nextRoomId;
-currentView='room';
-roomTab='control';
-render();
-return;
-}
-if(setup&&isAdmin()){
-if(!confirmDiscardEditorChanges())return;
-currentView='device_setup';
-const setupTarget=setup.dataset.openDeviceSetup||'';
-if(setupTarget==='new'){
-questDeviceEditor.device_id='';
-questDeviceEditor.open=true;
-questDeviceEditor.draft=newQuestDeviceDraft();
-clearQuestDeviceDirty();
-}
-else if(setupTarget&&setupTarget!=='1'){
-questDeviceEditor.device_id=setupTarget;
-questDeviceEditor.open=true;
-questDeviceEditor.draft=null;
-clearQuestDeviceDirty();
-}
-render();
-return;
-}
-if(adminView&&isAdmin()){
-if(!confirmDiscardEditorChanges())return;
-const roomId=adminView.dataset.openAdminRoom||'';
-if(roomId){
-profileEditor.room_id=roomId;
-scenarioEditor.room_id=roomId;
-}
-currentView=adminView.dataset.openAdminView||'profiles';
-if(currentView==='profiles')profileEditor.open=true;
-if(currentView==='scenarios')scenarioEditor.open=true;
-render();
-return;
-}
-if(tab){
-if(!confirmDiscardEditorChanges())return;
-if(tab.dataset.tabScope==='room')roomTab=tab.dataset.tab||'overview';
-render();
-return;
-}
-if(profileEdit){
-if(!confirmDiscardProfile())return;
-profileEditor.profile_id=profileEdit.dataset.profileEdit||'';
-profileEditor.open=true;
-clearProfileDirty();
-render();
-return;
-}
-if(profileNew){
-if(!confirmDiscardProfile())return;
-profileEditor.profile_id='';
-profileEditor.open=true;
-profileEditor.prefill=null;
-clearProfileDirty();
-render();
-return;
-}
-if(profileDelete&&!profileDelete.disabled){
-if(!confirmDiscardProfile())return;
-await deleteProfileEditor(profileDelete.dataset.profileDelete||'');
-return;
-}
-if(profileSave&&!profileSave.disabled){
-await saveProfileEditor();
-return;
-}
-if(profileSelect&&!profileSelect.disabled){
-if(!confirmDiscardProfile())return;
-await selectRoomProfile(profileEditor.room_id,profileSelect.dataset.profileSelect||'');
-return;
-}
-if(scenarioEdit){
-if(!confirmDiscardScenario())return;
-scenarioEditor.scenario_id=scenarioEdit.dataset.scenarioEdit||'';
-scenarioEditor.open=true;
-scenarioEditor.expanded_step=-1;
-scenarioEditor.active_branch=0;
-clearScenarioDirty();
-const original=roomScenarios(scenarioEditor.room_id).find(s=>s.id===scenarioEditor.scenario_id)||null;
-scenarioEditor.original_scenario=original?scenarioEditableJson(original,scenarioEditor.room_id):null;
-render();
-return;
-}
-if(scenarioMode){
-if(!confirmDiscardEditorChanges())return;
-const scenarioId=scenarioMode.dataset.scenarioMode||'';
-const scenario=roomScenarios(scenarioEditor.room_id).find(s=>s.id===scenarioId)||null;
-profileEditor.room_id=scenarioEditor.room_id;
-profileEditor.profile_id='';
-profileEditor.open=true;
-clearProfileDirty();
-profileEditor.prefill={
-room_id:scenarioEditor.room_id,
-scenario_id:scenarioId,
-name:scenario&&(scenario.name||scenario.id)||'New mode',
-id:'',
-duration_ms:3600000,
-hint_pack_id:'',
-audio_pack_id:''}
-;
-currentView='profiles';
-render();
-return;
-}
-if(scenarioNew){
-if(!confirmDiscardScenario())return;
-scenarioEditor.scenario_id='';
-scenarioEditor.open=true;
-scenarioEditor.expanded_step=-1;
-scenarioEditor.active_branch=0;
-clearScenarioDirty();
-scenarioEditor.draft={id:'',name:'',room_id:scenarioEditor.room_id,branches:[defaultScenarioBranch(0,[])]};
+function gmScenarioChangeCommitDraft(draft,index){
+scenarioEditor.draft=draft;
+if(Number.isFinite(index))scenarioEditor.expanded_step=index;
+scenarioEditor.dirty=true;
+scenarioEditor.validation_report=null;
 skipNextScenarioDomSync();
 render();
-return;
-}
-if(scenarioDelete&&!scenarioDelete.disabled){
-if(!confirmDiscardScenario())return;
-await deleteScenarioEditor(scenarioDelete.dataset.scenarioDelete||'');
-return;
-}
-if(scenarioValidate&&!scenarioValidate.disabled){
-await validateScenarioEditor();
-return;
-}
-if(scenarioSave&&!scenarioSave.disabled){
-await saveScenarioEditor();
-return;
-}
-if(scenarioStepHelp){
-alert(scenarioStepHelpText(scenarioStepHelp.dataset.scenarioStepHelp||''));
-return;
-}
-if(scenarioBranchAction&&!scenarioBranchAction.disabled){
-const index=Number(scenarioBranchAction.dataset.branchIndex);
-applyScenarioBranchAction(scenarioBranchAction.dataset.scenarioBranchAction||'',Number.isFinite(index)?index:0);
-return;
-}
-if(reactiveV2Action&&!reactiveV2Action.disabled){
-applyReactiveV2Action(reactiveV2Action.dataset.reactiveV2Action||'',reactiveV2Action.dataset.variantIndex,reactiveV2Action.dataset.actionIndex||reactiveV2Action.dataset.guardIndex,reactiveV2Action.dataset.actionType||'');
-return;
-}
-if(scenarioStepAction&&!scenarioStepAction.disabled){
-const v2ActionEl=scenarioStepAction.closest('[data-v2-action]');
-if(v2ActionEl){
-applyReactiveV2Action(scenarioStepAction.dataset.scenarioStepAction||'',v2ActionEl.dataset.variantIndex,v2ActionEl.dataset.v2Action,scenarioStepAction.dataset.commandIndex||'');
-return;
-}
-const stepEl=scenarioStepAction.closest('[data-scenario-step]');
-const fallbackIndex=Number(stepEl&&stepEl.dataset.scenarioStep);
-const index=Number.isFinite(Number(scenarioStepAction.dataset.stepIndex))?Number(scenarioStepAction.dataset.stepIndex):fallbackIndex;
-applyScenarioStepAction(scenarioStepAction.dataset.scenarioStepAction||'',index,scenarioStepAction.dataset.scenarioStepType||scenarioStepAction.dataset.commandIndex||scenarioStepAction.dataset.eventIndex||scenarioStepAction.dataset.flagIndex||'');
-return;
-}
-if(audioFilesRefresh&&!audioFilesRefresh.disabled){
-await loadGMAudioFiles(true);
-return;
-}
-if(storageAction&&!storageAction.disabled){
-if(!confirmDiscardEditorChanges())return;
-await runStorageAction(storageAction.dataset.storageAction||'');
-return;
-}
-if(timer&&!timer.disabled){
-await runRoomTimer(timer.dataset.roomTimer||'',timer.dataset.roomId||'');
-return;
-}
-if(hint&&!hint.disabled){
-await runRoomHint(hint.dataset.roomHint||'',hint.dataset.roomId||'');
-return;
-}
-if(game&&!game.disabled){
-await runRoomGame(game.dataset.roomGame||'',game.dataset.roomId||'');
-return;
-}
-if(scenarioRuntime&&!scenarioRuntime.disabled){
-await runRoomScenarioRuntime(scenarioRuntime.dataset.roomScenarioRuntime||'',scenarioRuntime.dataset.roomId||'',scenarioRuntime.dataset.roomScenarioBranch||'');
-return;
-}
-if(questDeviceEdit){
-if(!confirmDiscardQuestDevice())return;
-questDeviceEditor.device_id=questDeviceEdit.dataset.questDeviceEdit||'';
-questDeviceEditor.open=true;
-questDeviceEditor.draft=null;
-clearQuestDeviceDirty();
-render();
-return;
-}
-if(questDeviceNew){
-if(!confirmDiscardQuestDevice())return;
-questDeviceEditor.device_id='';
-questDeviceEditor.open=true;
-questDeviceEditor.draft=newQuestDeviceDraft();
-clearQuestDeviceDirty();
-render();
-return;
-}
-if(questDeviceDiscover&&!questDeviceDiscover.disabled){
-await discoverQuestDeviceInterface();
-return;
-}
-if(questDiscoveryApply&&!questDiscoveryApply.disabled){
-applyQuestDeviceDiscovery();
-return;
-}
-if(questDiscoveryDiscard&&!questDiscoveryDiscard.disabled){
-discardQuestDeviceDiscovery();
-return;
-}
-if(questDeviceSave&&!questDeviceSave.disabled){
-await saveQuestDeviceEditor();
-return;
-}
-if(questDeviceDelete&&!questDeviceDelete.disabled){
-if(!confirmDiscardQuestDevice())return;
-await deleteQuestDeviceEditor(questDeviceDelete.dataset.questDeviceDelete||'');
-return;
-}
-if(questCommandAdd&&!questCommandAdd.disabled){
-addQuestDeviceCommand();
-return;
-}
-if(questCommandDelete&&!questCommandDelete.disabled){
-deleteQuestDeviceCommand(Number(questCommandDelete.dataset.questCommandDelete));
-return;
-}
-if(questEventAdd&&!questEventAdd.disabled){
-addQuestDeviceEvent();
-return;
-}
-if(questEventDelete&&!questEventDelete.disabled){
-deleteQuestDeviceEvent(Number(questEventDelete.dataset.questEventDelete));
-return;
-}
-}
-catch(err){
-setStatus(err.message||'command failed','state-fault');
-}
-}
-;
-
-const gmRightSidebar=document.getElementById('gm_right_sidebar');
-if(gmRightSidebar){
-gmRightSidebar.onclick=async e=>{
-const btn=e.target.closest('button[data-manual-device][data-manual-command]');
-if(!btn||btn.disabled)return;
-try{
-if(btn.dataset.confirmRequired==='1'&&!confirm('Run this manual command?'))return;
-await runManualDeviceCommand(btn.dataset.manualDevice||'',btn.dataset.manualCommand||'');
-}
-catch(err){
-setStatus(err.message||'button failed','state-fault');
-}
-}
-;
 }
 
-document.getElementById('gm_content').addEventListener('focusin',e=>{
-markControlEditing(e.target);
-});
-
-document.getElementById('gm_content').addEventListener('focusout',e=>{
-unmarkControlEditing(e.target);
-});
-
-document.addEventListener('toggle',e=>{
-const detail=e.target;
-if(!detail||String(detail.tagName||'').toLowerCase()!=='details')return;
-const key=detailsKeyFor(detail);
-if(key)gmOpenDetails[key]=detail.open;
-}
-,true);
-
-document.getElementById('gm_content').oninput=e=>{
-markControlDirty(e.target);
-const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
-const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
-if(profileField)markProfileDirty();
-if(scenarioField)markScenarioDirty();
-if(questDeviceField)markQuestDeviceDirty();
-}
-;
-
-document.getElementById('gm_content').onchange=async e=>{
-const editorRoom=e.target.closest('select[data-profile-room-select]');
-const scenarioRoom=e.target.closest('select[data-scenario-room-select]');
-const deviceRoom=e.target.closest('select[data-device-room-filter]');
-const observed=e.target.closest('select[data-observed-filter]');
-const stepType=e.target.closest('select[data-step-field="type"]');
-const stepDevice=e.target.closest('select[data-step-field="device_id"]');
-const stepCommand=e.target.closest('select[data-step-field="command_id"]');
-const stepDeviceEvent=e.target.closest('select[data-step-field="event_id"]');
-const stepParamChannel=e.target.closest('select[data-step-param="channel"]');
-const groupDevice=e.target.closest('select[data-group-command-field="device_id"]');
-const groupCommand=e.target.closest('select[data-group-command-field="command_id"]');
-const eventGroupDevice=e.target.closest('select[data-event-group-field="device_id"]');
-const eventGroupEvent=e.target.closest('select[data-event-group-field="event_id"]');
-const branchType=e.target.closest('select[data-scenario-branch-field="type"]');
-const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
-const reactiveV2ActionField=e.target.closest('[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field]');
-const profile=e.target.closest('select[data-room-profile-room]');
-const scenario=e.target.closest('select[data-room-scenario-room]');
-const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
-const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
-try{
-markControlDirty(e.target);
-if(profileField)markProfileDirty();
-if(scenarioField)markScenarioDirty();
-if(questDeviceField)markQuestDeviceDirty();
-if(editorRoom){
-if(!confirmDiscardProfile()){
-render();
-return;
-}
-profileEditor.room_id=editorRoom.value||'';
-profileEditor.profile_id='';
-profileEditor.open=false;
-clearProfileDirty();
-render();
-return;
-}
-if(scenarioRoom){
-if(!confirmDiscardScenario()){
-render();
-return;
-}
-scenarioEditor.room_id=scenarioRoom.value||'';
-scenarioEditor.scenario_id='';
-scenarioEditor.open=false;
-scenarioEditor.expanded_step=-1;
-scenarioEditor.active_branch=0;
-clearScenarioDirty();
-skipNextScenarioDomSync();
-render();
-return;
-}
-if(deviceRoom){
-deviceFilterRoom=deviceRoom.value||'';
-clearTransientFieldDirty();
-render();
-return;
-}
-if(observed){
-observedFilter=observed.value||'all';
-clearTransientFieldDirty();
-render();
-return;
-}
-if(branchType){
+function gmHandleScenarioBranchTypeChange(branchType){
 const draft=collectScenarioEditor();
 const branch=scenarioActiveBranch(draft);
 if(branch){
 branch.type=scenarioBranchTypeValue({type:branchType.value});
 branch.required_for_completion=branch.type==='normal'&&branch.required_for_completion!==false;
-if(branch.type==='reactive'){branch.required_for_completion=false;ensureReactiveV2Branch(branch);}
+if(branch.type==='reactive'){
+branch.required_for_completion=false;
+ensureReactiveV2Branch(branch);
 }
-scenarioEditor.draft=draft;
-scenarioEditor.dirty=true;
-scenarioEditor.validation_report=null;
-skipNextScenarioDomSync();
-render();
-return;
 }
-if(reactiveV2Field){
-const draft=collectScenarioEditor();
-scenarioEditor.draft=draft;
-scenarioEditor.dirty=true;
-scenarioEditor.validation_report=null;
-skipNextScenarioDomSync();
-render();
-return;
+gmScenarioChangeCommitDraft(draft);
+return true;
 }
-if(reactiveV2ActionField){
-const draft=collectScenarioEditor();
-scenarioEditor.draft=draft;
-scenarioEditor.dirty=true;
-scenarioEditor.validation_report=null;
-skipNextScenarioDomSync();
-render();
-return;
+
+function gmHandleReactiveV2Change(){
+gmScenarioChangeCommitDraft(collectScenarioEditor());
+return true;
 }
-if(stepDevice){
+
+function gmHandleScenarioStepDeviceChange(stepDevice){
 const stepEl=stepDevice.closest('[data-scenario-step]');
 const index=Number(stepEl&&stepEl.dataset.scenarioStep);
 const draft=collectScenarioEditor();
@@ -3857,22 +4536,19 @@ step.params=defaultParamsForCommand(device,scenarioCommandById(step.device_id,st
 else if(type==='WAIT_DEVICE_EVENT'){
 step.event_id=scenarioValidEventId(device,'');
 }
-scenarioEditor.draft=draft;
-scenarioEditor.expanded_step=index;
-skipNextScenarioDomSync();
 }
-scenarioEditor.dirty=true;
-scenarioEditor.validation_report=null;
-render();
-return;
+gmScenarioChangeCommitDraft(draft,index);
+return true;
 }
-if(stepCommand||stepDeviceEvent){
-refreshScenarioStepLabel((stepCommand||stepDeviceEvent).closest('[data-scenario-step]'));
+
+function gmHandleScenarioStepCommandOrEventChange(field){
+refreshScenarioStepLabel(field.closest('[data-scenario-step]'));
 markScenarioDirty();
 render();
-return;
+return true;
 }
-if(stepParamChannel){
+
+function gmHandleScenarioStepAudioChannelChange(stepParamChannel){
 const stepEl=stepParamChannel.closest('[data-scenario-step]');
 const index=Number(stepEl&&stepEl.dataset.scenarioStep);
 const draft=collectScenarioEditor();
@@ -3887,17 +4563,15 @@ if(params.channel!=='background'){
 params.repeat=false;
 }
 steps[index].params=params;
-scenarioEditor.draft=draft;
-scenarioEditor.expanded_step=index;
-skipNextScenarioDomSync();
 }
-markScenarioDirty();
-render();
-return;
+gmScenarioChangeCommitDraft(draft,index);
+return true;
 }
-if(groupDevice||groupCommand){
-const stepEl=(groupDevice||groupCommand).closest('[data-scenario-step]');
-const itemEl=(groupDevice||groupCommand).closest('[data-command-group-item]');
+
+function gmHandleScenarioCommandGroupChange(groupDevice,groupCommand){
+const control=groupDevice||groupCommand;
+const stepEl=control.closest('[data-scenario-step]');
+const itemEl=control.closest('[data-command-group-item]');
 const index=Number(stepEl&&stepEl.dataset.scenarioStep);
 const itemIndex=Number(itemEl&&itemEl.dataset.commandGroupItem);
 const draft=collectScenarioEditor();
@@ -3911,22 +4585,21 @@ const device=scenarioDeviceById(groupDevice.value||'');
 item.device_id=groupDevice.value||'';
 item.command_id=scenarioValidCommandId(device,'');
 item.params=defaultParamsForCommand(device,scenarioCommandById(item.device_id,item.command_id));
-}else{
+}
+else{
 item.command_id=groupCommand.value||'';
 item.params=defaultParamsForCommand(scenarioDeviceById(item.device_id),scenarioCommandById(item.device_id,item.command_id));
 }
 step.commands[itemIndex]=item;
-scenarioEditor.draft=draft;
-scenarioEditor.expanded_step=index;
-skipNextScenarioDomSync();
 }
-markScenarioDirty();
-render();
-return;
+gmScenarioChangeCommitDraft(draft,index);
+return true;
 }
-if(eventGroupDevice||eventGroupEvent){
-const stepEl=(eventGroupDevice||eventGroupEvent).closest('[data-scenario-step]');
-const itemEl=(eventGroupDevice||eventGroupEvent).closest('[data-event-group-item]');
+
+function gmHandleScenarioEventGroupChange(eventGroupDevice,eventGroupEvent){
+const control=eventGroupDevice||eventGroupEvent;
+const stepEl=control.closest('[data-scenario-step]');
+const itemEl=control.closest('[data-event-group-item]');
 const index=Number(stepEl&&stepEl.dataset.scenarioStep);
 const itemIndex=Number(itemEl&&itemEl.dataset.eventGroupItem);
 const draft=collectScenarioEditor();
@@ -3939,19 +4612,17 @@ if(eventGroupDevice){
 const device=scenarioDeviceById(eventGroupDevice.value||'');
 item.device_id=eventGroupDevice.value||'';
 item.event_id=scenarioValidEventId(device,'');
-}else{
+}
+else{
 item.event_id=eventGroupEvent.value||'';
 }
 step.events[itemIndex]=item;
-scenarioEditor.draft=draft;
-scenarioEditor.expanded_step=index;
-skipNextScenarioDomSync();
 }
-markScenarioDirty();
-render();
-return;
+gmScenarioChangeCommitDraft(draft,index);
+return true;
 }
-if(stepType){
+
+function gmHandleScenarioStepTypeChange(stepType){
 const stepEl=stepType.closest('[data-scenario-step]');
 const index=Number(stepEl&&stepEl.dataset.scenarioStep);
 const draft=collectScenarioEditor();
@@ -3962,14 +4633,115 @@ const replacement=newScenarioStepForType(index,stepType.value||'WAIT_TIME');
 replacement.id=previous.id||replacement.id;
 replacement.enabled=previous.enabled!==false;
 steps[index]=replacement;
-scenarioEditor.draft=draft;
-scenarioEditor.expanded_step=index;
 }
-markScenarioDirty();
-skipNextScenarioDomSync();
+gmScenarioChangeCommitDraft(draft,index);
+return true;
+}
+
+function gmHandleScenarioEditorChange(e){
+const stepType=e.target.closest('select[data-step-field="type"]');
+const stepDevice=e.target.closest('select[data-step-field="device_id"]');
+const stepCommand=e.target.closest('select[data-step-field="command_id"]');
+const stepDeviceEvent=e.target.closest('select[data-step-field="event_id"]');
+const stepParamChannel=e.target.closest('select[data-step-param="channel"]');
+const groupDevice=e.target.closest('select[data-group-command-field="device_id"]');
+const groupCommand=e.target.closest('select[data-group-command-field="command_id"]');
+const eventGroupDevice=e.target.closest('select[data-event-group-field="device_id"]');
+const eventGroupEvent=e.target.closest('select[data-event-group-field="event_id"]');
+const branchType=e.target.closest('select[data-scenario-branch-field="type"]');
+const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const reactiveV2ActionField=e.target.closest('[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field]');
+if(branchType)return gmHandleScenarioBranchTypeChange(branchType);
+if(reactiveV2Field||reactiveV2ActionField)return gmHandleReactiveV2Change();
+if(stepDevice)return gmHandleScenarioStepDeviceChange(stepDevice);
+if(stepCommand||stepDeviceEvent)return gmHandleScenarioStepCommandOrEventChange(stepCommand||stepDeviceEvent);
+if(stepParamChannel)return gmHandleScenarioStepAudioChannelChange(stepParamChannel);
+if(groupDevice||groupCommand)return gmHandleScenarioCommandGroupChange(groupDevice,groupCommand);
+if(eventGroupDevice||eventGroupEvent)return gmHandleScenarioEventGroupChange(eventGroupDevice,eventGroupEvent);
+if(stepType)return gmHandleScenarioStepTypeChange(stepType);
+return false;
+}
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+function gmMarkEditorDirtyFromEvent(e){
+markControlDirty(e.target);
+const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
+if(profileField)markProfileDirty();
+if(scenarioField)markScenarioDirty();
+if(questDeviceField)markQuestDeviceDirty();
+}
+
+function initGMEditorFocusAndDetails(content){
+content.addEventListener('focusin',e=>{
+markControlEditing(e.target);
+});
+content.addEventListener('focusout',e=>{
+unmarkControlEditing(e.target);
+});
+document.addEventListener('toggle',e=>{
+const detail=e.target;
+if(!detail||String(detail.tagName||'').toLowerCase()!=='details')return;
+const key=detailsKeyFor(detail);
+if(key)gmOpenDetails[key]=detail.open;
+}
+,true);
+}
+
+async function gmHandleProfileRoomChange(editorRoom){
+if(!confirmDiscardProfile()){
 render();
 return;
 }
+profileEditor.room_id=editorRoom.value||'';
+profileEditor.profile_id='';
+profileEditor.open=false;
+clearProfileDirty();
+render();
+}
+
+async function gmHandleScenarioRoomChange(scenarioRoom){
+if(!confirmDiscardScenario()){
+render();
+return;
+}
+scenarioEditor.room_id=scenarioRoom.value||'';
+scenarioEditor.scenario_id='';
+scenarioEditor.open=false;
+scenarioEditor.expanded_step=-1;
+scenarioEditor.expanded_v2_action='';
+scenarioEditor.active_branch=0;
+clearScenarioDirty();
+skipNextScenarioDomSync();
+render();
+}
+
+function gmHandleDeviceFilterChange(deviceRoom){
+deviceFilterRoom=deviceRoom.value||'';
+clearTransientFieldDirty();
+render();
+}
+
+function gmHandleObservedFilterChange(observed){
+observedFilter=observed.value||'all';
+clearTransientFieldDirty();
+render();
+}
+
+async function gmHandleEditorChange(e){
+const editorRoom=e.target.closest('select[data-profile-room-select]');
+const scenarioRoom=e.target.closest('select[data-scenario-room-select]');
+const deviceRoom=e.target.closest('select[data-device-room-filter]');
+const observed=e.target.closest('select[data-observed-filter]');
+const profile=e.target.closest('select[data-room-profile-room]');
+const scenario=e.target.closest('select[data-room-scenario-room]');
+try{
+gmMarkEditorDirtyFromEvent(e);
+if(editorRoom)return gmHandleProfileRoomChange(editorRoom);
+if(scenarioRoom)return gmHandleScenarioRoomChange(scenarioRoom);
+if(deviceRoom)return gmHandleDeviceFilterChange(deviceRoom);
+if(observed)return gmHandleObservedFilterChange(observed);
+if(gmHandleScenarioEditorChange(e))return;
 if(profile&&profile.value){
 await selectRoomProfile(profile.dataset.roomProfileRoom||'',profile.value||'');
 return;
@@ -3983,7 +4755,50 @@ catch(err){
 setStatus(err.message||'selection failed','state-fault');
 }
 }
+
+function initGMEditorEventHandlers(){
+const content=document.getElementById('gm_content');
+if(!content)return;
+initGMEditorFocusAndDetails(content);
+content.oninput=gmMarkEditorDirtyFromEvent;
+content.onchange=gmHandleEditorChange;
+}
+// GM panel source part. Edit this file, then rebuild gm_panel.js.
+function setGMStatus(text,cls){
+setStatus(text,cls==='gm-bad'?'state-fault':(cls==='gm-ok'?'state-ok':'state-unknown'));
+}
+
+document.getElementById('gm_nav').onclick=async e=>{
+const btn=e.target.closest('.nav-btn');
+if(!btn)return;
+const view=btn.dataset.view||'dashboard';
+if(!canOpenView(view))return;
+if(view!==currentView&&!confirmDiscardEditorChanges())return;
+currentView=view;
+try{
+await loadGMViewData(false);
+}
+catch(err){
+setGMStatus('View data refresh failed','gm-bad');
+}
+render();
+}
 ;
+
+document.getElementById('gm_content').onclick=async e=>{
+await gmHandleActionClick(e);
+}
+;
+
+const gmRightSidebar=document.getElementById('gm_right_sidebar');
+if(gmRightSidebar){
+gmRightSidebar.onclick=async e=>{
+if(await gmHandleActionClick(e))return;
+}
+;
+}
+
+initGMEditorEventHandlers();
 
 document.getElementById('gm_refresh').onclick=()=>{
 if(!confirmDiscardEditorChanges())return;
@@ -4026,5 +4841,28 @@ window.__sessionRolePromise=loadGMSession();
 
 window.__sessionRolePromise.then(()=>loadGM());
 
-setInterval(()=>loadGM(true),3000);
-setInterval(updateVisibleRoomClocks,250);
+function gmPollActiveRoomRuntimeVisible(){
+if(document.hidden)return;
+pollActiveRoomRuntime();
+}
+
+function gmPollStateSnapshotVisible(){
+if(document.hidden)return;
+pollGMStateSnapshot();
+}
+
+function gmUpdateVisibleRoomClocksVisible(){
+if(document.hidden)return;
+updateVisibleRoomClocks();
+}
+
+document.addEventListener('visibilitychange',()=>{
+if(document.hidden)return;
+updateVisibleRoomClocks();
+pollActiveRoomRuntime();
+pollGMStateSnapshot();
+});
+
+setInterval(gmPollActiveRoomRuntimeVisible,1000);
+setInterval(gmPollStateSnapshotVisible,10000);
+setInterval(gmUpdateVisibleRoomClocksVisible,250);

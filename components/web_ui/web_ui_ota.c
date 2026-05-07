@@ -7,8 +7,10 @@
 #include "cJSON.h"
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_http_server.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "ota_manager.h"
 
 #define OTA_UPLOAD_CHUNK_SIZE      4096
@@ -16,6 +18,10 @@
 #define OTA_FILENAME_HEADER_MAX    128
 #define OTA_IMAGE_HEADER_MIN_BYTES \
     (sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t))
+
+static EXT_RAM_BSS_ATTR uint8_t s_ota_upload_chunk[OTA_UPLOAD_CHUNK_SIZE];
+static SemaphoreHandle_t s_ota_upload_mutex = NULL;
+static StaticSemaphore_t s_ota_upload_mutex_storage;
 
 static esp_err_t web_http_check(esp_err_t err, const char *context)
 {
@@ -28,6 +34,27 @@ static esp_err_t web_http_check(esp_err_t err, const char *context)
 #define WEB_HTTP_CHECK(call) web_http_check((call), __func__)
 
 static esp_err_t ota_send_error(httpd_req_t *req, const char *status, const char *message);
+
+static esp_err_t ota_upload_lock(void)
+{
+    if (!s_ota_upload_mutex) {
+        s_ota_upload_mutex = xSemaphoreCreateMutexStatic(&s_ota_upload_mutex_storage);
+    }
+    if (!s_ota_upload_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (xSemaphoreTake(s_ota_upload_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+static void ota_upload_unlock(void)
+{
+    if (s_ota_upload_mutex) {
+        xSemaphoreGive(s_ota_upload_mutex);
+    }
+}
 
 static char ascii_lower(char c)
 {
@@ -187,22 +214,29 @@ static esp_err_t ota_send_error(httpd_req_t *req, const char *status, const char
 
 esp_err_t ota_upload_handler(httpd_req_t *req)
 {
-    size_t len = req->content_len;
-    if (len == 0) {
-        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty image"));
-    }
-    if (ota_manager_is_busy()) {
+    esp_err_t err = ota_upload_lock();
+    if (err != ESP_OK) {
         return ota_send_error(req, "409 Conflict", "ota busy");
     }
-    esp_err_t err = ota_validate_request_headers(req);
+
+    size_t len = req->content_len;
+    if (len == 0) {
+        err = WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty image"));
+        ota_upload_unlock();
+        return err;
+    }
+    if (ota_manager_is_busy()) {
+        err = ota_send_error(req, "409 Conflict", "ota busy");
+        ota_upload_unlock();
+        return err;
+    }
+    err = ota_validate_request_headers(req);
     if (err != ESP_OK) {
+        ota_upload_unlock();
         return err;
     }
 
-    uint8_t *buf = heap_caps_malloc(OTA_UPLOAD_CHUNK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) {
-        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory"));
-    }
+    uint8_t *buf = s_ota_upload_chunk;
 
     size_t received = 0;
     int first_chunk = 0;
@@ -216,21 +250,22 @@ esp_err_t ota_upload_handler(httpd_req_t *req)
             if (r == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
-            heap_caps_free(buf);
-            return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"));
+            err = WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"));
+            ota_upload_unlock();
+            return err;
         }
         first_chunk = r;
     }
 
     err = ota_validate_image_header(req, buf, (size_t)first_chunk);
     if (err != ESP_OK) {
-        heap_caps_free(buf);
+        ota_upload_unlock();
         return err;
     }
 
     err = ota_begin_upload_checked(req, len);
     if (err != ESP_OK) {
-        heap_caps_free(buf);
+        ota_upload_unlock();
         return err;
     }
 
@@ -239,9 +274,10 @@ esp_err_t ota_upload_handler(httpd_req_t *req)
         ota_manager_status_t ota = {0};
         ota_manager_get_status(&ota);
         const char *msg = ota.last_error[0] ? ota.last_error : "ota write failed";
-        heap_caps_free(buf);
         ota_manager_abort_upload();
-        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, msg));
+        err = WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, msg));
+        ota_upload_unlock();
+        return err;
     }
     received = (size_t)first_chunk;
 
@@ -255,34 +291,39 @@ esp_err_t ota_upload_handler(httpd_req_t *req)
             if (r == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
-            heap_caps_free(buf);
             ota_manager_abort_upload();
-            return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"));
+            err = WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"));
+            ota_upload_unlock();
+            return err;
         }
         err = ota_manager_write_chunk(buf, (size_t)r);
         if (err != ESP_OK) {
             ota_manager_status_t ota = {0};
             ota_manager_get_status(&ota);
             const char *msg = ota.last_error[0] ? ota.last_error : "ota write failed";
-            heap_caps_free(buf);
             ota_manager_abort_upload();
-            return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, msg));
+            err = WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, msg));
+            ota_upload_unlock();
+            return err;
         }
         received += (size_t)r;
     }
-    heap_caps_free(buf);
 
     err = ota_manager_finish_upload();
     if (err != ESP_OK) {
         ota_manager_status_t ota = {0};
         ota_manager_get_status(&ota);
         const char *msg = ota.last_error[0] ? ota.last_error : "ota finish failed";
-        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, msg));
+        err = WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, msg));
+        ota_upload_unlock();
+        return err;
     }
 
-    return web_ui_send_ok(req,
-                          "application/json",
-                          "{\"status\":\"ok\",\"phase\":\"" OTA_MANAGER_PHASE_REBOOT_REQUIRED "\",\"reboot_required\":true}");
+    err = web_ui_send_ok(req,
+                         "application/json",
+                         "{\"status\":\"ok\",\"phase\":\"" OTA_MANAGER_PHASE_REBOOT_REQUIRED "\",\"reboot_required\":true}");
+    ota_upload_unlock();
+    return err;
 }
 
 esp_err_t ota_reboot_handler(httpd_req_t *req)

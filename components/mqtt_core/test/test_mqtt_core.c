@@ -63,11 +63,8 @@ static void clear_retain_table(void)
         return;
     }
     for (size_t i = 0; i < MQTT_RETAIN_MAX; ++i) {
-        if (s_retain[i].payload) {
-            heap_caps_free(s_retain[i].payload);
-            s_retain[i].payload = NULL;
-        }
         s_retain[i].payload_len = 0;
+        s_retain[i].payload[0] = '\0';
         s_retain[i].topic[0] = '\0';
         s_retain[i].qos = 0;
         s_retain[i].in_use = false;
@@ -263,7 +260,6 @@ static void test_retain_empty_payload_clears_entry(void)
     retain_store("quest/retain", "value1", 0);
     retain_entry_t *slot = find_retain_entry("quest/retain");
     TEST_ASSERT_NOT_NULL(slot);
-    TEST_ASSERT_NOT_NULL(slot->payload);
     TEST_ASSERT_EQUAL_STRING("value1", slot->payload);
 
     retain_store("quest/retain", "", 0);

@@ -2,10 +2,11 @@
 
 #include <stdbool.h>
 #include <string.h>
-#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
+#include "freertos/semphr.h"
 #include "esp_check.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -26,6 +27,9 @@ static const char *NVS_NS = "cfg";
 static const uint32_t CONFIG_VERSION = 1;
 static app_config_t g_config;
 static portMUX_TYPE g_config_lock = portMUX_INITIALIZER_UNLOCKED;
+static EXT_RAM_BSS_ATTR app_config_t s_config_scratch;
+static SemaphoreHandle_t s_config_scratch_mutex = NULL;
+static StaticSemaphore_t s_config_scratch_mutex_storage;
 
 static void config_lock(void)
 {
@@ -35,6 +39,24 @@ static void config_lock(void)
 static void config_unlock(void)
 {
     taskEXIT_CRITICAL(&g_config_lock);
+}
+
+static esp_err_t config_scratch_lock(void)
+{
+    if (!s_config_scratch_mutex) {
+        s_config_scratch_mutex = xSemaphoreCreateMutexStatic(&s_config_scratch_mutex_storage);
+    }
+    if (!s_config_scratch_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_config_scratch_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void config_scratch_unlock(void)
+{
+    if (s_config_scratch_mutex) {
+        xSemaphoreGive(s_config_scratch_mutex);
+    }
 }
 
 void config_store_hash_password(const char *password, uint8_t out_hash[CONFIG_STORE_AUTH_HASH_LEN])
@@ -209,6 +231,38 @@ static esp_err_t save_to_nvs(const app_config_t *cfg)
     return err;
 }
 
+static esp_err_t config_commit_locked(const app_config_t *next, bool log_result)
+{
+    if (!validate_config(next)) {
+        ESP_LOGE(TAG, "config validation failed");
+        return ESP_ERR_INVALID_ARG;
+    }
+    config_lock();
+    g_config = *next;
+    config_unlock();
+    esp_err_t err = save_to_nvs(next);
+    if (log_result) {
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "config saved to NVS");
+        } else {
+            ESP_LOGE(TAG, "failed to save config: %s", esp_err_to_name(err));
+        }
+    }
+    return err;
+}
+
+static esp_err_t config_commit(const app_config_t *next, bool log_result)
+{
+    esp_err_t err = config_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    s_config_scratch = *next;
+    err = config_commit_locked(&s_config_scratch, log_result);
+    config_scratch_unlock();
+    return err;
+}
+
 static esp_err_t load_from_nvs(app_config_t *cfg)
 {
     nvs_handle_t handle;
@@ -235,35 +289,31 @@ static esp_err_t load_from_nvs(app_config_t *cfg)
 
 esp_err_t config_store_init(void)
 {
-    app_config_t defaults;
-    load_defaults(&defaults);
+    esp_err_t err = config_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    load_defaults(&s_config_scratch);
     config_lock();
-    g_config = defaults;
+    g_config = s_config_scratch;
     config_unlock();
 
-    app_config_t *loaded = malloc(sizeof(app_config_t));
-    if (loaded && load_from_nvs(loaded) == ESP_OK && validate_config(loaded)) {
+    memset(&s_config_scratch, 0, sizeof(s_config_scratch));
+    if (load_from_nvs(&s_config_scratch) == ESP_OK && validate_config(&s_config_scratch)) {
         config_lock();
-        g_config = *loaded;
+        g_config = s_config_scratch;
         config_unlock();
-        free(loaded);
+        config_scratch_unlock();
         ESP_LOGI(TAG, "config loaded from NVS");
         return ESP_OK;
     }
-    if (loaded) {
-        free(loaded);
-    }
 
     ESP_LOGW(TAG, "using default config (failed to load or invalid)");
-    app_config_t *snapshot = malloc(sizeof(app_config_t));
-    if (!snapshot) {
-        return ESP_ERR_NO_MEM;
-    }
     config_lock();
-    *snapshot = g_config;
+    s_config_scratch = g_config;
     config_unlock();
-    esp_err_t err = save_to_nvs(snapshot);
-    free(snapshot);
+    err = save_to_nvs(&s_config_scratch);
+    config_scratch_unlock();
     return err;
 }
 
@@ -274,42 +324,18 @@ const app_config_t *config_store_get(void)
 
 esp_err_t config_store_set(const app_config_t *next)
 {
-    if (!validate_config(next)) {
-        ESP_LOGE(TAG, "config validation failed");
-        return ESP_ERR_INVALID_ARG;
-    }
-    app_config_t *snapshot = malloc(sizeof(app_config_t));
-    if (!snapshot) {
-        return ESP_ERR_NO_MEM;
-    }
-    config_lock();
-    g_config = *next;
-    *snapshot = g_config;
-    config_unlock();
-    esp_err_t err = save_to_nvs(snapshot);
-    free(snapshot);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "config saved to NVS");
-    } else {
-        ESP_LOGE(TAG, "failed to save config: %s", esp_err_to_name(err));
-    }
-    return err;
+    return config_commit(next, true);
 }
 
 esp_err_t config_store_reset_defaults(void)
 {
-    app_config_t *snapshot = malloc(sizeof(app_config_t));
-    if (!snapshot) {
-        return ESP_ERR_NO_MEM;
+    esp_err_t err = config_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
     }
-    app_config_t defaults;
-    load_defaults(&defaults);
-    config_lock();
-    g_config = defaults;
-    *snapshot = g_config;
-    config_unlock();
-    esp_err_t err = save_to_nvs(snapshot);
-    free(snapshot);
+    load_defaults(&s_config_scratch);
+    err = config_commit_locked(&s_config_scratch, false);
+    config_scratch_unlock();
     return err;
 }
 
@@ -321,35 +347,35 @@ esp_err_t config_store_set_web_auth(const char *username, const uint8_t hash[CON
     if (!validate_string(username, CONFIG_STORE_USERNAME_MAX) || !hash_is_nonzero(hash)) {
         return ESP_ERR_INVALID_ARG;
     }
-    app_config_t *snapshot = malloc(sizeof(app_config_t));
-    if (!snapshot) {
-        return ESP_ERR_NO_MEM;
+    esp_err_t err = config_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
     }
     config_lock();
-    *snapshot = g_config;
+    s_config_scratch = g_config;
     config_unlock();
-    memset(snapshot->web.username, 0, sizeof(snapshot->web.username));
-    strncpy(snapshot->web.username, username, sizeof(snapshot->web.username) - 1);
-    memcpy(snapshot->web.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN);
-    esp_err_t err = config_store_set(snapshot);
-    free(snapshot);
+    memset(s_config_scratch.web.username, 0, sizeof(s_config_scratch.web.username));
+    strncpy(s_config_scratch.web.username, username, sizeof(s_config_scratch.web.username) - 1);
+    memcpy(s_config_scratch.web.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN);
+    err = config_commit_locked(&s_config_scratch, true);
+    config_scratch_unlock();
     return err;
 }
 
 esp_err_t config_store_reset_web_auth_defaults(void)
 {
-    app_config_t *snapshot = malloc(sizeof(app_config_t));
-    if (!snapshot) {
-        return ESP_ERR_NO_MEM;
+    esp_err_t err = config_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
     }
     config_lock();
-    *snapshot = g_config;
+    s_config_scratch = g_config;
     config_unlock();
-    apply_default_web_auth(&snapshot->web);
-    memset(&snapshot->web_user, 0, sizeof(snapshot->web_user));
-    snapshot->web_user_enabled = false;
-    esp_err_t err = config_store_set(snapshot);
-    free(snapshot);
+    apply_default_web_auth(&s_config_scratch.web);
+    memset(&s_config_scratch.web_user, 0, sizeof(s_config_scratch.web_user));
+    s_config_scratch.web_user_enabled = false;
+    err = config_commit_locked(&s_config_scratch, true);
+    config_scratch_unlock();
     return err;
 }
 
@@ -363,20 +389,20 @@ esp_err_t config_store_set_web_user(const char *username, const uint8_t hash[CON
             return ESP_ERR_INVALID_ARG;
         }
     }
-    app_config_t *snapshot = malloc(sizeof(app_config_t));
-    if (!snapshot) {
-        return ESP_ERR_NO_MEM;
+    esp_err_t err = config_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
     }
     config_lock();
-    *snapshot = g_config;
+    s_config_scratch = g_config;
     config_unlock();
-    snapshot->web_user_enabled = enabled;
-    memset(&snapshot->web_user, 0, sizeof(snapshot->web_user));
+    s_config_scratch.web_user_enabled = enabled;
+    memset(&s_config_scratch.web_user, 0, sizeof(s_config_scratch.web_user));
     if (enabled) {
-        strncpy(snapshot->web_user.username, username, sizeof(snapshot->web_user.username) - 1);
-        memcpy(snapshot->web_user.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN);
+        strncpy(s_config_scratch.web_user.username, username, sizeof(s_config_scratch.web_user.username) - 1);
+        memcpy(s_config_scratch.web_user.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN);
     }
-    esp_err_t err = config_store_set(snapshot);
-    free(snapshot);
+    err = config_commit_locked(&s_config_scratch, true);
+    config_scratch_unlock();
     return err;
 }

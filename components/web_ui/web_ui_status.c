@@ -84,11 +84,13 @@ esp_err_t status_handler(httpd_req_t *req)
     service_status_entry_t audio_service_status = {0};
     service_status_entry_t web_service_status = {0};
     service_status_entry_t event_bus_status = {0};
+    service_status_entry_t hardware_io_status = {0};
     (void)service_status_get(SERVICE_STATUS_NETWORK, &network_status);
     (void)service_status_get(SERVICE_STATUS_MQTT, &mqtt_status);
     (void)service_status_get(SERVICE_STATUS_AUDIO, &audio_service_status);
     (void)service_status_get(SERVICE_STATUS_WEB_UI, &web_service_status);
     (void)service_status_get(SERVICE_STATUS_EVENT_BUS, &event_bus_status);
+    (void)service_status_get(SERVICE_STATUS_HARDWARE_IO, &hardware_io_status);
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"));
@@ -174,7 +176,8 @@ esp_err_t status_handler(httpd_req_t *req)
     cJSON *svc_audio = cJSON_AddObjectToObject(services, "audio");
     cJSON *svc_web = cJSON_AddObjectToObject(services, "web_ui");
     cJSON *svc_event_bus = cJSON_AddObjectToObject(services, "event_bus");
-    if (!svc_network || !svc_mqtt || !svc_audio || !svc_web || !svc_event_bus) {
+    cJSON *svc_hardware_io = cJSON_AddObjectToObject(services, "hardware_io");
+    if (!svc_network || !svc_mqtt || !svc_audio || !svc_web || !svc_event_bus || !svc_hardware_io) {
         cJSON_Delete(root);
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"));
     }
@@ -182,26 +185,36 @@ esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(svc_network, "init_ok", network_status.init_ok);
     cJSON_AddBoolToObject(svc_network, "start_attempted", network_status.start_attempted);
     cJSON_AddBoolToObject(svc_network, "start_ok", network_status.start_ok);
+    cJSON_AddBoolToObject(svc_network, "fault", network_status.fault);
+    cJSON_AddNumberToObject(svc_network, "last_error", network_status.last_error);
 
     cJSON_AddBoolToObject(svc_mqtt, "init_attempted", mqtt_status.init_attempted);
     cJSON_AddBoolToObject(svc_mqtt, "init_ok", mqtt_status.init_ok);
     cJSON_AddBoolToObject(svc_mqtt, "start_attempted", mqtt_status.start_attempted);
     cJSON_AddBoolToObject(svc_mqtt, "start_ok", mqtt_status.start_ok);
+    cJSON_AddBoolToObject(svc_mqtt, "fault", mqtt_status.fault);
+    cJSON_AddNumberToObject(svc_mqtt, "last_error", mqtt_status.last_error);
 
     cJSON_AddBoolToObject(svc_audio, "init_attempted", audio_service_status.init_attempted);
     cJSON_AddBoolToObject(svc_audio, "init_ok", audio_service_status.init_ok);
     cJSON_AddBoolToObject(svc_audio, "start_attempted", audio_service_status.start_attempted);
     cJSON_AddBoolToObject(svc_audio, "start_ok", audio_service_status.start_ok);
+    cJSON_AddBoolToObject(svc_audio, "fault", audio_service_status.fault);
+    cJSON_AddNumberToObject(svc_audio, "last_error", audio_service_status.last_error);
 
     cJSON_AddBoolToObject(svc_web, "init_attempted", web_service_status.init_attempted);
     cJSON_AddBoolToObject(svc_web, "init_ok", web_service_status.init_ok);
     cJSON_AddBoolToObject(svc_web, "start_attempted", web_service_status.start_attempted);
     cJSON_AddBoolToObject(svc_web, "start_ok", web_service_status.start_ok);
+    cJSON_AddBoolToObject(svc_web, "fault", web_service_status.fault);
+    cJSON_AddNumberToObject(svc_web, "last_error", web_service_status.last_error);
 
     cJSON_AddBoolToObject(svc_event_bus, "init_attempted", event_bus_status.init_attempted);
     cJSON_AddBoolToObject(svc_event_bus, "init_ok", event_bus_status.init_ok);
     cJSON_AddBoolToObject(svc_event_bus, "start_attempted", event_bus_status.start_attempted);
     cJSON_AddBoolToObject(svc_event_bus, "start_ok", event_bus_status.start_ok);
+    cJSON_AddBoolToObject(svc_event_bus, "fault", event_bus_status.fault);
+    cJSON_AddNumberToObject(svc_event_bus, "last_error", event_bus_status.last_error);
     cJSON_AddNumberToObject(svc_event_bus, "event_posted", event_bus_status.event_posted);
     cJSON_AddNumberToObject(svc_event_bus, "event_dispatched", event_bus_status.event_dispatched);
     cJSON_AddNumberToObject(svc_event_bus, "event_dropped", event_bus_status.event_dropped);
@@ -212,6 +225,13 @@ esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(svc_event_bus, "job_dispatched", event_bus_status.event_job_dispatched);
     cJSON_AddNumberToObject(svc_event_bus, "job_dropped", event_bus_status.event_job_dropped);
     cJSON_AddNumberToObject(svc_event_bus, "job_queue_waiting", event_bus_status.event_job_queue_waiting);
+
+    cJSON_AddBoolToObject(svc_hardware_io, "init_attempted", hardware_io_status.init_attempted);
+    cJSON_AddBoolToObject(svc_hardware_io, "init_ok", hardware_io_status.init_ok);
+    cJSON_AddBoolToObject(svc_hardware_io, "start_attempted", hardware_io_status.start_attempted);
+    cJSON_AddBoolToObject(svc_hardware_io, "start_ok", hardware_io_status.start_ok);
+    cJSON_AddBoolToObject(svc_hardware_io, "fault", hardware_io_status.fault);
+    cJSON_AddNumberToObject(svc_hardware_io, "last_error", hardware_io_status.last_error);
 
     return WEB_HTTP_CHECK(web_ui_send_json(req, root));
 }

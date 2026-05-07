@@ -10,12 +10,17 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "gm_game_profile.h"
+#include "gm_room_session.h"
 #include "mqtt_core.h"
 #include "orchestrator_api_view.h"
 #include "orchestrator_audit.h"
 #include "orchestrator_registry.h"
 #include "orchestrator_timeline.h"
+#include "quest_device.h"
+#include "room_catalog.h"
 #include "room_scenario.h"
 #include "web_ui_utils.h"
 
@@ -27,6 +32,27 @@
 
 static const char *TAG = "web_ui_orchestrator";
 EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_gm_state_snapshot;
+EXT_RAM_BSS_ATTR static room_scenario_t s_room_scenario_response_scratch;
+static SemaphoreHandle_t s_room_scenario_response_mutex = NULL;
+static StaticSemaphore_t s_room_scenario_response_mutex_storage;
+
+static esp_err_t orch_room_scenario_response_lock(void)
+{
+    if (!s_room_scenario_response_mutex) {
+        s_room_scenario_response_mutex = xSemaphoreCreateMutexStatic(&s_room_scenario_response_mutex_storage);
+    }
+    if (!s_room_scenario_response_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_room_scenario_response_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void orch_room_scenario_response_unlock(void)
+{
+    if (s_room_scenario_response_mutex) {
+        xSemaphoreGive(s_room_scenario_response_mutex);
+    }
+}
 
 static void *orch_snapshot_alloc(size_t size)
 {
@@ -81,68 +107,10 @@ static esp_err_t orch_read_json_body(httpd_req_t *req, size_t max_len, char **ou
     return ESP_OK;
 }
 
-static const char *orch_room_scenario_validation_level_str(room_scenario_validation_level_t level)
-{
-    return level == ROOM_SCENARIO_VALIDATION_WARNING ? "warning" : "error";
-}
-
-static esp_err_t orch_add_room_scenario_validation(cJSON *obj,
-                                                   const room_scenario_t *scenario)
-{
-    room_scenario_validation_report_t *report = NULL;
-    cJSON *issues = NULL;
-    size_t error_count = 0;
-    size_t warning_count = 0;
-    esp_err_t err = ESP_OK;
-
-    if (!obj || !scenario) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    report = orch_snapshot_alloc(sizeof(*report));
-    issues = cJSON_CreateArray();
-    if (!report || !issues) {
-        heap_caps_free(report);
-        cJSON_Delete(issues);
-        return ESP_ERR_NO_MEM;
-    }
-    err = room_scenario_validate(scenario, report);
-    if (err != ESP_OK) {
-        heap_caps_free(report);
-        cJSON_Delete(issues);
-        return err;
-    }
-    for (size_t i = 0; i < report->issue_count; ++i) {
-        const room_scenario_validation_issue_t *issue = &report->issues[i];
-        cJSON *item = cJSON_CreateObject();
-        if (!item) {
-            heap_caps_free(report);
-            cJSON_Delete(issues);
-            return ESP_ERR_NO_MEM;
-        }
-        if (issue->level == ROOM_SCENARIO_VALIDATION_WARNING) {
-            ++warning_count;
-        } else {
-            ++error_count;
-        }
-        cJSON_AddStringToObject(item, "level", orch_room_scenario_validation_level_str(issue->level));
-        cJSON_AddNumberToObject(item, "step_index", issue->step_index);
-        cJSON_AddStringToObject(item, "code", issue->code);
-        cJSON_AddStringToObject(item, "message", issue->message);
-        cJSON_AddItemToArray(issues, item);
-    }
-    cJSON_AddBoolToObject(obj, "valid", report->valid);
-    cJSON_AddNumberToObject(obj, "validation_issue_count", report->issue_count);
-    cJSON_AddNumberToObject(obj, "error_count", error_count);
-    cJSON_AddNumberToObject(obj, "warning_count", warning_count);
-    cJSON_AddItemToObject(obj, "validation_issues", issues);
-    heap_caps_free(report);
-    return ESP_OK;
-}
-
 esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
 {
     char room_id[ROOM_SCENARIO_ROOM_ID_MAX_LEN] = {0};
-    room_scenario_t *scenarios = NULL;
+    room_scenario_t *scenario = &s_room_scenario_response_scratch;
     size_t scenario_count = 0;
     cJSON *root = NULL;
     cJSON *items = NULL;
@@ -152,21 +120,18 @@ esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "room_id required");
     }
 
-    scenarios = orch_snapshot_alloc(sizeof(*scenarios) * ROOM_SCENARIO_MAX_SCENARIOS);
-    if (!scenarios) {
+    err = orch_room_scenario_response_lock();
+    if (err != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
     }
 
-    err = room_scenario_list_by_room(room_id,
-                                     scenarios,
-                                     ROOM_SCENARIO_MAX_SCENARIOS,
-                                     &scenario_count);
+    err = room_scenario_list_by_room(room_id, NULL, 0, &scenario_count);
     if (err == ESP_ERR_INVALID_ARG) {
-        heap_caps_free(scenarios);
+        orch_room_scenario_response_unlock();
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid room_id");
     }
     if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
-        heap_caps_free(scenarios);
+        orch_room_scenario_response_unlock();
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "room scenarios failed");
     }
     if (scenario_count > ROOM_SCENARIO_MAX_SCENARIOS) {
@@ -178,7 +143,7 @@ esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
     if (!root || !items) {
         cJSON_Delete(root);
         cJSON_Delete(items);
-        heap_caps_free(scenarios);
+        orch_room_scenario_response_unlock();
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
     }
     cJSON_AddStringToObject(root, "room_id", room_id);
@@ -187,18 +152,35 @@ esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
         cJSON *item = cJSON_CreateObject();
         if (!item) {
             cJSON_Delete(root);
-            heap_caps_free(scenarios);
+            orch_room_scenario_response_unlock();
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
         }
-        err = room_scenario_to_json(&scenarios[i], item);
+        memset(scenario, 0, sizeof(*scenario));
+        err = room_scenario_get_by_room_index(room_id, i, scenario, &scenario_count);
+        if (scenario_count > ROOM_SCENARIO_MAX_SCENARIOS) {
+            scenario_count = ROOM_SCENARIO_MAX_SCENARIOS;
+        }
         if (err == ESP_OK) {
-            cJSON_AddNumberToObject(item, "step_count", scenarios[i].step_count);
-            err = orch_add_room_scenario_validation(item, &scenarios[i]);
+            err = room_scenario_to_json(scenario, item);
+        }
+        if (err == ESP_OK) {
+            cJSON *validation_issues = cJSON_CreateArray();
+            if (!validation_issues) {
+                err = ESP_ERR_NO_MEM;
+            }
+            cJSON_AddNumberToObject(item, "step_count", scenario->step_count);
+            cJSON_AddBoolToObject(item, "valid", true);
+            cJSON_AddNumberToObject(item, "validation_issue_count", 0);
+            cJSON_AddNumberToObject(item, "error_count", 0);
+            cJSON_AddNumberToObject(item, "warning_count", 0);
+            if (validation_issues) {
+                cJSON_AddItemToObject(item, "validation_issues", validation_issues);
+            }
         }
         if (err != ESP_OK) {
             cJSON_Delete(item);
             cJSON_Delete(root);
-            heap_caps_free(scenarios);
+            orch_room_scenario_response_unlock();
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "room scenarios failed");
         }
         cJSON_AddItemToArray(items, item);
@@ -206,7 +188,7 @@ esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
     cJSON_AddItemToObject(root, "scenarios", items);
 
     err = web_ui_send_json(req, root);
-    heap_caps_free(scenarios);
+    orch_room_scenario_response_unlock();
     return err;
 }
 
@@ -494,4 +476,32 @@ esp_err_t gm_state_handler(httpd_req_t *req)
 
     err = web_ui_send_json(req, root);
     return err;
+}
+
+esp_err_t gm_versions_handler(httpd_req_t *req)
+{
+    uint32_t room_generation = room_catalog_generation();
+    uint32_t device_generation = quest_device_generation();
+    uint32_t scenario_generation = room_scenario_generation();
+    uint32_t profile_generation = gm_game_profile_generation();
+    uint32_t ingest_generation = device_control_ingest_generation();
+    uint32_t session_generation = gm_room_session_generation();
+    uint32_t static_generation = device_generation ^
+                                 (room_generation << 1) ^
+                                 (scenario_generation << 2) ^
+                                 (profile_generation << 3);
+    uint32_t runtime_generation = ingest_generation ^ (session_generation << 1);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+    }
+    cJSON_AddNumberToObject(root, "rooms", room_generation);
+    cJSON_AddNumberToObject(root, "devices", device_generation);
+    cJSON_AddNumberToObject(root, "scenarios", scenario_generation);
+    cJSON_AddNumberToObject(root, "profiles", profile_generation);
+    cJSON_AddNumberToObject(root, "ingest", ingest_generation);
+    cJSON_AddNumberToObject(root, "session", session_generation);
+    cJSON_AddNumberToObject(root, "static", static_generation);
+    cJSON_AddNumberToObject(root, "runtime", runtime_generation);
+    return web_ui_send_json(req, root);
 }

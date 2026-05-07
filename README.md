@@ -10,6 +10,7 @@ The firmware includes:
 - schema-driven Room Scenario runtime
 - Game Mode/profile selection
 - GM room/session control model
+- local Hardware IO system devices for relay and MOSFET outputs
 - audio playback and background/effect mixing
 - OTA firmware update
 
@@ -21,7 +22,7 @@ The firmware is designed for stand-alone escape room and interactive exhibit set
 - Web UI for status, settings, audio, firmware update and GM entry
 - Role-aware GM panel for operator workflow and admin setup
 - Quest Devices capability model with imported or manually entered commands/events
-- Built-in System Devices such as `system_audio`, exposed through the same command/event model
+- Built-in System Devices such as `system_audio`, `system_relay` and `system_mosfet`, exposed through the same command/event model
 - Schema-driven Room Scenario runtime with validation, normal flow branches, Reactive Branch v2 reactions, device commands, device-event waits, wait-time and operator gates
 - Game Modes that select room scenario, duration and future content packs
 - Room-level and device-level action facades with in-memory audit trail
@@ -46,6 +47,7 @@ The codebase is now split into clear modules:
 - `gm_control` - canonical room action model and execution facade
 - `orchestrator_core` - orchestrator read model, device control facade, audit and event timeline
 - `device_control_ingest` - parses `cp/v1/dev/{id}/{heartbeat|status|diag|result}` into orchestrator-side device control state
+- `hardware_io` - local relay/MOSFET/input/GPIO control, safe-off handling and status snapshots
 - `audio_player` - playback service
 - `sd_storage` - SD card ownership
 - `web_ui` - HTTP/API layer, including stable `orchestrator_api_view` JSON mapping
@@ -89,6 +91,7 @@ Current mapping:
   - `gm_core`
 - `BOOT_OPTIONAL`
   - `audio_player`
+  - `hardware_io`
 
 Current implementation note:
 
@@ -175,6 +178,7 @@ The `/gm` panel is the primary quest console:
 
 - operators can select profiles, start/stop/reset games, watch timers, scenario progress, waits, issues, devices, audit and timeline
 - admins get additional sections for Profiles, Scenarios, Device Setup and Storage
+- admins can test local relay/MOSFET/input/GPIO channels from Hardware IO
 - device setup and scenario/profile editing are admin-only
 - the main admin web surface should stay a lightweight system entry point and utility area
 
@@ -223,6 +227,7 @@ GM/orchestrator API highlights:
 - `GET /api/orchestrator/control/devices` returns observed control-contract devices
 - `POST /api/gm/device/describe-interface` requests a physical client quest interface
 - `GET /api/orchestrator/audit/recent` returns recent action audit entries
+- `GET /api/hardware-io/status` returns local relay/MOSFET/input/GPIO channel status and service availability/fault metadata
 
 ## OTA Update
 
@@ -267,6 +272,9 @@ The current product model is intentionally simple:
 - Room Scenarios are the only place where quest flow is assembled.
 - Game Modes select a room scenario and duration/settings.
 - Built-in orchestrator services, starting with audio, are exposed as System Devices.
+- Local relay and MOSFET outputs are also exposed as System Devices, so scenarios
+  can use the same `DEVICE_COMMAND` path for built-in hardware and external
+  Quest Devices.
 - Gameplay runs through Quest Devices, Room Scenarios, Game Modes and GM Sessions.
 
 `MQTT Interface` is now a capability-import workflow for locally smart/custom devices such as an altar, UID gate, relay controller or timer module. The admin selects an observed client, presses `Get config`, and SceneHub sends `describe_interface`. Returned commands become device command capabilities/manual buttons; returned events become presets for room scenario waits.
@@ -291,6 +299,12 @@ Supported room step types include:
 
 Room scenarios support validation before start, a running-scenario snapshot on start, JSON import/export, and filesystem save/load. This avoids starting broken quest flows and prevents config edits from changing a scenario already in progress.
 
+`END_GAME` finishes the timer/session but does not automatically stop audio or
+turn off local hardware outputs. Use explicit `system_audio.stop`,
+`system_relay.set/off` or `system_mosfet.all_off` steps when a scenario finale
+needs those side effects. `Stop game` and `Reset game` perform hardware safe-off
+for built-in relay/MOSFET/GPIO outputs.
+
 Room scenario branches have two product roles:
 
 - `normal` branches are the quest flow. They can be required for completion and
@@ -307,6 +321,24 @@ Reactive Branch v2 actions currently support device commands, command groups,
 wait-time, set-flag and operator messages. Result-required commands go through
 the command executor: `accepted` keeps the action pending, `done` advances it,
 and `failed`/`rejected`/`timeout` follow the reaction result policy.
+
+For `Same actions` reactions, `Can repeat` keeps `max_fire_count=0`; `Run once`
+sets `max_fire_count=1`.
+
+## Hardware IO
+
+`hardware_io` provides the first local output layer:
+
+- `system_relay`: 4 configurable relay channels with `set`, `pulse` and manual-only `toggle`
+- `system_mosfet`: 4 PWM channels with `set`, `fade`, `pulse` and `all_off`
+
+Pins, relay active-low mode, PWM frequency and max pulse/fade durations are
+configured through `CONFIG_SCENEHUB_*` settings in menuconfig. Disabled channels
+use GPIO `-1`.
+
+Startup initializes outputs in the safe/off state. `Stop game` and `Reset game`
+also force built-in relay/MOSFET/GPIO outputs off. `END_GAME` intentionally does not,
+matching the audio policy: finale cleanup must be explicit scenario behavior.
 
 ### Game Profiles
 
@@ -443,6 +475,7 @@ components/
   quest_common/
   gm_control/
   gm_core/
+  hardware_io/
   error_monitor/
   event_bus/
   mqtt_core/
@@ -471,6 +504,7 @@ main/
 - `docs/gm_api_contract.md` - GM/orchestrator HTTP contracts and JSON formats
 - `docs/gm_panel_ui_plan.md` - operator/admin GM panel direction
 - `docs/device_control_contract_v1.md` - MQTT control contract and interface discovery
+- `docs/HARDWARE_IO_PLAN.md` - local relay/MOSFET/GPIO hardware IO status and roadmap
 - `docs/QUEST_DEVICE_SETUP_RUS.md` - Quest Device setup guide
 - `docs/ROOM_SCENARIO_SETUP_RUS.md` - Room Scenario and Game Mode setup guide
 

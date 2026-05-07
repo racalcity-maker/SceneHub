@@ -3,19 +3,49 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include "audio_player.h"
 #include "gm_api.h"
 #include "gm_timer.h"
 #include "orchestrator_registry.h"
+#include "quest_common_utils.h"
 #include "quest_device.h"
+#include "room_catalog.h"
 #include "room_scenario.h"
 #include "web_ui_utils.h"
 
+#define GM_ROOM_RUNTIME_SCHEMA_VERSION 1
+
 static const char *TAG = "web_ui_gm_scenario";
+static EXT_RAM_BSS_ATTR gm_room_session_t s_runtime_session_scratch;
+static SemaphoreHandle_t s_runtime_scratch_mutex = NULL;
+static StaticSemaphore_t s_runtime_scratch_mutex_storage;
+
+static esp_err_t gm_scenario_runtime_scratch_lock(void)
+{
+    if (!s_runtime_scratch_mutex) {
+        s_runtime_scratch_mutex = xSemaphoreCreateMutexStatic(&s_runtime_scratch_mutex_storage);
+    }
+    if (!s_runtime_scratch_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (xSemaphoreTake(s_runtime_scratch_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+static void gm_scenario_runtime_scratch_unlock(void)
+{
+    if (s_runtime_scratch_mutex) {
+        xSemaphoreGive(s_runtime_scratch_mutex);
+    }
+}
 
 static uint64_t gm_scenario_now_ms(void)
 {
@@ -221,11 +251,7 @@ static void gm_scenario_add_asset_summary(cJSON *root, const room_scenario_t *sc
 
 static void *gm_scenario_body_alloc(size_t size)
 {
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return ptr;
+    return web_ui_calloc(1, size);
 }
 
 static bool gm_scenario_read_query_value(httpd_req_t *req, const char *key, char *out, size_t out_size)
@@ -262,7 +288,7 @@ static esp_err_t gm_scenario_read_body(httpd_req_t *req, char **out_body)
             if (r == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
-            heap_caps_free(body);
+            web_ui_free(body);
             return ESP_FAIL;
         }
         received += (size_t)r;
@@ -289,31 +315,41 @@ static esp_err_t gm_scenario_send_error(httpd_req_t *req, esp_err_t err)
 
 static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *room_id)
 {
-    gm_room_session_t *session = NULL;
+    gm_room_session_t *session = &s_runtime_session_scratch;
     cJSON *root = NULL;
     cJSON *flags = NULL;
     cJSON *wait_events = NULL;
     cJSON *wait_flags = NULL;
     cJSON *branches = NULL;
-    room_scenario_t *asset_scenario_alloc = NULL;
     const room_scenario_t *asset_scenario = NULL;
-    esp_err_t err = ESP_OK;
-    session = gm_scenario_body_alloc(sizeof(*session));
-    if (!session) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+    esp_err_t err = gm_scenario_runtime_scratch_lock();
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "runtime scratch busy");
     }
+    memset(session, 0, sizeof(*session));
     err = gm_api_room_session_get(room_id, session);
     if (err != ESP_OK) {
-        heap_caps_free(session);
-        return gm_scenario_send_error(req, err);
+        if (err != ESP_ERR_NOT_FOUND ||
+            room_catalog_init() != ESP_OK ||
+            !room_catalog_exists(room_id)) {
+            gm_scenario_runtime_scratch_unlock();
+            return gm_scenario_send_error(req, err);
+        }
+        memset(session, 0, sizeof(*session));
+        quest_str_copy(session->room_id, sizeof(session->room_id), room_id);
+        session->state = GM_SESSION_IDLE;
+        session->timer.state = GM_TIMER_IDLE;
+        session->scenario_state = GM_ROOM_SCENARIO_IDLE;
     }
     root = cJSON_CreateObject();
     if (!root) {
-        heap_caps_free(session);
+        gm_scenario_runtime_scratch_unlock();
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
     }
     cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "runtime_schema_version", GM_ROOM_RUNTIME_SCHEMA_VERSION);
     cJSON_AddStringToObject(root, "room_id", session->room_id);
+    cJSON_AddBoolToObject(root, "session_present", session->in_use);
     cJSON_AddStringToObject(root, "session_state", gm_scenario_session_state_str(session->state));
     cJSON_AddStringToObject(root, "timer_state", gm_scenario_timer_state_str(session->timer.state));
     cJSON_AddNumberToObject(root, "timer_duration_ms", session->timer.duration_ms);
@@ -347,7 +383,7 @@ static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *ro
     wait_events = cJSON_CreateArray();
     wait_flags = cJSON_CreateArray();
     if (!wait_events || !wait_flags) {
-        heap_caps_free(session);
+        gm_scenario_runtime_scratch_unlock();
         cJSON_Delete(root);
         cJSON_Delete(wait_events);
         cJSON_Delete(wait_flags);
@@ -356,7 +392,7 @@ static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *ro
     for (uint8_t i = 0; i < session->wait_event_count && i < ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS; ++i) {
         cJSON *event = cJSON_CreateObject();
         if (!event) {
-            heap_caps_free(session);
+            gm_scenario_runtime_scratch_unlock();
             cJSON_Delete(root);
             cJSON_Delete(wait_events);
             cJSON_Delete(wait_flags);
@@ -369,7 +405,7 @@ static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *ro
     for (uint8_t i = 0; i < session->wait_flag_count && i < ROOM_SCENARIO_WAIT_FLAGS_MAX_FLAGS; ++i) {
         cJSON *flag = cJSON_CreateObject();
         if (!flag) {
-            heap_caps_free(session);
+            gm_scenario_runtime_scratch_unlock();
             cJSON_Delete(root);
             cJSON_Delete(wait_events);
             cJSON_Delete(wait_flags);
@@ -394,14 +430,14 @@ static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *ro
     cJSON_AddStringToObject(root, "scenario_operator_message", session->scenario_operator_message);
     flags = cJSON_CreateArray();
     if (!flags) {
-        heap_caps_free(session);
+        gm_scenario_runtime_scratch_unlock();
         cJSON_Delete(root);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
     }
     for (uint8_t i = 0; i < session->scenario_flag_count && i < GM_ROOM_SCENARIO_MAX_FLAGS; ++i) {
         cJSON *flag = cJSON_CreateObject();
         if (!flag) {
-            heap_caps_free(session);
+            gm_scenario_runtime_scratch_unlock();
             cJSON_Delete(root);
             cJSON_Delete(flags);
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
@@ -414,7 +450,7 @@ static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *ro
     cJSON_AddNumberToObject(root, "scenario_flag_count", session->scenario_flag_count);
     branches = cJSON_CreateArray();
     if (!branches) {
-        heap_caps_free(session);
+        gm_scenario_runtime_scratch_unlock();
         cJSON_Delete(root);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
     }
@@ -424,7 +460,7 @@ static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *ro
             (session->running_scenario.branch_count > i) ? &session->running_scenario.branches[i] : NULL;
         cJSON *item = cJSON_CreateObject();
         if (!item) {
-            heap_caps_free(session);
+            gm_scenario_runtime_scratch_unlock();
             cJSON_Delete(root);
             cJSON_Delete(branches);
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
@@ -461,16 +497,9 @@ static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *ro
     cJSON_AddStringToObject(root, "scenario_last_error", session->scenario_last_error);
     if (session->running_scenario_valid) {
         asset_scenario = &session->running_scenario;
-    } else if (session->selected_scenario_id[0]) {
-        asset_scenario_alloc = gm_scenario_body_alloc(sizeof(*asset_scenario_alloc));
-        if (asset_scenario_alloc &&
-            room_scenario_get(session->selected_scenario_id, asset_scenario_alloc) == ESP_OK) {
-            asset_scenario = asset_scenario_alloc;
-        }
     }
     gm_scenario_add_asset_summary(root, asset_scenario);
-    heap_caps_free(asset_scenario_alloc);
-    heap_caps_free(session);
+    gm_scenario_runtime_scratch_unlock();
     return web_ui_send_json(req, root);
 }
 
@@ -515,7 +544,7 @@ esp_err_t gm_room_scenario_select_handler(httpd_req_t *req)
         return gm_scenario_send_error(req, err);
     }
     json = cJSON_Parse(body);
-    heap_caps_free(body);
+    web_ui_free(body);
     if (!json) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json");
     }

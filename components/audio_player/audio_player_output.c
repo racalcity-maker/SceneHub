@@ -6,7 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_check.h"
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "error_monitor.h"
 
@@ -31,6 +31,10 @@ static const char *TAG = "audio_player";
 static i2s_chan_handle_t s_tx_chan = NULL;
 static bool s_tx_enabled = false;
 static SemaphoreHandle_t s_output_lock = NULL;
+static SemaphoreHandle_t s_tone_lock = NULL;
+static portMUX_TYPE s_tone_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static DMA_ATTR int16_t s_silence_buf[AUDIO_SILENCE_FRAMES * AUDIO_CHANNELS];
+static DMA_ATTR int16_t s_tone_buf[256 * AUDIO_CHANNELS];
 
 static esp_err_t output_ensure_lock(void)
 {
@@ -50,6 +54,28 @@ static void output_unlock(void)
     if (s_output_lock) {
         xSemaphoreGive(s_output_lock);
     }
+}
+
+static esp_err_t tone_ensure_lock(void)
+{
+    SemaphoreHandle_t mutex = NULL;
+    if (s_tone_lock) {
+        return ESP_OK;
+    }
+    mutex = xSemaphoreCreateMutex();
+    if (!mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    portENTER_CRITICAL(&s_tone_lock_init_lock);
+    if (!s_tone_lock) {
+        s_tone_lock = mutex;
+        mutex = NULL;
+    }
+    portEXIT_CRITICAL(&s_tone_lock_init_lock);
+    if (mutex) {
+        vSemaphoreDelete(mutex);
+    }
+    return s_tone_lock ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 static esp_err_t output_enable_locked(void)
@@ -83,7 +109,6 @@ static void output_disable_locked(void)
 
 void audio_player_output_drain_silence(int duration_ms)
 {
-    int16_t silence[AUDIO_SILENCE_FRAMES * AUDIO_CHANNELS];
     int remaining_frames = (AUDIO_SAMPLE_RATE * duration_ms) / 1000;
 
     if (!s_tx_chan || duration_ms <= 0) {
@@ -93,11 +118,11 @@ void audio_player_output_drain_silence(int duration_ms)
         return;
     }
 
-    memset(silence, 0, sizeof(silence));
+    memset(s_silence_buf, 0, sizeof(s_silence_buf));
     while (remaining_frames > 0) {
         int frames = remaining_frames > AUDIO_SILENCE_FRAMES ? AUDIO_SILENCE_FRAMES : remaining_frames;
         size_t bytes_written = 0;
-        esp_err_t err = audio_player_output_write(silence,
+        esp_err_t err = audio_player_output_write(s_silence_buf,
                                                   frames * AUDIO_CHANNELS * sizeof(int16_t),
                                                   &bytes_written,
                                                   pdMS_TO_TICKS(100));
@@ -202,10 +227,10 @@ void audio_player_output_play_tone(int freq_hz, int duration_ms, int volume_perc
     }
 
     const int total_samples = (AUDIO_SAMPLE_RATE * duration_ms) / 1000;
-    const int buf_samples = 256;
-    int16_t *buf = heap_caps_malloc(buf_samples * AUDIO_CHANNELS * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    if (!buf) {
-        ESP_LOGE(TAG, "no mem for audio buf");
+    const int buf_samples = sizeof(s_tone_buf) / (AUDIO_CHANNELS * sizeof(s_tone_buf[0]));
+    if (tone_ensure_lock() != ESP_OK ||
+        xSemaphoreTake(s_tone_lock, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "tone buffer lock failed");
         error_monitor_report_audio_fault();
         return;
     }
@@ -226,11 +251,11 @@ void audio_player_output_play_tone(int freq_hz, int duration_ms, int volume_perc
             if (phase > 2.0f * (float)M_PI) {
                 phase -= 2.0f * (float)M_PI;
             }
-            buf[2 * i] = sample;
-            buf[2 * i + 1] = sample;
+            s_tone_buf[2 * i] = sample;
+            s_tone_buf[2 * i + 1] = sample;
         }
         size_t bytes_written = 0;
-        esp_err_t err = audio_player_output_write(buf,
+        esp_err_t err = audio_player_output_write(s_tone_buf,
                                                   chunk * AUDIO_CHANNELS * sizeof(int16_t),
                                                   &bytes_written,
                                                   pdMS_TO_TICKS(1000));
@@ -241,7 +266,7 @@ void audio_player_output_play_tone(int freq_hz, int duration_ms, int volume_perc
         produced += chunk;
     }
 
-    heap_caps_free(buf);
+    xSemaphoreGive(s_tone_lock);
 }
 
 esp_err_t audio_player_output_write(const void *data, size_t len, size_t *bytes_written, TickType_t timeout)

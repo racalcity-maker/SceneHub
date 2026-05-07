@@ -6,9 +6,10 @@
 - `gm_api_contract.md` - GM panel HTTP/API contract.
 - `device_control_contract_v1.md` - SceneHub-native physical device MQTT contract.
 - `COMMAND_EXECUTOR_PLAN.md` - current command executor architecture and remaining backend roadmap.
+- `MEMORY_ALLOCATION_POLICY.md` - runtime/audio allocation policy, audit and cleanup checklist.
 - `reactive_branch_v_2_design.md` - current Reactive Branch v2 contract and runtime rules.
 - `TESTING.md` - test layout and local test guidance.
-- `KNOWN_ISSUES.md` - currently known product/runtime issues.
+- `KNOWN_ISSUES.md` - active and resolved product/runtime issues.
 
 ## Operator/Admin Setup
 
@@ -25,4 +26,3 @@
 ## Assets
 
 - `Pics/` - screenshots used by README and GM panel docs.
-

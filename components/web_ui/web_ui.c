@@ -10,6 +10,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 
+#include "cJSON.h"
 #include "web_ui_utils.h"
 #include "web_ui_handlers.h"
 #include "web_ui_auth.h"
@@ -32,6 +33,20 @@ static bool web_ui_try_begin_httpd_restart(const char *reason);
 static void web_ui_cancel_httpd_restart(void);
 static void web_ui_finish_httpd_restart(void);
 void web_ui_report_httpd_error(esp_err_t err, const char *context);
+
+static void *web_ui_json_malloc(size_t size)
+{
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ptr) {
+        ptr = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    return ptr;
+}
+
+static void web_ui_json_free(void *ptr)
+{
+    heap_caps_free(ptr);
+}
 
 typedef struct {
     const char *uri;
@@ -199,12 +214,14 @@ static esp_err_t register_httpd_routes(void)
         {.uri = "/api/gm/device/save", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_device_save_handler},
         {.uri = "/api/gm/device/delete", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_device_delete_handler},
         {.uri = "/api/gm/device/command/run", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_quest_device_command_run_handler},
+        {.uri = "/api/hardware-io/status", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = hardware_io_status_handler},
         {.uri = "/api/gm/device/describe-interface", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = orchestrator_describe_interface_handler},
         {.uri = "/api/gm/devices/export", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_export_handler},
         {.uri = "/api/gm/devices/import", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_import_handler},
         {.uri = "/api/gm/devices/save", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_save_handler},
         {.uri = "/api/gm/devices/load", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_load_handler},
         {.uri = "/api/gm/state", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_state_handler},
+        {.uri = "/api/gm/versions", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_versions_handler},
         {.uri = "/api/orchestrator/audit/recent", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = orchestrator_audit_recent_handler},
         {.uri = "/api/orchestrator/timeline/recent", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = orchestrator_timeline_recent_handler},
         {.uri = "/api/orchestrator/control/devices", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = orchestrator_control_devices_handler},
@@ -312,6 +329,11 @@ static esp_err_t start_httpd(void)
 
 esp_err_t web_ui_init(void)
 {
+    cJSON_Hooks hooks = {
+        .malloc_fn = web_ui_json_malloc,
+        .free_fn = web_ui_json_free,
+    };
+    cJSON_InitHooks(&hooks);
     ESP_RETURN_ON_ERROR(web_ui_restart_state_init(), TAG, "restart state init failed");
     ESP_RETURN_ON_ERROR(orchestrator_registry_init(), TAG, "orchestrator registry init failed");
     ESP_RETURN_ON_ERROR(orchestrator_timeline_init(), TAG, "orchestrator timeline init failed");

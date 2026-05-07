@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "quest_common_utils.h"
 #include "quest_device.h"
@@ -10,6 +10,7 @@
 #define GM_REACTIVE_V2_MAX_ACTIONS_PER_TICK 8
 
 static const char *TAG = "gm_room_session";
+static EXT_RAM_BSS_ATTR quest_device_t s_reactive_match_device;
 
 static const room_scenario_branch_t *reactive_v2_model_branch(
     const gm_room_session_t *session,
@@ -112,7 +113,7 @@ static bool reactive_v2_event_id_matches(const char *expected,
 static bool reactive_v2_device_event_matches(const room_scenario_branch_t *model,
                                              const event_bus_message_t *message)
 {
-    quest_device_t *device = NULL;
+    quest_device_t *device = &s_reactive_match_device;
     quest_device_event_t event = {0};
     const char *source_id = reactive_v2_event_device_id(message);
     const char *expected_event = model && model->trigger.event_id[0] ? model->trigger.event_id : "";
@@ -121,10 +122,7 @@ static bool reactive_v2_device_event_matches(const room_scenario_branch_t *model
     if (!model || !message || !model->trigger.device_id[0] || !expected_event[0]) {
         return false;
     }
-    device = (quest_device_t *)heap_caps_calloc(1, sizeof(*device), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!device) {
-        device = (quest_device_t *)heap_caps_calloc(1, sizeof(*device), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
+    memset(device, 0, sizeof(*device));
     if (device && quest_device_get(model->trigger.device_id, device) == ESP_OK) {
         source_matches = strcmp(model->trigger.device_id, source_id) == 0 ||
                          strcmp(device->client_id, source_id) == 0;
@@ -137,7 +135,6 @@ static bool reactive_v2_device_event_matches(const room_scenario_branch_t *model
     } else {
         event_matches = reactive_v2_event_id_matches(expected_event, message);
     }
-    heap_caps_free(device);
     return source_matches && event_matches;
 }
 

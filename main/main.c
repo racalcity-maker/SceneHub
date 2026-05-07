@@ -16,6 +16,7 @@
 #include "error_monitor.h"
 #include "ota_manager.h"
 #include "gm_game_profile.h"
+#include "hardware_io.h"
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
@@ -293,6 +294,11 @@ void app_main(void)
 
     if (!audio_ok) {
         error_monitor_report_audio_fault();
+    }
+    ESP_LOGI(TAG, "init hardware_io");
+    bool hardware_io_ok = app_init_optional("hardware_io", SERVICE_STATUS_HARDWARE_IO, hardware_io_init);
+    if (!hardware_io_ok) {
+        ESP_LOGW(TAG, "hardware_io unavailable; web UI and quest runtime will continue");
     }
 
     ESP_LOGI(TAG, "start event_bus");
