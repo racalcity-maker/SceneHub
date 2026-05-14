@@ -15,6 +15,10 @@
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
+#include "../../../components/gm_core/session/gm_room_session_commands_internal.h"
+#include "../../../components/gm_core/session/gm_room_session_internal.h"
+#include "../../../components/gm_core/session/gm_room_session_projection_internal.h"
+#include "../../../components/gm_core/session/gm_room_session_reactive_internal.h"
 
 EXT_RAM_BSS_ATTR static room_scenario_t s_scenario;
 EXT_RAM_BSS_ATTR static room_scenario_t s_updated_scenario;
@@ -101,6 +105,19 @@ static void add_device_with_events(void)
     test_copy(device.events[3].label, sizeof(device.events[3].label), "UID sequence invalid");
     test_copy(device.events[3].capability, sizeof(device.events[3].capability), "uid");
     test_copy(device.events[3].event, sizeof(device.events[3].event), "uid.sequence_invalid");
+
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&device));
+
+    memset(&device, 0, sizeof(device));
+    test_copy(device.id, sizeof(device.id), "motion");
+    test_copy(device.client_id, sizeof(device.client_id), "motion");
+    test_copy(device.name, sizeof(device.name), "Motion");
+    device.enabled = true;
+    device.event_count = 1;
+    test_copy(device.events[0].id, sizeof(device.events[0].id), "motion.detected");
+    test_copy(device.events[0].label, sizeof(device.events[0].label), "Motion detected");
+    test_copy(device.events[0].capability, sizeof(device.events[0].capability), "sensor");
+    test_copy(device.events[0].event, sizeof(device.events[0].event), "motion.detected");
 
     TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&device));
 }
@@ -207,9 +224,9 @@ static void configure_wait_flag(room_scenario_step_t *step,
 
 static void post_text_event(const char *payload)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_DEVICE_CONTROL;
-    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
+    scenehub_event_t message = {0};
+    message.type = SCENEHUB_EVENT_DEVICE_CONTROL;
+    message.payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL;
     test_copy(message.payload, sizeof(message.payload), payload);
     test_copy(message.data.device_control.device_id,
               sizeof(message.data.device_control.device_id),
@@ -225,9 +242,9 @@ static void post_text_event(const char *payload)
 
 static esp_err_t post_device_control_event_expect(const char *device_id, const char *action_id)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_DEVICE_CONTROL;
-    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
+    scenehub_event_t message = {0};
+    message.type = SCENEHUB_EVENT_DEVICE_CONTROL;
+    message.payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL;
     test_copy(message.payload, sizeof(message.payload), action_id);
     test_copy(message.data.device_control.device_id,
               sizeof(message.data.device_control.device_id),
@@ -243,9 +260,9 @@ static esp_err_t post_device_control_event_expect(const char *device_id, const c
 
 static esp_err_t post_text_event_expect_err(const char *payload)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_DEVICE_CONTROL;
-    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
+    scenehub_event_t message = {0};
+    message.type = SCENEHUB_EVENT_DEVICE_CONTROL;
+    message.payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL;
     test_copy(message.payload, sizeof(message.payload), payload);
     test_copy(message.data.device_control.device_id,
               sizeof(message.data.device_control.device_id),
@@ -261,9 +278,9 @@ static esp_err_t post_text_event_expect_err(const char *payload)
 
 static void post_command_result(const char *request_id, const char *status)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_DEVICE_CONTROL;
-    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
+    scenehub_event_t message = {0};
+    message.type = SCENEHUB_EVENT_DEVICE_CONTROL;
+    message.payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL;
     test_copy(message.payload, sizeof(message.payload), status);
     test_copy(message.data.device_control.device_id,
               sizeof(message.data.device_control.device_id),
@@ -279,28 +296,16 @@ static void post_command_result(const char *request_id, const char *status)
 
 static esp_err_t post_flag_changed_expect(const char *flag_name)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_FLAG_CHANGED;
-    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
-    test_copy(message.topic, sizeof(message.topic), flag_name);
-    test_copy(message.payload, sizeof(message.payload), flag_name);
-    test_copy(message.data.device_control.device_id,
-              sizeof(message.data.device_control.device_id),
-              "room_a");
-    test_copy(message.data.device_control.action_id,
-              sizeof(message.data.device_control.action_id),
-              flag_name);
-    test_copy(message.data.device_control.source,
-              sizeof(message.data.device_control.source),
-              "true");
+    scenehub_event_t message = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, scenehub_event_make_flag_changed(&message, flag_name, true));
     return gm_room_session_scenario_on_event(&message);
 }
 
 static esp_err_t post_operator_event_expect(const char *event_id)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_WEB_COMMAND;
-    message.payload_type = EVENT_BUS_PAYLOAD_TEXT;
+    scenehub_event_t message = {0};
+    message.type = SCENEHUB_EVENT_WEB_COMMAND;
+    message.payload_type = SCENEHUB_EVENT_PAYLOAD_TEXT;
     test_copy(message.topic, sizeof(message.topic), "operator");
     test_copy(message.payload, sizeof(message.payload), event_id);
     return gm_room_session_scenario_on_event(&message);
@@ -308,9 +313,9 @@ static esp_err_t post_operator_event_expect(const char *event_id)
 
 static esp_err_t post_runtime_event_expect(const char *event_id)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_RUNTIME_CONTROL;
-    message.payload_type = EVENT_BUS_PAYLOAD_TEXT;
+    scenehub_event_t message = {0};
+    message.type = SCENEHUB_EVENT_RUNTIME_CONTROL;
+    message.payload_type = SCENEHUB_EVENT_PAYLOAD_TEXT;
     test_copy(message.topic, sizeof(message.topic), "runtime");
     test_copy(message.payload, sizeof(message.payload), event_id);
     return gm_room_session_scenario_on_event(&message);
@@ -327,6 +332,129 @@ static void get_session(const char *room_id)
 {
     memset(&s_session, 0, sizeof(s_session));
     TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get(room_id, &s_session));
+}
+
+static void prepare_pending_dispatch_plan(const char *room_id,
+                                          gm_room_session_command_plan_t *out_plan)
+{
+    gm_room_session_t *session = NULL;
+    gm_room_scenario_branch_runtime_t *branch = NULL;
+    room_scenario_step_t *step = NULL;
+
+    TEST_ASSERT_NOT_NULL(out_plan);
+    memset(out_plan, 0, sizeof(*out_plan));
+
+    session_test_bootstrap();
+    add_room(room_id);
+    add_device_with_events();
+    init_scenario(&s_scenario, "scenario_dispatch_pending", room_id, "Dispatch pending");
+
+    step = add_step(&s_scenario, "pulse", "Pulse relay", ROOM_SCENARIO_STEP_DEVICE_COMMAND);
+    test_copy(step->data.device_command.device_id,
+              sizeof(step->data.device_command.device_id),
+              "relay");
+    test_copy(step->data.device_command.command_id,
+              sizeof(step->data.device_command.command_id),
+              "pulse");
+    step = add_step(&s_scenario, "done", "Done", ROOM_SCENARIO_STEP_SET_FLAG);
+    configure_set_flag(step, "done", true);
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_sessions_lock());
+    session = alloc_session_locked(room_id);
+    TEST_ASSERT_NOT_NULL(session);
+    session->state = GM_SESSION_RUNNING;
+    session->running_scenario = s_scenario;
+    session->running_scenario_valid = true;
+    session->scenario_state = GM_ROOM_SCENARIO_RUNNING;
+    session->current_step_index = 0;
+    scenario_clear_branch_runtimes_locked(session);
+    scenario_clear_flags_locked(session);
+    TEST_ASSERT_EQUAL(ESP_OK, scenario_init_branch_runtimes_locked(session));
+    TEST_ASSERT_TRUE(session->branch_runtime_count > 0);
+    branch = &session->branch_runtimes[0];
+    gm_room_session_scenario_branch_load_into_session(session, branch);
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      gm_room_session_plan_scenario_command_locked(
+                          session,
+                          0,
+                          &session->running_scenario.steps[0].data.device_command,
+                          gm_room_session_scenario_now_ms(),
+                          out_plan));
+    gm_room_session_scenario_branch_save_from_session(branch, session);
+    gm_room_session_scenario_update_summary_from_branches_locked(session);
+    gm_room_session_sessions_unlock();
+
+    TEST_ASSERT_TRUE(gm_room_session_command_plan_present(out_plan));
+}
+
+static void prepare_pending_reactive_dispatch_plan(const char *room_id,
+                                                   gm_room_session_command_plan_t *out_plan)
+{
+    gm_room_session_t *session = NULL;
+    gm_room_scenario_branch_runtime_t *branch = NULL;
+    room_scenario_step_t *step = NULL;
+    room_scenario_branch_t *model_branch = NULL;
+    room_scenario_reactive_variant_t *variant = NULL;
+    room_scenario_reactive_action_t *action = NULL;
+
+    TEST_ASSERT_NOT_NULL(out_plan);
+    memset(out_plan, 0, sizeof(*out_plan));
+
+    session_test_bootstrap();
+    add_room(room_id);
+    add_device_with_events();
+    init_scenario(&s_scenario, "scenario_reactive_dispatch_pending", room_id, "Reactive dispatch pending");
+
+    step = add_step(&s_scenario, "main_wait", "Main wait", ROOM_SCENARIO_STEP_WAIT_TIME);
+    step->data.wait_time.duration_ms = 60000;
+    set_branch(&s_scenario, 0, "main", "Main", ROOM_SCENARIO_BRANCH_NORMAL, 0, 1);
+
+    set_branch(&s_scenario, 1, "rx_dispatch", "Reactive dispatch", ROOM_SCENARIO_BRANCH_REACTIVE, 1, 0);
+    model_branch = &s_scenario.branches[1];
+    model_branch->trigger.kind = ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT;
+    test_copy(model_branch->trigger.device_id, sizeof(model_branch->trigger.device_id), "motion");
+    test_copy(model_branch->trigger.event_id, sizeof(model_branch->trigger.event_id), "motion.detected");
+    model_branch->variant_start_index = 0;
+    model_branch->variant_count = 1;
+
+    s_scenario.reactive_variant_count = 1;
+    variant = &s_scenario.reactive_variants[0];
+    test_copy(variant->id, sizeof(variant->id), "command");
+    variant->action_start_index = 0;
+    variant->action_count = 1;
+
+    s_scenario.reactive_action_count = 1;
+    action = &s_scenario.reactive_actions[0];
+    action->type = ROOM_SCENARIO_STEP_DEVICE_COMMAND;
+    test_copy(action->data.device_command.device_id,
+              sizeof(action->data.device_command.device_id),
+              "relay");
+    test_copy(action->data.device_command.command_id,
+              sizeof(action->data.device_command.command_id),
+              "pulse");
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_sessions_lock());
+    session = alloc_session_locked(room_id);
+    TEST_ASSERT_NOT_NULL(session);
+    session->state = GM_SESSION_RUNNING;
+    session->running_scenario = s_scenario;
+    session->running_scenario_valid = true;
+    session->scenario_state = GM_ROOM_SCENARIO_RUNNING;
+    session->current_step_index = 0;
+    scenario_clear_branch_runtimes_locked(session);
+    scenario_clear_flags_locked(session);
+    TEST_ASSERT_EQUAL(ESP_OK, scenario_init_branch_runtimes_locked(session));
+    TEST_ASSERT_TRUE(session->branch_runtime_count > 1);
+    branch = &session->branch_runtimes[1];
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      gm_room_session_reactive_v2_fire_locked(session,
+                                                              branch,
+                                                              gm_room_session_scenario_now_ms(),
+                                                              out_plan));
+    gm_room_session_scenario_update_summary_from_branches_locked(session);
+    gm_room_session_sessions_unlock();
+
+    TEST_ASSERT_TRUE(gm_room_session_command_plan_present(out_plan));
 }
 
 static int find_flag(const gm_room_session_t *session, const char *name)
@@ -527,7 +655,7 @@ static void test_device_command_result_timeout_fails_step(void)
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT, s_session.branch_runtimes[0].wait_type);
 
     vTaskDelay(pdMS_TO_TICKS(20));
-    gm_room_session_scenario_tick();
+    gm_room_session_runtime_process_pending_work();
     get_session("room_a");
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_ERROR, s_session.branch_runtimes[0].scenario_state);
     TEST_ASSERT_EQUAL(-1, find_flag(&s_session, "command_done"));
@@ -582,7 +710,7 @@ static void test_flags_are_shared_between_branches(void)
     TEST_ASSERT_TRUE(find_flag(&s_session, "branch_b_done") >= 0);
     TEST_ASSERT_EQUAL(-1, find_flag(&s_session, "main_unlocked"));
 
-    gm_room_session_scenario_tick();
+    gm_room_session_runtime_process_pending_work();
     get_session("room_a");
     TEST_ASSERT_TRUE(find_flag(&s_session, "main_unlocked") >= 0);
 }
@@ -689,6 +817,7 @@ static void test_reactive_v2_device_event_runs_variant_actions(void)
 
     session_test_bootstrap();
     add_room("room_a");
+    add_device_with_events();
     init_scenario(&s_scenario, "scenario_reactive_v2", "room_a", "Reactive v2");
 
     step = add_step(&s_scenario, "activate", "Activate", ROOM_SCENARIO_STEP_SET_FLAG);
@@ -1142,13 +1271,21 @@ static void test_reactive_v2_queue_one_replays_after_active_reaction(void)
     TEST_ASSERT_EQUAL(ESP_OK, post_device_control_event_expect("motion", "motion.detected"));
     get_session("room_a");
     TEST_ASSERT_TRUE(s_session.branch_runtimes[1].pending_trigger);
-    TEST_ASSERT_EQUAL_UINT32(0, s_session.branch_runtimes[1].fire_count);
+    TEST_ASSERT_EQUAL_UINT32(1, s_session.branch_runtimes[1].fire_count);
 
     vTaskDelay(pdMS_TO_TICKS(5));
-    gm_room_session_scenario_tick();
+    gm_room_session_runtime_process_pending_work();
     get_session("room_a");
     TEST_ASSERT_FALSE(s_session.branch_runtimes[1].pending_trigger);
     TEST_ASSERT_EQUAL_UINT32(2, s_session.branch_runtimes[1].fire_count);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_NONE, s_session.branch_runtimes[1].wait_type);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_session.branch_runtimes[1].scenario_state);
+
+    vTaskDelay(pdMS_TO_TICKS(5));
+    gm_room_session_runtime_process_pending_work();
+    get_session("room_a");
+    TEST_ASSERT_EQUAL_UINT32(2, s_session.branch_runtimes[1].fire_count);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_NONE, s_session.branch_runtimes[1].wait_type);
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_session.branch_runtimes[1].scenario_state);
 }
 
@@ -1680,7 +1817,7 @@ static void test_wait_device_event_timeout_continues_and_sets_message(void)
 
     add_and_start_selected_scenario("room_a");
     vTaskDelay(pdMS_TO_TICKS(20));
-    gm_room_session_scenario_tick();
+    gm_room_session_runtime_process_pending_work();
 
     get_session("room_a");
     TEST_ASSERT_TRUE(find_flag(&s_session, "event_timeout_done") >= 0);
@@ -1706,7 +1843,7 @@ static void test_wait_flags_timeout_continues_and_sets_message(void)
 
     add_and_start_selected_scenario("room_a");
     vTaskDelay(pdMS_TO_TICKS(20));
-    gm_room_session_scenario_tick();
+    gm_room_session_runtime_process_pending_work();
 
     get_session("room_a");
     TEST_ASSERT_TRUE(find_flag(&s_session, "flags_timeout_done") >= 0);
@@ -1811,6 +1948,133 @@ static void test_repeated_stop_while_waiting_is_idempotent(void)
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_STOPPED, s_session.scenario_state);
     TEST_ASSERT_EQUAL(0, s_session.branch_runtime_count);
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_NONE, s_session.wait_type);
+}
+
+static void test_dispatch_planned_command_after_scenario_reset_is_noop(void)
+{
+    gm_room_session_command_plan_t plan = {0};
+
+    prepare_pending_dispatch_plan("room_a", &plan);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_scenario_reset("room_a"));
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_dispatch_planned_command(&plan));
+    TEST_ASSERT_FALSE(gm_room_session_command_plan_present(&plan));
+
+    get_session("room_a");
+    TEST_ASSERT_FALSE(s_session.running_scenario_valid);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_IDLE, s_session.scenario_state);
+    TEST_ASSERT_EQUAL_UINT8(0, s_session.branch_runtime_count);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_NONE, s_session.wait_type);
+}
+
+static void test_dispatch_planned_command_after_scenario_stop_is_noop(void)
+{
+    gm_room_session_command_plan_t plan = {0};
+
+    prepare_pending_dispatch_plan("room_a", &plan);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_scenario_stop("room_a"));
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_dispatch_planned_command(&plan));
+    TEST_ASSERT_FALSE(gm_room_session_command_plan_present(&plan));
+
+    get_session("room_a");
+    TEST_ASSERT_FALSE(s_session.running_scenario_valid);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_STOPPED, s_session.scenario_state);
+    TEST_ASSERT_EQUAL_UINT8(0, s_session.branch_runtime_count);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_NONE, s_session.wait_type);
+}
+
+static void test_dispatch_planned_command_after_step_desync_is_noop(void)
+{
+    gm_room_session_command_plan_t plan = {0};
+    gm_room_session_t *session = NULL;
+    gm_room_scenario_branch_runtime_t *branch = NULL;
+
+    prepare_pending_dispatch_plan("room_a", &plan);
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_sessions_lock());
+    session = find_session_mutable_locked("room_a");
+    TEST_ASSERT_NOT_NULL(session);
+    TEST_ASSERT_TRUE(session->branch_runtime_count > 0);
+    branch = &session->branch_runtimes[0];
+    gm_room_session_scenario_branch_load_into_session(session, branch);
+    session->current_step_index = 1;
+    session->scenario_state = GM_ROOM_SCENARIO_WAITING;
+    session->wait_type = GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT;
+    test_copy(session->wait_event_type,
+              sizeof(session->wait_event_type),
+              "__dispatch_pending__");
+    gm_room_session_scenario_branch_save_from_session(branch, session);
+    gm_room_session_sessions_unlock();
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_dispatch_planned_command(&plan));
+    TEST_ASSERT_FALSE(gm_room_session_command_plan_present(&plan));
+
+    get_session("room_a");
+    TEST_ASSERT_TRUE(s_session.running_scenario_valid);
+    TEST_ASSERT_EQUAL_UINT8(1, s_session.branch_runtimes[0].current_step_index);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT,
+                      s_session.branch_runtimes[0].wait_type);
+    TEST_ASSERT_EQUAL_STRING("__dispatch_pending__",
+                             s_session.branch_runtimes[0].wait_event_type);
+}
+
+static void test_dispatch_planned_reactive_command_after_scenario_reset_is_noop(void)
+{
+    gm_room_session_command_plan_t plan = {0};
+
+    prepare_pending_reactive_dispatch_plan("room_a", &plan);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_scenario_reset("room_a"));
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_dispatch_planned_command(&plan));
+    TEST_ASSERT_FALSE(gm_room_session_command_plan_present(&plan));
+
+    get_session("room_a");
+    TEST_ASSERT_FALSE(s_session.running_scenario_valid);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_IDLE, s_session.scenario_state);
+    TEST_ASSERT_EQUAL_UINT8(0, s_session.branch_runtime_count);
+}
+
+static void test_dispatch_planned_reactive_command_after_scenario_stop_is_noop(void)
+{
+    gm_room_session_command_plan_t plan = {0};
+
+    prepare_pending_reactive_dispatch_plan("room_a", &plan);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_scenario_stop("room_a"));
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_dispatch_planned_command(&plan));
+    TEST_ASSERT_FALSE(gm_room_session_command_plan_present(&plan));
+
+    get_session("room_a");
+    TEST_ASSERT_FALSE(s_session.running_scenario_valid);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_STOPPED, s_session.scenario_state);
+    TEST_ASSERT_EQUAL_UINT8(0, s_session.branch_runtime_count);
+}
+
+static void test_dispatch_planned_reactive_command_after_action_desync_is_noop(void)
+{
+    gm_room_session_command_plan_t plan = {0};
+    gm_room_session_t *session = NULL;
+
+    prepare_pending_reactive_dispatch_plan("room_a", &plan);
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_sessions_lock());
+    session = find_session_mutable_locked("room_a");
+    TEST_ASSERT_NOT_NULL(session);
+    TEST_ASSERT_TRUE(session->branch_runtime_count > 1);
+    session->branch_runtimes[1].reactive_current_action = 1;
+    gm_room_session_sessions_unlock();
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_dispatch_planned_command(&plan));
+    TEST_ASSERT_FALSE(gm_room_session_command_plan_present(&plan));
+
+    get_session("room_a");
+    TEST_ASSERT_TRUE(s_session.running_scenario_valid);
+    TEST_ASSERT_EQUAL_UINT8(1, s_session.branch_runtimes[1].reactive_current_action);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT,
+                      s_session.branch_runtimes[1].wait_type);
+    TEST_ASSERT_EQUAL_STRING("__dispatch_pending__",
+                             s_session.branch_runtimes[1].wait_event_type);
 }
 
 static void test_repeated_start_restarts_runtime_cleanly(void)
@@ -1972,6 +2236,97 @@ static void test_audio_set_volume_requires_volume_param(void)
                                                              "{}"));
 }
 
+static void test_room_session_describe_runtime_prefers_flow_progress_and_wait_summary(void)
+{
+    gm_room_scenario_runtime_semantics_t summary = {0};
+
+    memset(&s_session, 0, sizeof(s_session));
+    s_session.running_scenario_valid = true;
+    s_session.running_scenario.step_count = 3;
+    test_copy(s_session.running_scenario.steps[0].label,
+              sizeof(s_session.running_scenario.steps[0].label),
+              "Open relay");
+    test_copy(s_session.running_scenario.steps[1].label,
+              sizeof(s_session.running_scenario.steps[1].label),
+              "Watch door");
+    test_copy(s_session.running_scenario.steps[2].label,
+              sizeof(s_session.running_scenario.steps[2].label),
+              "Reaction");
+    s_session.scenario_state = GM_ROOM_SCENARIO_WAITING;
+    s_session.current_step_index = 1;
+    s_session.wait_type = GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT;
+    test_copy(s_session.wait_source_id, sizeof(s_session.wait_source_id), "relay");
+    test_copy(s_session.wait_event_type, sizeof(s_session.wait_event_type), "door_opened");
+    s_session.branch_runtime_count = 2;
+    s_session.branch_runtimes[0].type = ROOM_SCENARIO_BRANCH_NORMAL;
+    s_session.branch_runtimes[0].step_start_index = 0;
+    s_session.branch_runtimes[0].step_count = 2;
+    s_session.branch_runtimes[0].current_step_index = 1;
+    s_session.branch_runtimes[0].scenario_state = GM_ROOM_SCENARIO_WAITING;
+    s_session.branch_runtimes[1].type = ROOM_SCENARIO_BRANCH_REACTIVE;
+    s_session.branch_runtimes[1].step_start_index = 2;
+    s_session.branch_runtimes[1].step_count = 1;
+    s_session.branch_runtimes[1].current_step_index = 2;
+    s_session.branch_runtimes[1].scenario_state = GM_ROOM_SCENARIO_RUNNING;
+
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_describe_runtime(&s_session, &summary));
+    TEST_ASSERT_EQUAL_UINT16(2, summary.total_steps);
+    TEST_ASSERT_EQUAL_UINT16(1, summary.done_steps);
+    TEST_ASSERT_EQUAL_STRING("Watch door", summary.current_step_text);
+    TEST_ASSERT_EQUAL_STRING("relay: door_opened", summary.wait_summary);
+}
+
+static void test_room_session_describe_branch_runtime_reports_error_step_and_skip_label(void)
+{
+    gm_room_scenario_branch_semantics_t summary = {0};
+
+    memset(&s_session, 0, sizeof(s_session));
+    s_session.running_scenario_valid = true;
+    s_session.running_scenario.step_count = 3;
+    test_copy(s_session.running_scenario.steps[2].label,
+              sizeof(s_session.running_scenario.steps[2].label),
+              "Final lock");
+    s_session.running_scenario.steps[2].allow_operator_skip = true;
+    test_copy(s_session.running_scenario.steps[2].operator_skip_label,
+              sizeof(s_session.running_scenario.steps[2].operator_skip_label),
+              "Skip lock");
+    s_session.branch_runtime_count = 1;
+    s_session.branch_runtimes[0].type = ROOM_SCENARIO_BRANCH_NORMAL;
+    s_session.branch_runtimes[0].step_start_index = 1;
+    s_session.branch_runtimes[0].step_count = 2;
+    s_session.branch_runtimes[0].current_step_index = 2;
+    s_session.branch_runtimes[0].scenario_state = GM_ROOM_SCENARIO_WAITING;
+    s_session.branch_runtimes[0].wait_type = GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT;
+    test_copy(s_session.branch_runtimes[0].wait_source_id,
+              sizeof(s_session.branch_runtimes[0].wait_source_id),
+              "relay");
+    test_copy(s_session.branch_runtimes[0].wait_event_type,
+              sizeof(s_session.branch_runtimes[0].wait_event_type),
+              "door_opened");
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      gm_room_session_describe_branch_runtime(&s_session,
+                                                             &s_session.branch_runtimes[0],
+                                                             &summary));
+    TEST_ASSERT_EQUAL_UINT16(1, summary.current_local_step_index);
+    TEST_ASSERT_EQUAL_UINT16(1, summary.done_steps);
+    TEST_ASSERT_EQUAL_UINT16(2, summary.total_steps);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_STEP_STATE_WAITING, summary.current_step_state);
+    TEST_ASSERT_EQUAL_INT16(-1, summary.failed_step_index);
+    TEST_ASSERT_EQUAL_STRING("Final lock", summary.current_step_text);
+    TEST_ASSERT_EQUAL_STRING("relay: door_opened", summary.wait_summary);
+    TEST_ASSERT_TRUE(summary.wait_operator_skip_allowed);
+    TEST_ASSERT_EQUAL_STRING("Skip lock", summary.wait_operator_skip_label);
+
+    s_session.branch_runtimes[0].scenario_state = GM_ROOM_SCENARIO_ERROR;
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      gm_room_session_describe_branch_runtime(&s_session,
+                                                             &s_session.branch_runtimes[0],
+                                                             &summary));
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_STEP_STATE_ERROR, summary.current_step_state);
+    TEST_ASSERT_EQUAL_INT16(1, summary.failed_step_index);
+}
+
 void register_gm_room_session_tests(void)
 {
     RUN_TEST(test_wait_any_device_event_advances_on_one_matching_event);
@@ -2011,6 +2366,12 @@ void register_gm_room_session_tests(void)
     RUN_TEST(test_duplicate_matching_event_after_advance_is_ignored);
     RUN_TEST(test_repeated_reset_while_waiting_is_idempotent);
     RUN_TEST(test_repeated_stop_while_waiting_is_idempotent);
+    RUN_TEST(test_dispatch_planned_command_after_scenario_reset_is_noop);
+    RUN_TEST(test_dispatch_planned_command_after_scenario_stop_is_noop);
+    RUN_TEST(test_dispatch_planned_command_after_step_desync_is_noop);
+    RUN_TEST(test_dispatch_planned_reactive_command_after_scenario_reset_is_noop);
+    RUN_TEST(test_dispatch_planned_reactive_command_after_scenario_stop_is_noop);
+    RUN_TEST(test_dispatch_planned_reactive_command_after_action_desync_is_noop);
     RUN_TEST(test_repeated_start_restarts_runtime_cleanly);
     RUN_TEST(test_next_on_done_scenario_returns_invalid_state);
     RUN_TEST(test_end_game_freezes_timer_remaining);
@@ -2021,4 +2382,6 @@ void register_gm_room_session_tests(void)
     RUN_TEST(test_audio_play_rejects_empty_file_param);
     RUN_TEST(test_audio_play_rejects_unknown_channel);
     RUN_TEST(test_audio_set_volume_requires_volume_param);
+    RUN_TEST(test_room_session_describe_runtime_prefers_flow_progress_and_wait_summary);
+    RUN_TEST(test_room_session_describe_branch_runtime_reports_error_step_and_skip_label);
 }

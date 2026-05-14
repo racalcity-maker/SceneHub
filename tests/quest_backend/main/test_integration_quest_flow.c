@@ -219,9 +219,9 @@ static void flow_add_pack(void)
 
 static void flow_post_text_event(const char *payload)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_DEVICE_CONTROL;
-    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
+    scenehub_event_t message = {0};
+    message.type = SCENEHUB_EVENT_DEVICE_CONTROL;
+    message.payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL;
     flow_copy(message.payload, sizeof(message.payload), payload);
     flow_copy(message.data.device_control.device_id,
               sizeof(message.data.device_control.device_id),
@@ -237,9 +237,9 @@ static void flow_post_text_event(const char *payload)
 
 static esp_err_t flow_post_text_event_expect_err(const char *payload)
 {
-    event_bus_message_t message = {0};
-    message.type = EVENT_DEVICE_CONTROL;
-    message.payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
+    scenehub_event_t message = {0};
+    message.type = SCENEHUB_EVENT_DEVICE_CONTROL;
+    message.payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL;
     flow_copy(message.payload, sizeof(message.payload), payload);
     flow_copy(message.data.device_control.device_id,
               sizeof(message.data.device_control.device_id),

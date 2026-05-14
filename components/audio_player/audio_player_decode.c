@@ -28,10 +28,10 @@ static void post_audio_finished(const char *path)
     if (!path || !path[0]) {
         return;
     }
-    event_bus_message_t msg = {0};
-    msg.type = EVENT_AUDIO_FINISHED;
-    strncpy(msg.payload, path, sizeof(msg.payload) - 1);
-    msg.payload[sizeof(msg.payload) - 1] = 0;
+    scenehub_event_t msg = {0};
+    if (scenehub_event_make_text(&msg, SCENEHUB_EVENT_AUDIO_FINISHED, NULL, path) != ESP_OK) {
+        return;
+    }
     for (int attempt = 0; attempt < AUDIO_FINISHED_POST_RETRIES; ++attempt) {
         esp_err_t err = event_bus_post(&msg, pdMS_TO_TICKS(AUDIO_FINISHED_POST_WAIT_MS));
         if (err == ESP_OK) {

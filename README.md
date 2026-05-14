@@ -432,10 +432,13 @@ Current design:
 - drop counters and slow-handler counters exposed through `/api/status`
 
 GM room scenario event matching uses its own value-copy queue of
-`event_bus_message_t`, so scenario event handling does not allocate/free heap
+`scenehub_event_t`, so scenario event handling does not allocate/free heap
 memory on every device event.
 
-Handlers should stay short. Work that can block, publish MQTT, scan runtime state or trigger scenario logic should be deferred with `event_bus_post_job()`.
+Handlers should stay short and act as adapters only. Work that can block,
+publish MQTT, scan runtime state, build snapshots, parse large payloads or
+trigger scenario logic should be deferred with `event_bus_post_job()` or moved
+into the receiving component task/queue.
 
 ## Status and Fault Monitoring
 
@@ -500,6 +503,7 @@ main/
 
 ## Documentation
 
+- `docs/README.md` - index of current firmware and desktop documentation
 - `docs/ARCHITECTURE.md` - module boundaries and layered design
 - `docs/gm_api_contract.md` - GM/orchestrator HTTP contracts and JSON formats
 - `docs/gm_panel_ui_plan.md` - operator/admin GM panel direction

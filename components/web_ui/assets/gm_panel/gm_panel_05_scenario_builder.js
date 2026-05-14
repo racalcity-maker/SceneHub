@@ -47,7 +47,9 @@ return event&&(event.label||event.id)||eventId||'event';
 function scenarioEditorSource(){
 const roomId=scenarioEditor.room_id;
 let source=null;
-if(scenarioEditor.draft&&scenarioEditor.draft.room_id===roomId)source=JSON.parse(JSON.stringify(scenarioEditor.draft));
+if(scenarioEditor.draft&&
+   scenarioEditor.draft.room_id===roomId&&
+   String(scenarioEditor.draft.id||'')===String(scenarioEditor.scenario_id||''))source=JSON.parse(JSON.stringify(scenarioEditor.draft));
 else{
 const editing=roomScenarios(roomId).find(s=>s.id===scenarioEditor.scenario_id)||null;
 source=scenarioEditableJson(editing,roomId);

@@ -99,7 +99,7 @@ static void handle_client(void *param)
             }
             break;
         case 12:
-            send_pingresp(sess->sock);
+            send_pingresp(sess);
             break;
         case 14:
             sess->suppress_will = true;

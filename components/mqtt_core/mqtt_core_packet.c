@@ -1,6 +1,5 @@
 #include "mqtt_core_internal.h"
 
-#include <errno.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -46,6 +45,21 @@ int send_all(int sock, const uint8_t *buf, size_t len)
         sent += (size_t)r;
     }
     return (int)sent;
+}
+
+static int send_all_session_locked(mqtt_session_t *sess, const uint8_t *buf, size_t len)
+{
+    if (!sess || sess->sock < 0 || !buf) {
+        return -1;
+    }
+    if (sess->tx_lock) {
+        xSemaphoreTake(sess->tx_lock, portMAX_DELAY);
+    }
+    int rc = send_all(sess->sock, buf, len);
+    if (sess->tx_lock) {
+        xSemaphoreGive(sess->tx_lock);
+    }
+    return rc;
 }
 
 int read_remaining_length(int sock, int *out_rem)
@@ -97,25 +111,127 @@ int send_suback(mqtt_session_t *sess, uint16_t pid, uint8_t *qos, size_t count)
     for (size_t i = 0; i < count; ++i) {
         buf[idx++] = qos[i];
     }
-    return send_all(sess->sock, buf, idx);
+    return send_all_session_locked(sess, buf, idx);
 }
 
-int send_puback(int sock, uint16_t pid)
+int send_puback(mqtt_session_t *sess, uint16_t pid)
 {
     uint8_t buf[4] = {0x40, 0x02, (uint8_t)(pid >> 8), (uint8_t)(pid & 0xFF)};
-    return send_all(sock, buf, sizeof(buf));
+    return send_all_session_locked(sess, buf, sizeof(buf));
 }
 
-int send_unsuback(int sock, uint16_t pid)
+int send_unsuback(mqtt_session_t *sess, uint16_t pid)
 {
     uint8_t buf[4] = {0xB0, 0x02, (uint8_t)(pid >> 8), (uint8_t)(pid & 0xFF)};
-    return send_all(sock, buf, sizeof(buf));
+    return send_all_session_locked(sess, buf, sizeof(buf));
 }
 
-int send_pingresp(int sock)
+int send_pingresp(mqtt_session_t *sess)
 {
     uint8_t buf[2] = {0xD0, 0x00};
-    return send_all(sock, buf, sizeof(buf));
+    return send_all_session_locked(sess, buf, sizeof(buf));
+}
+
+int send_publish_packet_to_sock(int sock,
+                                const char *topic,
+                                const char *payload,
+                                uint8_t qos,
+                                bool retain,
+                                uint16_t pid)
+{
+    if (sock < 0 || !topic || !payload) {
+        return -1;
+    }
+    size_t topic_len = strlen(topic);
+    size_t payload_len = strlen(payload);
+    if (topic_len > UINT16_MAX) {
+        ESP_LOGW(TAG, "publish topic too long (%zu)", topic_len);
+        return -1;
+    }
+    size_t rem_len = 2 + topic_len + payload_len + (qos ? 2 : 0);
+    if (rem_len > MQTT_MAX_PACKET) {
+        ESP_LOGW(TAG, "publish payload too large (%zu)", rem_len);
+        return -1;
+    }
+
+    uint8_t fixed[1 + 4 + 2 + 2] = {0};
+    uint8_t rem_enc[4] = {0};
+    size_t rem_enc_len = encode_remaining_length(rem_enc, rem_len);
+    size_t idx = 0;
+    if (rem_enc_len == 0 || (1 + rem_enc_len + 2 + (qos ? 2 : 0)) > sizeof(fixed)) {
+        ESP_LOGW(TAG, "publish fixed header exceeds buffer");
+        return -1;
+    }
+    fixed[idx++] = 0x30 | (qos << 1) | (retain ? 0x01 : 0x00);
+    memcpy(&fixed[idx], rem_enc, rem_enc_len);
+    idx += rem_enc_len;
+    fixed[idx++] = (uint8_t)(topic_len >> 8);
+    fixed[idx++] = (uint8_t)(topic_len & 0xFF);
+    if (send_all(sock, fixed, idx) < 0) {
+        return -1;
+    }
+    if (topic_len > 0 && send_all(sock, (const uint8_t *)topic, topic_len) < 0) {
+        return -1;
+    }
+    if (qos) {
+        uint8_t pid_buf[2] = {
+            (uint8_t)(pid >> 8),
+            (uint8_t)(pid & 0xFF),
+        };
+        if (send_all(sock, pid_buf, sizeof(pid_buf)) < 0) {
+            return -1;
+        }
+    }
+    if (payload_len > 0 && send_all(sock, (const uint8_t *)payload, payload_len) < 0) {
+        return -1;
+    }
+    return (int)(1 + rem_enc_len + rem_len);
+}
+
+int send_publish_packet_to_session_slot(size_t slot,
+                                        int sock,
+                                        const char *client_id,
+                                        const char *topic,
+                                        const char *payload,
+                                        uint8_t qos,
+                                        bool retain,
+                                        uint16_t pid)
+{
+    SemaphoreHandle_t tx_lock = NULL;
+    if (!s_sessions || slot >= MQTT_MAX_CLIENTS || sock < 0) {
+        return -1;
+    }
+    lock();
+    mqtt_session_t *sess = &s_sessions[slot];
+    if (!sess->active || sess->closing || sess->sock != sock) {
+        unlock();
+        return -1;
+    }
+    tx_lock = sess->tx_lock;
+    unlock();
+
+    if (tx_lock) {
+        xSemaphoreTake(tx_lock, portMAX_DELAY);
+    }
+    lock();
+    sess = &s_sessions[slot];
+    if (!sess->active || sess->closing || sess->sock != sock) {
+        unlock();
+        if (tx_lock) {
+            xSemaphoreGive(tx_lock);
+        }
+        return -1;
+    }
+    unlock();
+
+    int rc = send_publish_packet_to_sock(sock, topic, payload, qos, retain, pid);
+    if (tx_lock) {
+        xSemaphoreGive(tx_lock);
+    }
+    if (rc < 0) {
+        request_session_close_if_current(slot, sock, client_id, "publish send failed", 0);
+    }
+    return rc;
 }
 
 int send_publish_packet(mqtt_session_t *sess, const char *topic, const char *payload, uint8_t qos, bool retain, uint16_t pid)
@@ -164,11 +280,5 @@ int send_publish_packet(mqtt_session_t *sess, const char *topic, const char *pay
     }
     memcpy(&buf[idx], payload, payload_len);
     idx += payload_len;
-    int sent = send_all(sess->sock, buf, idx);
-    if (sent < 0) {
-        int err = errno;
-        request_session_close(sess, "publish send failed", err);
-        return -1;
-    }
-    return sent;
+    return send_all_session_locked(sess, buf, idx);
 }

@@ -212,7 +212,7 @@ static void start_mdns(const char *hostname)
         ESP_LOGW(TAG, "mDNS http service add failed: %s", esp_err_to_name(err));
     }
     int mqtt_port = (cfg && cfg->mqtt.port > 0) ? cfg->mqtt.port : 1883;
-    err = mdns_service_add("Broker MQTT", "_mqtt", "_tcp", mqtt_port, NULL, 0);
+    err = mdns_service_add("SceneHub MQTT", "_mqtt", "_tcp", mqtt_port, NULL, 0);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "mDNS mqtt service add failed: %s", esp_err_to_name(err));
     }

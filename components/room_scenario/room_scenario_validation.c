@@ -1,42 +1,8 @@
 #include "room_scenario_internal.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-
-#include "esp_attr.h"
-#include "esp_heap_caps.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-#include "quest_device.h"
-
-static EXT_RAM_BSS_ATTR quest_device_t s_validation_device;
-static EXT_RAM_BSS_ATTR quest_device_command_t s_validation_command;
-static EXT_RAM_BSS_ATTR quest_device_event_t s_validation_event;
-static SemaphoreHandle_t s_validation_scratch_mutex = NULL;
-static StaticSemaphore_t s_validation_scratch_mutex_storage;
-static portMUX_TYPE s_validation_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
-
-static esp_err_t validation_scratch_lock(void)
-{
-    if (!s_validation_scratch_mutex) {
-        portENTER_CRITICAL(&s_validation_scratch_mutex_init_lock);
-        if (!s_validation_scratch_mutex) {
-            s_validation_scratch_mutex = xSemaphoreCreateMutexStatic(&s_validation_scratch_mutex_storage);
-        }
-        portEXIT_CRITICAL(&s_validation_scratch_mutex_init_lock);
-        if (!s_validation_scratch_mutex) {
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    return xSemaphoreTake(s_validation_scratch_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
-}
-
-static void validation_scratch_unlock(void)
-{
-    if (s_validation_scratch_mutex) {
-        xSemaphoreGive(s_validation_scratch_mutex);
-    }
-}
 
 static bool room_scenario_valid_device_command(const room_scenario_device_command_t *command)
 {
@@ -399,14 +365,12 @@ static void validation_add_issue(room_scenario_validation_report_t *report,
     snprintf(issue->message, sizeof(issue->message), "%s", message ? message : "");
 }
 
-static void validation_check_device_command_payload(const room_scenario_device_command_t *command_payload,
-                                                    uint16_t step_index,
-                                                    const char *step_name,
-                                                    room_scenario_validation_report_t *report)
+static void validation_check_device_command_payload_static(const room_scenario_device_command_t *command_payload,
+                                                           uint16_t step_index,
+                                                           const char *step_name,
+                                                           room_scenario_validation_report_t *report)
 {
     char message[ROOM_SCENARIO_VALIDATION_MESSAGE_MAX_LEN] = {0};
-    quest_device_t *device = &s_validation_device;
-    quest_device_command_t *command = &s_validation_command;
     const char *name = step_name && step_name[0] ? step_name : "DEVICE_COMMAND";
     if (!command_payload || !command_payload->device_id[0]) {
         snprintf(message, sizeof(message), "%s has empty device_id", name);
@@ -424,105 +388,43 @@ static void validation_check_device_command_payload(const room_scenario_device_c
                              step_index,
                              "DEVICE_COMMAND_ID_EMPTY",
                              message);
-        return;
     }
-    esp_err_t err = validation_scratch_lock();
-    if (err != ESP_OK) {
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "VALIDATION_SCRATCH_UNAVAILABLE",
-                             "Validation scratch is unavailable");
-        return;
-    }
-    memset(device, 0, sizeof(*device));
-    memset(command, 0, sizeof(*command));
-    err = quest_device_get(command_payload->device_id, device);
-    if (err == ESP_ERR_NOT_FOUND) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Quest device '%s' not found",
-                 command_payload->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "QUEST_DEVICE_NOT_FOUND",
-                             message);
-        return;
-    }
-    if (err != ESP_OK) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Quest device '%s' is unavailable",
-                 command_payload->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "QUEST_DEVICE_UNAVAILABLE",
-                             message);
-        return;
-    }
-    if (!device->enabled) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Quest device '%s' is disabled",
-                 command_payload->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "QUEST_DEVICE_DISABLED",
-                             message);
-        return;
-    }
-    err = quest_device_get_command(command_payload->device_id,
-                                   command_payload->command_id,
-                                   command);
-    if (err == ESP_ERR_NOT_FOUND) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Command '%s' not found on quest device '%s'",
-                 command_payload->command_id,
-                 command_payload->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "DEVICE_COMMAND_NOT_FOUND",
-                             message);
-        return;
-    }
-    if (err != ESP_OK) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Quest device '%s' is unavailable",
-                 command_payload->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "QUEST_DEVICE_UNAVAILABLE",
-                             message);
-        return;
-    }
-    validation_scratch_unlock();
 }
 
-static void validation_check_device_command_step(const room_scenario_step_t *step,
-                                                 uint16_t step_index,
-                                                 room_scenario_validation_report_t *report)
+static void validation_check_device_command_payload_runtime(const room_scenario_device_command_t *command_payload,
+                                                            uint16_t step_index,
+                                                            const char *step_name,
+                                                            room_scenario_validation_report_t *report)
 {
-    validation_check_device_command_payload(&step->data.device_command,
-                                            step_index,
-                                            "DEVICE_COMMAND",
-                                            report);
+    (void)command_payload;
+    (void)step_index;
+    (void)step_name;
+    (void)report;
 }
 
-static void validation_check_device_command_group_step(const room_scenario_step_t *step,
-                                                       uint16_t step_index,
-                                                       room_scenario_validation_report_t *report)
+static void validation_check_device_command_step_static(const room_scenario_step_t *step,
+                                                        uint16_t step_index,
+                                                        room_scenario_validation_report_t *report)
+{
+    validation_check_device_command_payload_static(&step->data.device_command,
+                                                   step_index,
+                                                   "DEVICE_COMMAND",
+                                                   report);
+}
+
+static void validation_check_device_command_step_runtime(const room_scenario_step_t *step,
+                                                         uint16_t step_index,
+                                                         room_scenario_validation_report_t *report)
+{
+    validation_check_device_command_payload_runtime(&step->data.device_command,
+                                                    step_index,
+                                                    "DEVICE_COMMAND",
+                                                    report);
+}
+
+static void validation_check_device_command_group_step_static(const room_scenario_step_t *step,
+                                                              uint16_t step_index,
+                                                              room_scenario_validation_report_t *report)
 {
     if (step->data.device_command_group.command_count == 0) {
         validation_add_issue(report,
@@ -552,21 +454,42 @@ static void validation_check_device_command_group_step(const room_scenario_step_
                  sizeof(command.command_id),
                  "%s",
                  step->data.device_command_group.commands[i].command_id);
-        validation_check_device_command_payload(&command,
-                                                step_index,
-                                                name,
-                                                report);
+        validation_check_device_command_payload_static(&command, step_index, name, report);
     }
 }
 
-static void validation_check_wait_device_event_payload(const room_scenario_wait_device_event_t *wait,
-                                                       uint16_t step_index,
-                                                       const char *step_name,
-                                                       room_scenario_validation_report_t *report)
+static void validation_check_device_command_group_step_runtime(const room_scenario_step_t *step,
+                                                               uint16_t step_index,
+                                                               room_scenario_validation_report_t *report)
+{
+    for (uint8_t i = 0; i < step->data.device_command_group.command_count &&
+                        i < ROOM_SCENARIO_COMMAND_GROUP_MAX_COMMANDS;
+         ++i) {
+        char name[32] = {0};
+        room_scenario_device_command_t command = {0};
+        snprintf(name, sizeof(name), "GROUP_COMMAND_%u", (unsigned)(i + 1));
+        snprintf(command.device_id,
+                 sizeof(command.device_id),
+                 "%s",
+                 step->data.device_command_group.commands[i].device_id);
+        snprintf(command.command_id,
+                 sizeof(command.command_id),
+                 "%s",
+                 step->data.device_command_group.commands[i].command_id);
+        snprintf(command.params_json,
+                 sizeof(command.params_json),
+                 "%s",
+                 step->data.device_command_group.commands[i].params_json);
+        validation_check_device_command_payload_runtime(&command, step_index, name, report);
+    }
+}
+
+static void validation_check_wait_device_event_payload_static(const room_scenario_wait_device_event_t *wait,
+                                                              uint16_t step_index,
+                                                              const char *step_name,
+                                                              room_scenario_validation_report_t *report)
 {
     char message[ROOM_SCENARIO_VALIDATION_MESSAGE_MAX_LEN] = {0};
-    quest_device_t *device = &s_validation_device;
-    quest_device_event_t *event = &s_validation_event;
     const char *name = step_name && step_name[0] ? step_name : "WAIT_DEVICE_EVENT";
     if (!wait || !wait->device_id[0]) {
         snprintf(message, sizeof(message), "%s has empty device_id", name);
@@ -584,105 +507,43 @@ static void validation_check_wait_device_event_payload(const room_scenario_wait_
                              step_index,
                              "DEVICE_EVENT_ID_EMPTY",
                              message);
-        return;
     }
-    esp_err_t err = validation_scratch_lock();
-    if (err != ESP_OK) {
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "VALIDATION_SCRATCH_UNAVAILABLE",
-                             "Validation scratch is unavailable");
-        return;
-    }
-    memset(device, 0, sizeof(*device));
-    memset(event, 0, sizeof(*event));
-    err = quest_device_get(wait->device_id, device);
-    if (err == ESP_ERR_NOT_FOUND) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Quest device '%s' not found",
-                 wait->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "QUEST_DEVICE_NOT_FOUND",
-                             message);
-        return;
-    }
-    if (err != ESP_OK) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Quest device '%s' is unavailable",
-                 wait->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "QUEST_DEVICE_UNAVAILABLE",
-                             message);
-        return;
-    }
-    if (!device->enabled) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Quest device '%s' is disabled",
-                 wait->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "QUEST_DEVICE_DISABLED",
-                             message);
-        return;
-    }
-    err = quest_device_get_event(wait->device_id,
-                                 wait->event_id,
-                                 event);
-    if (err == ESP_ERR_NOT_FOUND) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Event '%s' not found on quest device '%s'",
-                 wait->event_id,
-                 wait->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "DEVICE_EVENT_NOT_FOUND",
-                             message);
-        return;
-    }
-    if (err != ESP_OK) {
-        validation_scratch_unlock();
-        snprintf(message,
-                 sizeof(message),
-                 "Quest device '%s' is unavailable",
-                 wait->device_id);
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             step_index,
-                             "QUEST_DEVICE_UNAVAILABLE",
-                             message);
-        return;
-    }
-    validation_scratch_unlock();
 }
 
-static void validation_check_wait_device_event_step(const room_scenario_step_t *step,
-                                                    uint16_t step_index,
-                                                    room_scenario_validation_report_t *report)
+static void validation_check_wait_device_event_payload_runtime(const room_scenario_wait_device_event_t *wait,
+                                                               uint16_t step_index,
+                                                               const char *step_name,
+                                                               room_scenario_validation_report_t *report)
 {
-    validation_check_wait_device_event_payload(&step->data.wait_device_event,
-                                               step_index,
-                                               "WAIT_DEVICE_EVENT",
-                                               report);
+    (void)wait;
+    (void)step_index;
+    (void)step_name;
+    (void)report;
 }
 
-static void validation_check_wait_any_device_event_step(const room_scenario_step_t *step,
-                                                        uint16_t step_index,
-                                                        room_scenario_validation_report_t *report)
+static void validation_check_wait_device_event_step_static(const room_scenario_step_t *step,
+                                                           uint16_t step_index,
+                                                           room_scenario_validation_report_t *report)
+{
+    validation_check_wait_device_event_payload_static(&step->data.wait_device_event,
+                                                      step_index,
+                                                      "WAIT_DEVICE_EVENT",
+                                                      report);
+}
+
+static void validation_check_wait_device_event_step_runtime(const room_scenario_step_t *step,
+                                                            uint16_t step_index,
+                                                            room_scenario_validation_report_t *report)
+{
+    validation_check_wait_device_event_payload_runtime(&step->data.wait_device_event,
+                                                       step_index,
+                                                       "WAIT_DEVICE_EVENT",
+                                                       report);
+}
+
+static void validation_check_wait_any_device_event_step_static(const room_scenario_step_t *step,
+                                                               uint16_t step_index,
+                                                               room_scenario_validation_report_t *report)
 {
     if (step->data.wait_any_device_event.event_count == 0) {
         validation_add_issue(report,
@@ -703,16 +564,32 @@ static void validation_check_wait_any_device_event_step(const room_scenario_step
     for (uint8_t i = 0; i < step->data.wait_any_device_event.event_count; ++i) {
         char name[40] = {0};
         snprintf(name, sizeof(name), "WAIT_ANY_EVENT_%u", (unsigned)(i + 1));
-        validation_check_wait_device_event_payload(&step->data.wait_any_device_event.events[i],
-                                                   step_index,
-                                                   name,
-                                                   report);
+        validation_check_wait_device_event_payload_static(&step->data.wait_any_device_event.events[i],
+                                                          step_index,
+                                                          name,
+                                                          report);
     }
 }
 
-static void validation_check_wait_all_device_events_step(const room_scenario_step_t *step,
-                                                         uint16_t step_index,
-                                                         room_scenario_validation_report_t *report)
+static void validation_check_wait_any_device_event_step_runtime(const room_scenario_step_t *step,
+                                                                uint16_t step_index,
+                                                                room_scenario_validation_report_t *report)
+{
+    for (uint8_t i = 0; i < step->data.wait_any_device_event.event_count &&
+                        i < ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS;
+         ++i) {
+        char name[40] = {0};
+        snprintf(name, sizeof(name), "WAIT_ANY_EVENT_%u", (unsigned)(i + 1));
+        validation_check_wait_device_event_payload_runtime(&step->data.wait_any_device_event.events[i],
+                                                           step_index,
+                                                           name,
+                                                           report);
+    }
+}
+
+static void validation_check_wait_all_device_events_step_static(const room_scenario_step_t *step,
+                                                                uint16_t step_index,
+                                                                room_scenario_validation_report_t *report)
 {
     if (step->data.wait_all_device_events.event_count == 0) {
         validation_add_issue(report,
@@ -733,36 +610,45 @@ static void validation_check_wait_all_device_events_step(const room_scenario_ste
     for (uint8_t i = 0; i < step->data.wait_all_device_events.event_count; ++i) {
         char name[40] = {0};
         snprintf(name, sizeof(name), "WAIT_ALL_EVENT_%u", (unsigned)(i + 1));
-        validation_check_wait_device_event_payload(&step->data.wait_all_device_events.events[i],
-                                                   step_index,
-                                                   name,
-                                                   report);
+        validation_check_wait_device_event_payload_static(&step->data.wait_all_device_events.events[i],
+                                                          step_index,
+                                                          name,
+                                                          report);
     }
 }
 
-static void validation_check_reactive_action_v2(const room_scenario_t *scenario,
-                                                const room_scenario_reactive_action_t *action,
-                                                uint16_t branch_step_index,
-                                                room_scenario_validation_report_t *report)
+static void validation_check_wait_all_device_events_step_runtime(const room_scenario_step_t *step,
+                                                                 uint16_t step_index,
+                                                                 room_scenario_validation_report_t *report)
+{
+    for (uint8_t i = 0; i < step->data.wait_all_device_events.event_count &&
+                        i < ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS;
+         ++i) {
+        char name[40] = {0};
+        snprintf(name, sizeof(name), "WAIT_ALL_EVENT_%u", (unsigned)(i + 1));
+        validation_check_wait_device_event_payload_runtime(&step->data.wait_all_device_events.events[i],
+                                                           step_index,
+                                                           name,
+                                                           report);
+    }
+}
+
+static void validation_check_reactive_action_v2_static(const room_scenario_t *scenario,
+                                                       const room_scenario_reactive_action_t *action,
+                                                       uint16_t branch_step_index,
+                                                       room_scenario_validation_report_t *report)
 {
     if (!scenario || !action || !report) {
         return;
     }
     switch (action->type) {
     case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
-        validation_check_device_command_payload(&action->data.device_command,
-                                                branch_step_index,
-                                                "REACTIVE_DEVICE_COMMAND",
-                                                report);
+        validation_check_device_command_payload_static(&action->data.device_command,
+                                                       branch_step_index,
+                                                       "REACTIVE_DEVICE_COMMAND",
+                                                       report);
         break;
     case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP:
-        if (action->group_mode == ROOM_SCENARIO_COMMAND_GROUP_PARALLEL) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_WARNING,
-                                 branch_step_index,
-                                 "REACTIVE_GROUP_PARALLEL_UNSUPPORTED",
-                                 "Reactive DEVICE_COMMAND_GROUP parallel mode is reserved for future runtime support");
-        }
         if (action->group_command_count == 0 ||
             (size_t)action->group_command_start_index + action->group_command_count >
                 scenario->reactive_group_command_count) {
@@ -774,7 +660,7 @@ static void validation_check_reactive_action_v2(const room_scenario_t *scenario,
             return;
         }
         for (uint8_t i = 0; i < action->group_command_count; ++i) {
-            validation_check_device_command_payload(
+            validation_check_device_command_payload_static(
                 &scenario->reactive_group_commands[action->group_command_start_index + i],
                 branch_step_index,
                 "REACTIVE_GROUP_COMMAND",
@@ -818,9 +704,34 @@ static void validation_check_reactive_action_v2(const room_scenario_t *scenario,
     }
 }
 
-static void validation_check_reactive_branch_v2(const room_scenario_t *scenario,
-                                                const room_scenario_branch_t *branch,
-                                                room_scenario_validation_report_t *report)
+static void validation_check_reactive_action_v2_runtime(const room_scenario_t *scenario,
+                                                        const room_scenario_reactive_action_t *action,
+                                                        uint16_t branch_step_index,
+                                                        room_scenario_validation_report_t *report)
+{
+    if (!scenario || !action || !report) {
+        return;
+    }
+    switch (action->type) {
+    case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
+        break;
+    case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP:
+        if (action->group_mode == ROOM_SCENARIO_COMMAND_GROUP_PARALLEL) {
+            validation_add_issue(report,
+                                 ROOM_SCENARIO_VALIDATION_WARNING,
+                                 branch_step_index,
+                                 "REACTIVE_GROUP_PARALLEL_UNSUPPORTED",
+                                 "Reactive DEVICE_COMMAND_GROUP parallel mode is reserved for future runtime support");
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+static void validation_check_reactive_branch_v2_static(const room_scenario_t *scenario,
+                                                       const room_scenario_branch_t *branch,
+                                                       room_scenario_validation_report_t *report)
 {
     uint16_t branch_step_index = branch ? branch->step_start_index : 0;
     if (!scenario || !branch || !report) {
@@ -873,7 +784,7 @@ static void validation_check_reactive_branch_v2(const room_scenario_t *scenario,
             continue;
         }
         for (uint8_t action_index = 0; action_index < variant->action_count; ++action_index) {
-            validation_check_reactive_action_v2(
+            validation_check_reactive_action_v2_static(
                 scenario,
                 &scenario->reactive_actions[variant->action_start_index + action_index],
                 branch_step_index,
@@ -890,13 +801,44 @@ static void validation_check_reactive_branch_v2(const room_scenario_t *scenario,
     }
 }
 
-esp_err_t room_scenario_validate(const room_scenario_t *scenario,
-                                 room_scenario_validation_report_t *out)
+static void validation_check_reactive_branch_v2_runtime(const room_scenario_t *scenario,
+                                                        const room_scenario_branch_t *branch,
+                                                        room_scenario_validation_report_t *report)
 {
-    if (!out) {
-        return ESP_ERR_INVALID_ARG;
+    uint16_t branch_step_index = branch ? branch->step_start_index : 0;
+    if (!scenario || !branch || !report) {
+        return;
     }
-    validation_report_init(out);
+    for (uint8_t i = 0;
+         i < branch->variant_count &&
+         (size_t)branch->variant_start_index + i < scenario->reactive_variant_count;
+         ++i) {
+        const room_scenario_reactive_variant_t *variant =
+            &scenario->reactive_variants[branch->variant_start_index + i];
+        for (uint8_t action_index = 0;
+             action_index < variant->action_count &&
+             (size_t)variant->action_start_index + action_index < scenario->reactive_action_count;
+             ++action_index) {
+            validation_check_reactive_action_v2_runtime(
+                scenario,
+                &scenario->reactive_actions[variant->action_start_index + action_index],
+                branch_step_index,
+                report);
+        }
+    }
+    if (branch->reentry_mode == ROOM_SCENARIO_REENTRY_RESTART ||
+        branch->reentry_mode == ROOM_SCENARIO_REENTRY_PARALLEL) {
+        validation_add_issue(report,
+                             ROOM_SCENARIO_VALIDATION_WARNING,
+                             branch_step_index,
+                             "REACTIVE_REENTRY_UNSUPPORTED",
+                             "Reactive branch reentry mode is reserved for future runtime support");
+    }
+}
+
+static esp_err_t room_scenario_validate_static_report(const room_scenario_t *scenario,
+                                                      room_scenario_validation_report_t *out)
+{
     if (!scenario) {
         validation_add_issue(out,
                              ROOM_SCENARIO_VALIDATION_ERROR,
@@ -986,7 +928,7 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
                                      "Reactive branch is ignored for scenario completion");
             }
             if (branch->variant_count > 0 || branch->trigger.kind != ROOM_SCENARIO_REACTIVE_TRIGGER_NONE) {
-                validation_check_reactive_branch_v2(scenario, branch, out);
+                validation_check_reactive_branch_v2_static(scenario, branch, out);
             } else if (!room_scenario_branch_first_step(scenario, branch, &first_step)) {
                 validation_add_issue(out,
                                      ROOM_SCENARIO_VALIDATION_ERROR,
@@ -1008,14 +950,6 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
                                      branch->step_start_index,
                                      "REACTIVE_FLAGS_NEEDS_GUARD",
                                      "Reactive branch triggered by flags must run once or have cooldown");
-            }
-            if (branch->reentry_mode == ROOM_SCENARIO_REENTRY_RESTART ||
-                branch->reentry_mode == ROOM_SCENARIO_REENTRY_PARALLEL) {
-                validation_add_issue(out,
-                                     ROOM_SCENARIO_VALIDATION_WARNING,
-                                     branch->step_start_index,
-                                     "REACTIVE_REENTRY_UNSUPPORTED",
-                                     "Reactive branch reentry mode is reserved for future runtime support");
             }
         }
     }
@@ -1076,13 +1010,13 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
             }
             break;
         case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
-            validation_check_device_command_step(step, step_index, out);
+            validation_check_device_command_step_static(step, step_index, out);
             break;
         case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT:
-            validation_check_wait_device_event_step(step, step_index, out);
+            validation_check_wait_device_event_step_static(step, step_index, out);
             break;
         case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP:
-            validation_check_device_command_group_step(step, step_index, out);
+            validation_check_device_command_group_step_static(step, step_index, out);
             break;
         case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
             if (!step->data.operator_message.message[0]) {
@@ -1131,10 +1065,10 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
             }
             break;
         case ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT:
-            validation_check_wait_any_device_event_step(step, step_index, out);
+            validation_check_wait_any_device_event_step_static(step, step_index, out);
             break;
         case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
-            validation_check_wait_all_device_events_step(step, step_index, out);
+            validation_check_wait_all_device_events_step_static(step, step_index, out);
             break;
         case ROOM_SCENARIO_STEP_END_GAME:
             break;
@@ -1145,27 +1079,105 @@ esp_err_t room_scenario_validate(const room_scenario_t *scenario,
     return ESP_OK;
 }
 
+static esp_err_t room_scenario_validate_runtime_report(const room_scenario_t *scenario,
+                                                       room_scenario_validation_report_t *out)
+{
+    if (!scenario) {
+        validation_add_issue(out,
+                             ROOM_SCENARIO_VALIDATION_ERROR,
+                             0,
+                             "SCENARIO_NULL",
+                             "Scenario is null");
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < scenario->branch_count; ++i) {
+        const room_scenario_branch_t *branch = &scenario->branches[i];
+        if (branch->type == ROOM_SCENARIO_BRANCH_REACTIVE &&
+            (branch->variant_count > 0 || branch->trigger.kind != ROOM_SCENARIO_REACTIVE_TRIGGER_NONE)) {
+            validation_check_reactive_branch_v2_runtime(scenario, branch, out);
+        }
+    }
+    for (size_t i = 0; i < scenario->step_count; ++i) {
+        const room_scenario_step_t *step = &scenario->steps[i];
+        uint16_t step_index = (uint16_t)i;
+        switch (step->type) {
+        case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
+            validation_check_device_command_step_runtime(step, step_index, out);
+            break;
+        case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT:
+            validation_check_wait_device_event_step_runtime(step, step_index, out);
+            break;
+        case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP:
+            validation_check_device_command_group_step_runtime(step, step_index, out);
+            break;
+        case ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT:
+            validation_check_wait_any_device_event_step_runtime(step, step_index, out);
+            break;
+        case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
+            validation_check_wait_all_device_events_step_runtime(step, step_index, out);
+            break;
+        default:
+            break;
+        }
+    }
+    return ESP_OK;
+}
+
+esp_err_t room_scenario_validate_static(const room_scenario_t *scenario,
+                                        room_scenario_validation_report_t *out)
+{
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    validation_report_init(out);
+    return room_scenario_validate_static_report(scenario, out);
+}
+
+esp_err_t room_scenario_validate_runtime(const room_scenario_t *scenario,
+                                         room_scenario_validation_report_t *out)
+{
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    validation_report_init(out);
+    return room_scenario_validate_runtime_report(scenario, out);
+}
+
+esp_err_t room_scenario_validate(const room_scenario_t *scenario,
+                                 room_scenario_validation_report_t *out)
+{
+    esp_err_t err = ESP_OK;
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    validation_report_init(out);
+    err = room_scenario_validate_static_report(scenario, out);
+    if (err != ESP_OK || !out->valid) {
+        return err;
+    }
+    return room_scenario_validate_runtime_report(scenario, out);
+}
+
 esp_err_t room_scenario_validate_by_id(const char *scenario_id,
                                        room_scenario_validation_report_t *out)
 {
     room_scenario_t *scenario = NULL;
     esp_err_t err = ESP_OK;
+
     if (!scenario_id || !scenario_id[0] || !out) {
         return ESP_ERR_INVALID_ARG;
     }
-    scenario = heap_caps_calloc(1, sizeof(*scenario), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!scenario) {
-        scenario = heap_caps_calloc(1, sizeof(*scenario), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    err = room_scenario_acquire_scratch(&scenario, NULL);
+    if (err != ESP_OK) {
+        return err;
     }
-    if (!scenario) {
-        return ESP_ERR_NO_MEM;
-    }
+    memset(scenario, 0, sizeof(*scenario));
     err = room_scenario_get(scenario_id, scenario);
     if (err != ESP_OK) {
-        heap_caps_free(scenario);
+        room_scenario_release_scratch();
         return err;
     }
     err = room_scenario_validate(scenario, out);
-    heap_caps_free(scenario);
+    room_scenario_release_scratch();
     return err;
 }

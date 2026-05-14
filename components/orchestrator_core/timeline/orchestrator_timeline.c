@@ -1,10 +1,12 @@
 #include "orchestrator_timeline.h"
 
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "event_bus.h"
 #include "freertos/FreeRTOS.h"
@@ -12,6 +14,7 @@
 
 #define ORCH_TIMELINE_STATE_CACHE_CAPACITY 64
 #define ORCH_TIMELINE_STATE_KEY_MAX_LEN 32
+#define ORCH_TIMELINE_JOB_POOL_LEN 8
 
 typedef struct {
     SemaphoreHandle_t lock;
@@ -31,13 +34,87 @@ typedef struct {
 
 EXT_RAM_BSS_ATTR static orchestrator_timeline_entry_t s_timeline_entries[ORCH_TIMELINE_CAPACITY];
 EXT_RAM_BSS_ATTR static timeline_state_cache_entry_t s_state_cache[ORCH_TIMELINE_STATE_CACHE_CAPACITY];
+static EXT_RAM_BSS_ATTR scenehub_event_t s_timeline_job_pool[ORCH_TIMELINE_JOB_POOL_LEN];
+static bool s_timeline_job_pool_in_use[ORCH_TIMELINE_JOB_POOL_LEN];
+static portMUX_TYPE s_timeline_job_pool_lock = portMUX_INITIALIZER_UNLOCKED;
 static orchestrator_timeline_state_t s_timeline = {0};
 
-static void timeline_handle_event(const event_bus_message_t *message);
+static void timeline_handle_event(const scenehub_event_t *message);
+static void timeline_process_event(const scenehub_event_t *message);
+static void timeline_process_event_job(void *ctx);
+
+static scenehub_event_t *timeline_job_alloc(void)
+{
+    scenehub_event_t *slot = NULL;
+    portENTER_CRITICAL(&s_timeline_job_pool_lock);
+    for (size_t i = 0; i < ORCH_TIMELINE_JOB_POOL_LEN; ++i) {
+        if (!s_timeline_job_pool_in_use[i]) {
+            s_timeline_job_pool_in_use[i] = true;
+            slot = &s_timeline_job_pool[i];
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&s_timeline_job_pool_lock);
+    if (slot) {
+        memset(slot, 0, sizeof(*slot));
+    }
+    return slot;
+}
+
+static void timeline_job_free(scenehub_event_t *slot)
+{
+    ptrdiff_t index = 0;
+    if (!slot) {
+        return;
+    }
+    index = slot - s_timeline_job_pool;
+    if (index < 0 || index >= ORCH_TIMELINE_JOB_POOL_LEN) {
+        return;
+    }
+    portENTER_CRITICAL(&s_timeline_job_pool_lock);
+    s_timeline_job_pool_in_use[index] = false;
+    portEXIT_CRITICAL(&s_timeline_job_pool_lock);
+}
 
 static uint64_t timeline_now_ms(void)
 {
     return (uint64_t)(esp_timer_get_time() / 1000);
+}
+
+static const char *timeline_type_str(orchestrator_timeline_type_t type)
+{
+    switch (type) {
+    case ORCH_TIMELINE_TYPE_DEVICE_STATUS:
+        return "device_status";
+    case ORCH_TIMELINE_TYPE_RUNTIME_CHANGED:
+        return "runtime_changed";
+    case ORCH_TIMELINE_TYPE_SCENARIO_TRIGGERED:
+        return "scenario_triggered";
+    case ORCH_TIMELINE_TYPE_TIMER_CHANGED:
+        return "timer_changed";
+    case ORCH_TIMELINE_TYPE_DEVICE_ACTION:
+        return "device_action";
+    case ORCH_TIMELINE_TYPE_ACTION_FAILED:
+        return "action_failed";
+    case ORCH_TIMELINE_TYPE_CONFIG_CHANGED:
+        return "config_changed";
+    case ORCH_TIMELINE_TYPE_EVENT:
+    default:
+        return "event";
+    }
+}
+
+static const char *timeline_severity_str(orchestrator_timeline_severity_t severity)
+{
+    switch (severity) {
+    case ORCH_TIMELINE_SEVERITY_WARNING:
+        return "warning";
+    case ORCH_TIMELINE_SEVERITY_ERROR:
+        return "error";
+    case ORCH_TIMELINE_SEVERITY_INFO:
+    default:
+        return "info";
+    }
 }
 
 static void timeline_str_copy(char *dst, size_t dst_size, const char *src)
@@ -166,7 +243,9 @@ esp_err_t orchestrator_timeline_log(orchestrator_timeline_type_t type,
     memset(entry, 0, sizeof(*entry));
     entry->timestamp_ms = timeline_now_ms();
     entry->type = type;
+    timeline_str_copy(entry->type_text, sizeof(entry->type_text), timeline_type_str(type));
     entry->severity = severity;
+    timeline_str_copy(entry->severity_text, sizeof(entry->severity_text), timeline_severity_str(severity));
     timeline_str_copy(entry->source, sizeof(entry->source), source && source[0] ? source : "system");
     timeline_str_copy(entry->room_id, sizeof(entry->room_id), room_id);
     timeline_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
@@ -229,10 +308,10 @@ void orchestrator_timeline_reset(void)
     xSemaphoreGive(s_timeline.lock);
 }
 
-static void timeline_log_device_status(const event_bus_message_t *message)
+static void timeline_log_device_status(const scenehub_event_t *message)
 {
     char details[ORCH_TIMELINE_DETAILS_MAX_LEN] = {0};
-    const event_bus_device_status_payload_t *status = &message->data.device_status;
+    const scenehub_event_device_status_payload_t *status = &message->data.device_status;
     const char *connectivity = status->connectivity[0] ? status->connectivity : "unknown";
     const char *health = status->health[0] ? status->health : "unknown";
     const char *state = status->state[0] ? status->state : "unknown";
@@ -244,17 +323,17 @@ static void timeline_log_device_status(const event_bus_message_t *message)
     }
     (void)orchestrator_timeline_log(ORCH_TIMELINE_TYPE_DEVICE_STATUS,
                                     timeline_status_severity(connectivity, health),
-                                    "event_bus",
+                                    "timeline",
                                     "",
                                     status->device_id,
                                     title,
                                     details);
 }
 
-static void timeline_log_runtime_changed(const event_bus_message_t *message)
+static void timeline_log_runtime_changed(const scenehub_event_t *message)
 {
     char details[ORCH_TIMELINE_DETAILS_MAX_LEN] = {0};
-    const event_bus_device_runtime_payload_t *runtime = &message->data.device_runtime;
+    const scenehub_event_device_runtime_payload_t *runtime = &message->data.device_runtime;
     if (strcmp(runtime->runtime_type, "control_status") == 0) {
         return;
     }
@@ -269,17 +348,17 @@ static void timeline_log_runtime_changed(const event_bus_message_t *message)
     }
     (void)orchestrator_timeline_log(ORCH_TIMELINE_TYPE_RUNTIME_CHANGED,
                                     ORCH_TIMELINE_SEVERITY_INFO,
-                                    "event_bus",
+                                    "timeline",
                                     "",
                                     runtime->device_id,
                                     "Runtime changed",
                                     details);
 }
 
-static void timeline_log_device_control(const event_bus_message_t *message)
+static void timeline_log_device_control(const scenehub_event_t *message)
 {
     char details[ORCH_TIMELINE_DETAILS_MAX_LEN] = {0};
-    const event_bus_device_control_payload_t *control = &message->data.device_control;
+    const scenehub_event_device_control_payload_t *control = &message->data.device_control;
     snprintf(details,
              sizeof(details),
              "%s / %s",
@@ -287,14 +366,14 @@ static void timeline_log_device_control(const event_bus_message_t *message)
              control->source[0] ? control->source : "unknown");
     (void)orchestrator_timeline_log(ORCH_TIMELINE_TYPE_DEVICE_ACTION,
                                     ORCH_TIMELINE_SEVERITY_INFO,
-                                    "event_bus",
+                                    "timeline",
                                     "",
                                     control->device_id,
                                     "Device control",
                                     details);
 }
 
-static void timeline_handle_event(const event_bus_message_t *message)
+static void timeline_process_event(const scenehub_event_t *message)
 {
     char details[ORCH_TIMELINE_DETAILS_MAX_LEN] = {0};
     if (!message) {
@@ -302,45 +381,45 @@ static void timeline_handle_event(const event_bus_message_t *message)
     }
 
     switch (message->type) {
-    case EVENT_DEVICE_STATUS:
-        if (message->payload_type == EVENT_BUS_PAYLOAD_DEVICE_STATUS) {
+    case SCENEHUB_EVENT_DEVICE_STATUS:
+        if (scenehub_event_is_device_status(message)) {
             timeline_log_device_status(message);
         }
         break;
-    case EVENT_DEVICE_RUNTIME:
-        if (message->payload_type == EVENT_BUS_PAYLOAD_DEVICE_RUNTIME) {
+    case SCENEHUB_EVENT_DEVICE_RUNTIME:
+        if (scenehub_event_is_device_runtime(message)) {
             timeline_log_runtime_changed(message);
         }
         break;
-    case EVENT_DEVICE_CONTROL:
-        if (message->payload_type == EVENT_BUS_PAYLOAD_DEVICE_CONTROL) {
+    case SCENEHUB_EVENT_DEVICE_CONTROL:
+        if (scenehub_event_is_device_control(message)) {
             timeline_log_device_control(message);
         }
         break;
-    case EVENT_SCENARIO_TRIGGER:
+    case SCENEHUB_EVENT_SCENARIO_TRIGGER:
         timeline_str_copy(details, sizeof(details), message->payload);
         (void)orchestrator_timeline_log(ORCH_TIMELINE_TYPE_SCENARIO_TRIGGERED,
                                         ORCH_TIMELINE_SEVERITY_INFO,
-                                        "event_bus",
+                                        "timeline",
                                         "",
                                         message->topic,
                                         "Scenario triggered",
                                         details);
         break;
-    case EVENT_RUNTIME_CONTROL:
+    case SCENEHUB_EVENT_RUNTIME_CONTROL:
         timeline_details_topic_payload(details, sizeof(details), message->topic, message->payload);
         (void)orchestrator_timeline_log(ORCH_TIMELINE_TYPE_EVENT,
                                         ORCH_TIMELINE_SEVERITY_INFO,
-                                        "event_bus",
+                                        "timeline",
                                         "",
                                         "",
                                         "Runtime control",
                                         details);
         break;
-    case EVENT_DEVICE_CONFIG_CHANGED:
+    case SCENEHUB_EVENT_DEVICE_CONFIG_CHANGED:
         (void)orchestrator_timeline_log(ORCH_TIMELINE_TYPE_CONFIG_CHANGED,
                                         ORCH_TIMELINE_SEVERITY_INFO,
-                                        "event_bus",
+                                        "timeline",
                                         "",
                                         "",
                                         "Device config changed",
@@ -349,4 +428,30 @@ static void timeline_handle_event(const event_bus_message_t *message)
     default:
         break;
     }
+}
+
+static void timeline_handle_event(const scenehub_event_t *message)
+{
+    scenehub_event_t *copy = NULL;
+    if (!message) {
+        return;
+    }
+    copy = timeline_job_alloc();
+    if (!copy) {
+        return;
+    }
+    *copy = *message;
+    if (event_bus_post_job(timeline_process_event_job, copy, 0) != ESP_OK) {
+        timeline_job_free(copy);
+    }
+}
+
+static void timeline_process_event_job(void *ctx)
+{
+    scenehub_event_t *message = (scenehub_event_t *)ctx;
+    if (!message) {
+        return;
+    }
+    timeline_process_event(message);
+    timeline_job_free(message);
 }

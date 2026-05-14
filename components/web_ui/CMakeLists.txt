@@ -48,28 +48,40 @@ endif()
 
 idf_component_register(
     SRCS
+        # Shared infrastructure and generic HTTP endpoints.
         "web_ui_utils.c"
+        "web_ui_http_adapter.c"
+        "web_ui_scenehub_control_responses.c"
+        "web_ui_json_responses.c"
         "web_ui_devices.c"
         "web_ui_page.c"
         "web_ui_auth.c"
+        "web_ui_auth_sessions.c"
+        "web_ui_auth_gate.c"
+        "web_ui_auth_handlers.c"
+        "web_ui_auth_reset.c"
+        "web_ui_meta.c"
         "web_ui_status.c"
         "web_ui_ota.c"
         "web_ui_media.c"
         "web_ui_system.c"
-        "web_ui_gm.c"
-        "web_ui_gm_action.c"
-        "web_ui_gm_profile.c"
-        "web_ui_gm_quest_device.c"
-        "web_ui_gm_scenario.c"
-        "web_ui_gm_scenario_catalog.c"
-        "web_ui_gm_scenario_store.c"
-        "orchestrator_api_view.c"
-        "orchestrator_api_view_activity.c"
-        "orchestrator_api_view_control_devices.c"
-        "orchestrator_api_view_room_scenarios.c"
-        "web_ui_orchestrator.c"
-        "web_ui_gm_timer.c"
-        "web_ui_gm_hint.c"
+        # GM panel / game-master handlers.
+        "gm/web_ui_gm.c"
+        "gm/web_ui_gm_action.c"
+        "gm/web_ui_gm_profile.c"
+        "gm/web_ui_gm_quest_device.c"
+        "gm/web_ui_gm_scenario.c"
+        "gm/web_ui_gm_scenario_catalog.c"
+        "gm/web_ui_gm_scenario_store.c"
+        "gm/web_ui_gm_timer.c"
+        "gm/web_ui_gm_hint.c"
+        # Orchestrator read-side transport serializers and handlers.
+        "orchestrator/orchestrator_api_view.c"
+        "orchestrator/orchestrator_api_view_activity.c"
+        "orchestrator/orchestrator_api_view_control_devices.c"
+        "orchestrator/orchestrator_api_view_room_scenarios.c"
+        "orchestrator/web_ui_orchestrator.c"
+        # Remaining specialized endpoints and bootstrap.
         "web_ui_hardware_io.c"
         "web_ui.c"
     INCLUDE_DIRS "include"
@@ -77,7 +89,7 @@ idf_component_register(
     EMBED_TXTFILES
         "assets/gm_panel.css"
         ${GENERATED_GM_PANEL_JS}
-    REQUIRES esp_http_server event_bus config_store network audio_player mqtt_core ota_manager sd_storage service_status device_control_ingest orchestrator_core gm_core gm_control quest_common room_catalog room_scenario quest_device hardware_io
+    REQUIRES esp_http_server event_bus config_store network audio_player mqtt_core ota_manager sd_storage service_status device_control_ingest orchestrator_core scenehub_read_model gm_core gm_control scenehub_control scenehub_state quest_common room_catalog room_scenario quest_device hardware_io ws_runtime
 )
 
 if(TARGET gm_panel_bundle)

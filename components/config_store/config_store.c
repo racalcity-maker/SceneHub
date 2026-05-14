@@ -25,6 +25,9 @@
 static const char *TAG = "config_store";
 static const char *NVS_NS = "cfg";
 static const uint32_t CONFIG_VERSION = 1;
+static const char *SCENEHUB_DEFAULT_HOSTNAME = "scenehub";
+static const char *SCENEHUB_DEFAULT_MQTT_ID = "scenehub";
+static const char *LEGACY_BROKER_NAME = "broker";
 static app_config_t g_config;
 static portMUX_TYPE g_config_lock = portMUX_INITIALIZER_UNLOCKED;
 static EXT_RAM_BSS_ATTR app_config_t s_config_scratch;
@@ -61,6 +64,8 @@ static void config_scratch_unlock(void)
 
 void config_store_hash_password(const char *password, uint8_t out_hash[CONFIG_STORE_AUTH_HASH_LEN])
 {
+    int rc = 0;
+
     if (!out_hash) {
         return;
     }
@@ -68,15 +73,25 @@ void config_store_hash_password(const char *password, uint8_t out_hash[CONFIG_ST
     size_t len = strlen((const char *)input);
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
+
 #if defined(MBEDTLS_VERSION_NUMBER) && MBEDTLS_VERSION_NUMBER >= 0x03000000
-    if (mbedtls_sha256_starts(&ctx, 0) != 0 ||
-        mbedtls_sha256_update(&ctx, input, len) != 0 ||
-        mbedtls_sha256_finish(&ctx, out_hash) != 0) {
+    rc = mbedtls_sha256_starts(&ctx, 0);
+    if (rc == 0) {
+        rc = mbedtls_sha256_update(&ctx, input, len);
+    }
+    if (rc == 0) {
+        rc = mbedtls_sha256_finish(&ctx, out_hash);
+    }
 #else
-    if (mbedtls_sha256_starts_ret(&ctx, 0) != 0 ||
-        mbedtls_sha256_update_ret(&ctx, input, len) != 0 ||
-        mbedtls_sha256_finish_ret(&ctx, out_hash) != 0) {
+    rc = mbedtls_sha256_starts_ret(&ctx, 0);
+    if (rc == 0) {
+        rc = mbedtls_sha256_update_ret(&ctx, input, len);
+    }
+    if (rc == 0) {
+        rc = mbedtls_sha256_finish_ret(&ctx, out_hash);
+    }
 #endif
+    if (rc != 0) {
         memset(out_hash, 0, CONFIG_STORE_AUTH_HASH_LEN);
     }
     mbedtls_sha256_free(&ctx);
@@ -98,8 +113,8 @@ static void load_defaults(app_config_t *cfg)
     // Empty SSID starts setup AP mode.
     cfg->wifi.ssid[0] = '\0';
     cfg->wifi.password[0] = '\0';
-    strncpy(cfg->wifi.hostname, "scenehub", sizeof(cfg->wifi.hostname) - 1);
-    strncpy(cfg->mqtt.broker_id, "broker", sizeof(cfg->mqtt.broker_id) - 1);
+    strncpy(cfg->wifi.hostname, SCENEHUB_DEFAULT_HOSTNAME, sizeof(cfg->wifi.hostname) - 1);
+    strncpy(cfg->mqtt.broker_id, SCENEHUB_DEFAULT_MQTT_ID, sizeof(cfg->mqtt.broker_id) - 1);
     cfg->mqtt.port = 1883;
     cfg->mqtt.keepalive_seconds = 30;
     cfg->mqtt.user_count = 0;
@@ -109,6 +124,25 @@ static void load_defaults(app_config_t *cfg)
     memset(&cfg->web_user, 0, sizeof(cfg->web_user));
     cfg->web_user_enabled = false;
     cfg->verbose_logging = false;
+}
+
+static bool apply_legacy_scenehub_migration(app_config_t *cfg)
+{
+    bool changed = false;
+    if (!cfg) {
+        return false;
+    }
+    if (strcmp(cfg->wifi.hostname, LEGACY_BROKER_NAME) == 0) {
+        memset(cfg->wifi.hostname, 0, sizeof(cfg->wifi.hostname));
+        strncpy(cfg->wifi.hostname, SCENEHUB_DEFAULT_HOSTNAME, sizeof(cfg->wifi.hostname) - 1);
+        changed = true;
+    }
+    if (strcmp(cfg->mqtt.broker_id, LEGACY_BROKER_NAME) == 0) {
+        memset(cfg->mqtt.broker_id, 0, sizeof(cfg->mqtt.broker_id));
+        strncpy(cfg->mqtt.broker_id, SCENEHUB_DEFAULT_MQTT_ID, sizeof(cfg->mqtt.broker_id) - 1);
+        changed = true;
+    }
+    return changed;
 }
 
 static bool validate_string(const char *s, size_t max_len)
@@ -300,9 +334,18 @@ esp_err_t config_store_init(void)
 
     memset(&s_config_scratch, 0, sizeof(s_config_scratch));
     if (load_from_nvs(&s_config_scratch) == ESP_OK && validate_config(&s_config_scratch)) {
+        bool migrated = apply_legacy_scenehub_migration(&s_config_scratch);
         config_lock();
         g_config = s_config_scratch;
         config_unlock();
+        if (migrated) {
+            err = save_to_nvs(&s_config_scratch);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "failed to persist legacy scenehub migration: %s", esp_err_to_name(err));
+            } else {
+                ESP_LOGI(TAG, "legacy broker naming migrated to scenehub");
+            }
+        }
         config_scratch_unlock();
         ESP_LOGI(TAG, "config loaded from NVS");
         return ESP_OK;

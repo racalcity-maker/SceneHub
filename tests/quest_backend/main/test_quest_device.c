@@ -139,7 +139,7 @@ static void test_system_relay_commands_are_exposed_as_system_device(void)
     TEST_ASSERT_TRUE(device.system_device);
     TEST_ASSERT_TRUE(device.enabled);
     TEST_ASSERT_EQUAL_STRING("System Relay", device.name);
-    TEST_ASSERT_EQUAL_UINT8(3, device.command_count);
+    TEST_ASSERT_EQUAL_UINT8(4, device.command_count);
 
     TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_RELAY_ID, "pulse", &command));
     TEST_ASSERT_EQUAL_STRING("relay", command.capability);
@@ -170,7 +170,7 @@ static void test_system_mosfet_commands_are_exposed_as_system_device(void)
     TEST_ASSERT_TRUE(device.system_device);
     TEST_ASSERT_TRUE(device.enabled);
     TEST_ASSERT_EQUAL_STRING("System MOSFET", device.name);
-    TEST_ASSERT_EQUAL_UINT8(4, device.command_count);
+    TEST_ASSERT_EQUAL_UINT8(6, device.command_count);
 
     TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_MOSFET_ID, "fade", &command));
     TEST_ASSERT_EQUAL_STRING("mosfet", command.capability);
@@ -193,7 +193,7 @@ static void test_system_mosfet_commands_are_exposed_as_system_device(void)
     TEST_ASSERT_EQUAL_UINT8(0, command.param_count);
 }
 
-static void test_system_input_events_are_exposed_as_system_device(void)
+static void test_system_io_commands_and_events_are_exposed_as_system_device(void)
 {
     quest_device_t device = {0};
     quest_device_command_t command = {0};
@@ -201,56 +201,29 @@ static void test_system_input_events_are_exposed_as_system_device(void)
 
     qd_test_bootstrap();
 
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get(QUEST_DEVICE_SYSTEM_INPUT_ID, &device));
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get(QUEST_DEVICE_SYSTEM_IO_ID, &device));
     TEST_ASSERT_TRUE(device.system_device);
     TEST_ASSERT_TRUE(device.enabled);
-    TEST_ASSERT_EQUAL_STRING("System Input", device.name);
+    TEST_ASSERT_EQUAL_STRING("System IO", device.name);
     TEST_ASSERT_EQUAL_STRING("internal", device.client_id);
-    TEST_ASSERT_EQUAL_UINT8(1, device.command_count);
+    TEST_ASSERT_EQUAL_UINT8(5, device.command_count);
     TEST_ASSERT_EQUAL_UINT8(20, device.event_count);
 
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_INPUT_ID, "get_state", &command));
-    TEST_ASSERT_EQUAL_STRING("input.get_state", command.command);
-    TEST_ASSERT_TRUE(command.manual_allowed);
-    TEST_ASSERT_FALSE(command.scenario_allowed);
-
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_event(QUEST_DEVICE_SYSTEM_INPUT_ID, "ch1_pressed", &event));
-    TEST_ASSERT_EQUAL_STRING("input.ch1_pressed", event.event);
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_event(QUEST_DEVICE_SYSTEM_INPUT_ID, "ch4_released", &event));
-    TEST_ASSERT_EQUAL_STRING("input.ch4_released", event.event);
-}
-
-static void test_system_gpio_commands_and_events_are_exposed_as_system_device(void)
-{
-    quest_device_t device = {0};
-    quest_device_command_t command = {0};
-    quest_device_event_t event = {0};
-
-    qd_test_bootstrap();
-
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get(QUEST_DEVICE_SYSTEM_GPIO_ID, &device));
-    TEST_ASSERT_TRUE(device.system_device);
-    TEST_ASSERT_TRUE(device.enabled);
-    TEST_ASSERT_EQUAL_STRING("System GPIO", device.name);
-    TEST_ASSERT_EQUAL_STRING("internal", device.client_id);
-    TEST_ASSERT_EQUAL_UINT8(4, device.command_count);
-    TEST_ASSERT_EQUAL_UINT8(20, device.event_count);
-
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_GPIO_ID, "set", &command));
-    TEST_ASSERT_EQUAL_STRING("gpio.set", command.command);
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_IO_ID, "set", &command));
+    TEST_ASSERT_EQUAL_STRING("io.set", command.command);
     TEST_ASSERT_TRUE(command.manual_allowed);
     TEST_ASSERT_TRUE(command.scenario_allowed);
     TEST_ASSERT_EQUAL_UINT8(2, command.param_count);
 
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_GPIO_ID, "toggle", &command));
-    TEST_ASSERT_EQUAL_STRING("gpio.toggle", command.command);
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_command(QUEST_DEVICE_SYSTEM_IO_ID, "toggle", &command));
+    TEST_ASSERT_EQUAL_STRING("io.toggle", command.command);
     TEST_ASSERT_TRUE(command.manual_allowed);
     TEST_ASSERT_FALSE(command.scenario_allowed);
 
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_event(QUEST_DEVICE_SYSTEM_GPIO_ID, "ch2_high", &event));
-    TEST_ASSERT_EQUAL_STRING("gpio.ch2_high", event.event);
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_event(QUEST_DEVICE_SYSTEM_GPIO_ID, "ch3_active", &event));
-    TEST_ASSERT_EQUAL_STRING("gpio.ch3_active", event.event);
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_event(QUEST_DEVICE_SYSTEM_IO_ID, "ch1_active", &event));
+    TEST_ASSERT_EQUAL_STRING("io.ch1_active", event.event);
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_event(QUEST_DEVICE_SYSTEM_IO_ID, "ch4_low", &event));
+    TEST_ASSERT_EQUAL_STRING("io.ch4_low", event.event);
 }
 
 static void test_quest_device_json_rejects_legacy_topic_payload_command(void)
@@ -298,8 +271,7 @@ void register_quest_device_tests(void)
     RUN_TEST(test_system_audio_play_command_exposes_background_repeat_params);
     RUN_TEST(test_system_relay_commands_are_exposed_as_system_device);
     RUN_TEST(test_system_mosfet_commands_are_exposed_as_system_device);
-    RUN_TEST(test_system_input_events_are_exposed_as_system_device);
-    RUN_TEST(test_system_gpio_commands_and_events_are_exposed_as_system_device);
+    RUN_TEST(test_system_io_commands_and_events_are_exposed_as_system_device);
     RUN_TEST(test_quest_device_json_rejects_legacy_topic_payload_command);
     RUN_TEST(test_quest_device_json_accepts_command_event_contract);
 }

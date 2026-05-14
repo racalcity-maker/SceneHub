@@ -186,6 +186,21 @@ esp_err_t logging_config_handler(httpd_req_t *req)
     return web_ui_send_ok(req, "text/plain", "logging updated");
 }
 
+static const app_mqtt_user_t *find_existing_mqtt_user(const app_mqtt_config_t *mqtt_cfg,
+                                                       const char *client_id)
+{
+    if (!mqtt_cfg || !client_id || !client_id[0]) {
+        return NULL;
+    }
+    for (uint8_t i = 0; i < mqtt_cfg->user_count && i < CONFIG_STORE_MAX_MQTT_USERS; ++i) {
+        const app_mqtt_user_t *user = &mqtt_cfg->users[i];
+        if (strcmp(user->client_id, client_id) == 0) {
+            return user;
+        }
+    }
+    return NULL;
+}
+
 esp_err_t mqtt_users_handler(httpd_req_t *req)
 {
     size_t len = req->content_len;
@@ -217,8 +232,10 @@ esp_err_t mqtt_users_handler(httpd_req_t *req)
         web_ui_free(body);
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "array required"));
     }
-    app_config_t cfg = *config_store_get();
+    app_config_t old_cfg = *config_store_get();
+    app_config_t cfg = old_cfg;
     cfg.mqtt.user_count = 0;
+    memset(cfg.mqtt.users, 0, sizeof(cfg.mqtt.users));
     cJSON *item = NULL;
     cJSON_ArrayForEach(item, root) {
         if (cfg.mqtt.user_count >= CONFIG_STORE_MAX_MQTT_USERS) {
@@ -234,17 +251,27 @@ esp_err_t mqtt_users_handler(httpd_req_t *req)
         const cJSON *client = cJSON_GetObjectItem(item, "client_id");
         const cJSON *username = cJSON_GetObjectItem(item, "username");
         const cJSON *password = cJSON_GetObjectItem(item, "password");
-        if (!cJSON_IsString(client) || !cJSON_IsString(username) || !cJSON_IsString(password)) {
+        if (!cJSON_IsString(client) || !cJSON_IsString(username) ||
+            (password && !cJSON_IsString(password))) {
             cJSON_Delete(root);
             web_ui_free(body);
             return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing fields"));
+        }
+        const char *password_value = password && password->valuestring ? password->valuestring : "";
+        const app_mqtt_user_t *existing = find_existing_mqtt_user(&old_cfg.mqtt, client->valuestring);
+        if (!password_value[0] && (!existing || !existing->password[0])) {
+            cJSON_Delete(root);
+            web_ui_free(body);
+            return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "password required for new mqtt user"));
         }
         app_mqtt_user_t *dst = &cfg.mqtt.users[cfg.mqtt.user_count++];
         strncpy(dst->client_id, client->valuestring, sizeof(dst->client_id) - 1);
         dst->client_id[sizeof(dst->client_id) - 1] = 0;
         strncpy(dst->username, username->valuestring, sizeof(dst->username) - 1);
         dst->username[sizeof(dst->username) - 1] = 0;
-        strncpy(dst->password, password->valuestring, sizeof(dst->password) - 1);
+        strncpy(dst->password,
+                password_value[0] ? password_value : existing->password,
+                sizeof(dst->password) - 1);
         dst->password[sizeof(dst->password) - 1] = 0;
     }
     cJSON_Delete(root);
@@ -276,9 +303,10 @@ esp_err_t publish_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "publish request topic='%s' payload='%s'",
              topic, payload[0] ? payload : "<none>");
 #endif
-    event_bus_message_t msg = {.type = EVENT_WEB_COMMAND};
-    strncpy(msg.topic, topic, sizeof(msg.topic) - 1);
-    strncpy(msg.payload, payload, sizeof(msg.payload) - 1);
+    scenehub_event_t msg = {0};
+    if (scenehub_event_make_text(&msg, SCENEHUB_EVENT_WEB_COMMAND, topic, payload) != ESP_OK) {
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "event build failed"));
+    }
     esp_err_t err = event_bus_post(&msg, pdMS_TO_TICKS(50));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "publish event dispatch failed: %s", esp_err_to_name(err));

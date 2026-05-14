@@ -50,24 +50,24 @@ static esp_err_t enqueue_control_cmd(audio_cmd_type_t type, const char *label)
     return err;
 }
 
-static void on_event(const event_bus_message_t *msg)
+static void on_event(const scenehub_event_t *msg)
 {
     if (!msg) {
         return;
     }
     switch (msg->type) {
-    case EVENT_AUDIO_PLAY:
+    case SCENEHUB_EVENT_AUDIO_PLAY:
         audio_player_play(msg->payload);
         break;
-    case EVENT_VOLUME_SET:
+    case SCENEHUB_EVENT_VOLUME_SET:
         ESP_LOGW(TAG, "ignoring volume cmd topic='%s' payload='%s'", msg->topic, msg->payload);
         break;
-    case EVENT_WEB_COMMAND:
-    case EVENT_NONE:
-    case EVENT_CARD_OK:
-    case EVENT_CARD_BAD:
-    case EVENT_RELAY_CMD:
-    case EVENT_SYSTEM_STATUS:
+    case SCENEHUB_EVENT_WEB_COMMAND:
+    case SCENEHUB_EVENT_NONE:
+    case SCENEHUB_EVENT_CARD_OK:
+    case SCENEHUB_EVENT_CARD_BAD:
+    case SCENEHUB_EVENT_RELAY_CMD:
+    case SCENEHUB_EVENT_SYSTEM_STATUS:
         break;
     default:
         break;

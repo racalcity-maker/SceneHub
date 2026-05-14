@@ -119,10 +119,10 @@ Acceptance:
 
 ## P0 - Request Ordering
 
-Current problem: `loadGM()`, active room runtime polling, version polling and
-button actions can overlap. Busy flags prevent duplicate polling, but they do
-not stop an older response from overwriting newer state after a slower network
-round trip.
+Current problem: broad snapshot loads, active room runtime polling, version
+polling and button actions can overlap. Busy flags prevent duplicate polling,
+but they do not stop an older response from overwriting newer state after a
+slower network round trip.
 
 Target:
 
@@ -175,13 +175,16 @@ Current state:
 - Static data is cached with a TTL and lazy-loaded by view.
 - Version polling now refreshes changed static slices directly: devices/ingest,
   scenarios and profiles do not force a full GM snapshot reload.
+- Full `/api/gm/state` refresh is now explicit `loadGMFullSnapshot()` use for
+  bootstrap, structural refresh and recovery only. Routine runtime refresh uses
+  `room.runtime`, rooms-runtime refresh or `system.summary`.
 
 Target:
 
 - [x] Add `document.hidden` backoff/skip for runtime and version polling.
 - [x] Continue local clock updates only when relevant clock elements are visible.
 - [x] Use `/api/gm/versions` to refresh only changed static slices where
-  possible, instead of full `loadGM()` calls.
+  possible, instead of full `loadGMFullSnapshot()` calls.
 - [x] Refresh sidebar/static device data by versions while keeping active Room
   Control runtime-only rendering.
 

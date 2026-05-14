@@ -47,7 +47,7 @@ static cJSON *build_mqtt_users_json(const app_mqtt_config_t *mqtt_cfg)
             }
             cJSON_AddStringToObject(obj, "client_id", user->client_id);
             cJSON_AddStringToObject(obj, "username", user->username);
-            cJSON_AddStringToObject(obj, "password", user->password);
+            cJSON_AddBoolToObject(obj, "password_set", user->password[0] != '\0');
             cJSON_AddItemToArray(root, obj);
         }
     }

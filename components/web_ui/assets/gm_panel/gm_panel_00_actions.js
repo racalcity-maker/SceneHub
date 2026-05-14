@@ -74,7 +74,7 @@ currentRoomId=nextRoomId;
 currentView='room';
 roomTab='control';
 await loadGMViewData(false);
-render();
+await loadGMRuntimeOnly(currentRoomId,false);
 });
 
 gmRegisterAction('device.setup.open',async el=>{

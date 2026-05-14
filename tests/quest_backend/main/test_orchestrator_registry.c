@@ -6,6 +6,7 @@
 #include "event_bus.h"
 #include "esp_attr.h"
 #include "gm_game_profile.h"
+#include "gm_room_session.h"
 #include "orchestrator_registry.h"
 #include "quest_device.h"
 #include "room_catalog.h"
@@ -19,6 +20,10 @@ EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_reg_snapshot_c;
 EXT_RAM_BSS_ATTR static orch_device_entry_t s_reg_device;
 EXT_RAM_BSS_ATTR static orch_room_scenario_entry_t s_reg_scenarios[2];
 EXT_RAM_BSS_ATTR static orch_room_scenario_detail_t s_reg_details[1];
+EXT_RAM_BSS_ATTR static orch_room_profile_entry_t s_reg_profiles[2];
+EXT_RAM_BSS_ATTR static quest_device_t s_reg_device_scratch;
+EXT_RAM_BSS_ATTR static quest_device_t s_reg_invalid_devices[1];
+EXT_RAM_BSS_ATTR static quest_device_t s_reg_devices_with_system[QUEST_DEVICE_MAX_DEVICES + 4];
 
 static void reg_copy(char *dst, size_t dst_len, const char *src)
 {
@@ -37,12 +42,12 @@ static void reg_add_room(const char *room_id, const char *name)
 
 static void reg_add_device(const char *id, const char *name, bool enabled)
 {
-    quest_device_t device = {0};
-    reg_copy(device.id, sizeof(device.id), id);
-    reg_copy(device.client_id, sizeof(device.client_id), id);
-    reg_copy(device.name, sizeof(device.name), name);
-    device.enabled = enabled;
-    TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&device));
+    memset(&s_reg_device_scratch, 0, sizeof(s_reg_device_scratch));
+    reg_copy(s_reg_device_scratch.id, sizeof(s_reg_device_scratch.id), id);
+    reg_copy(s_reg_device_scratch.client_id, sizeof(s_reg_device_scratch.client_id), id);
+    reg_copy(s_reg_device_scratch.name, sizeof(s_reg_device_scratch.name), name);
+    s_reg_device_scratch.enabled = enabled;
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&s_reg_device_scratch));
 }
 
 static void reg_add_scenario(const char *scenario_id, const char *room_id)
@@ -57,7 +62,32 @@ static void reg_add_scenario(const char *scenario_id, const char *room_id)
     s_reg_scenario.steps[0].enabled = true;
     s_reg_scenario.steps[0].data.wait_time.duration_ms = 1000;
     s_reg_scenario.step_count = 1;
+    reg_copy(s_reg_scenario.branches[0].id, sizeof(s_reg_scenario.branches[0].id), "main");
+    reg_copy(s_reg_scenario.branches[0].name, sizeof(s_reg_scenario.branches[0].name), "Main");
+    s_reg_scenario.branches[0].type = ROOM_SCENARIO_BRANCH_NORMAL;
+    s_reg_scenario.branches[0].enabled = true;
+    s_reg_scenario.branches[0].required_for_completion = true;
+    s_reg_scenario.branches[0].step_start_index = 0;
+    s_reg_scenario.branches[0].step_count = 1;
+    s_reg_scenario.branch_count = 1;
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(&s_reg_scenario));
+}
+
+static void reg_add_profile(const char *profile_id,
+                            const char *room_id,
+                            const char *scenario_id,
+                            uint32_t duration_ms)
+{
+    gm_game_profile_t profile = {0};
+    reg_copy(profile.id, sizeof(profile.id), profile_id);
+    reg_copy(profile.name, sizeof(profile.name), "Profile");
+    reg_copy(profile.room_id, sizeof(profile.room_id), room_id);
+    reg_copy(profile.scenario_id, sizeof(profile.scenario_id), scenario_id);
+    reg_copy(profile.hint_pack_id, sizeof(profile.hint_pack_id), "hint");
+    reg_copy(profile.audio_pack_id, sizeof(profile.audio_pack_id), "audio");
+    profile.duration_ms = duration_ms;
+    profile.enabled = true;
+    TEST_ASSERT_EQUAL(ESP_OK, gm_game_profile_upsert(&profile));
 }
 
 static void reg_bootstrap(void)
@@ -89,11 +119,41 @@ static void test_orchestrator_registry_rejects_invalid_args(void)
     memset(&s_reg_device, 0, sizeof(s_reg_device));
     memset(s_reg_scenarios, 0, sizeof(s_reg_scenarios));
     memset(s_reg_details, 0, sizeof(s_reg_details));
+    memset(s_reg_profiles, 0, sizeof(s_reg_profiles));
 
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, orchestrator_registry_build_snapshot(NULL));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, orchestrator_registry_list_rooms(NULL, 1, &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, orchestrator_registry_list_rooms(s_reg_snapshot_a.rooms, 0, &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, orchestrator_registry_list_rooms(s_reg_snapshot_a.rooms, 1, NULL));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, orchestrator_registry_get_device(NULL, &s_reg_device));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, orchestrator_registry_get_device("", &s_reg_device));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, orchestrator_registry_get_device("device", NULL));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_quest_devices(NULL, 1, &count, false));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_quest_devices(s_reg_invalid_devices, 1, NULL, false));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_scenario_step_schemas(NULL,
+                                                                       ORCH_ROOM_SCENARIO_MAX_STEP_SCHEMAS,
+                                                                       &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_scenario_step_schemas(
+                          (orch_room_scenario_step_schema_t *)s_reg_snapshot_a.rooms,
+                          ORCH_ROOM_SCENARIO_MAX_STEP_SCHEMAS,
+                          NULL));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_scenario_step_schemas(
+                          (orch_room_scenario_step_schema_t *)s_reg_snapshot_a.rooms,
+                          ORCH_ROOM_SCENARIO_MAX_STEP_SCHEMAS - 1,
+                          &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_device_issues(NULL, s_reg_snapshot_a.issues, 1, &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_device_issues("device", NULL, 1, &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_device_issues("device", s_reg_snapshot_a.issues, 0, &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_device_issues("device", s_reg_snapshot_a.issues, 1, NULL));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
                       orchestrator_registry_list_room_scenarios(NULL, s_reg_scenarios, 1, &count));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
@@ -102,6 +162,14 @@ static void test_orchestrator_registry_rejects_invalid_args(void)
                       orchestrator_registry_list_room_scenarios("room", s_reg_scenarios, 0, &count));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
                       orchestrator_registry_list_room_scenarios("room", s_reg_scenarios, 1, NULL));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_room_profiles(NULL, s_reg_profiles, 1, &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_room_profiles("room", NULL, 1, &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_room_profiles("room", s_reg_profiles, 0, &count));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      orchestrator_registry_list_room_profiles("room", s_reg_profiles, 1, NULL));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
                       orchestrator_registry_list_room_scenario_details(NULL, s_reg_details, 1, &count));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
@@ -134,6 +202,8 @@ static void test_orchestrator_registry_snapshot_collects_rooms_devices_services_
     TEST_ASSERT_EQUAL_STRING("disabled", s_reg_device.device_id);
     TEST_ASSERT_EQUAL(ORCH_HEALTH_DEGRADED, s_reg_device.health);
     TEST_ASSERT_EQUAL_STRING("disabled", s_reg_device.state);
+    TEST_ASSERT_EQUAL_UINT8(1, s_reg_device.badge_count);
+    TEST_ASSERT_EQUAL_STRING("degraded", s_reg_device.badges[0]);
 }
 
 static void test_orchestrator_registry_service_fault_creates_system_issue(void)
@@ -201,9 +271,134 @@ static void test_orchestrator_registry_lists_room_scenarios_and_details(void)
     TEST_ASSERT_TRUE(s_reg_details[0].summary.valid);
     TEST_ASSERT_EQUAL_UINT(1, s_reg_details[0].summary.step_count);
     TEST_ASSERT_EQUAL_STRING("delay", s_reg_details[0].steps[0].id);
+    TEST_ASSERT_EQUAL_UINT(1, s_reg_details[0].branch_count);
+    TEST_ASSERT_EQUAL_STRING("main", s_reg_details[0].branches[0].id);
 
     TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
                       orchestrator_registry_list_room_scenarios("missing", s_reg_scenarios, 2, &count));
+}
+
+static void test_orchestrator_registry_lists_rooms_without_full_snapshot(void)
+{
+    size_t count = 0;
+
+    reg_bootstrap();
+    memset(&s_reg_snapshot_a, 0, sizeof(s_reg_snapshot_a));
+    reg_add_room("room_a", "Room A");
+    reg_add_room("room_b", "Room B");
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      orchestrator_registry_list_rooms(s_reg_snapshot_a.rooms,
+                                                       ORCH_REGISTRY_MAX_ROOMS,
+                                                       &count));
+    TEST_ASSERT_EQUAL_UINT(2, count);
+    TEST_ASSERT_EQUAL_STRING("room_a", s_reg_snapshot_a.rooms[0].room_id);
+    TEST_ASSERT_EQUAL_STRING("Room A", s_reg_snapshot_a.rooms[0].title);
+    TEST_ASSERT_EQUAL_STRING("room_b", s_reg_snapshot_a.rooms[1].room_id);
+    TEST_ASSERT_EQUAL_STRING("Room B", s_reg_snapshot_a.rooms[1].title);
+}
+
+static void test_orchestrator_registry_lists_room_profiles_from_read_model(void)
+{
+    size_t count = 0;
+
+    reg_bootstrap();
+    memset(s_reg_profiles, 0, sizeof(s_reg_profiles));
+    reg_add_room("room_a", "Room A");
+    reg_add_scenario("scenario_ok", "room_a");
+    reg_add_profile("profile_ok", "room_a", "scenario_ok", 60000);
+    reg_add_profile("profile_bad", "room_a", "scenario_missing", 30000);
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      orchestrator_registry_list_room_profiles("room_a",
+                                                               s_reg_profiles,
+                                                               2,
+                                                               &count));
+    TEST_ASSERT_EQUAL_UINT(2, count);
+    TEST_ASSERT_EQUAL_STRING("profile_ok", s_reg_profiles[0].id);
+    TEST_ASSERT_EQUAL_STRING("scenario_ok", s_reg_profiles[0].scenario_id);
+    TEST_ASSERT_TRUE(s_reg_profiles[0].valid);
+    TEST_ASSERT_EQUAL_STRING("profile_bad", s_reg_profiles[1].id);
+    TEST_ASSERT_EQUAL_STRING("scenario_missing", s_reg_profiles[1].scenario_id);
+    TEST_ASSERT_FALSE(s_reg_profiles[1].valid);
+
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
+                      orchestrator_registry_list_room_profiles("missing",
+                                                               s_reg_profiles,
+                                                               2,
+                                                               &count));
+}
+
+static void test_orchestrator_registry_lists_quest_devices_with_optional_system_entries(void)
+{
+    size_t count = 0;
+
+    reg_bootstrap();
+    memset(s_reg_devices_with_system, 0, sizeof(s_reg_devices_with_system));
+    reg_add_device("relay", "Relay", true);
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      orchestrator_registry_list_quest_devices(s_reg_devices_with_system,
+                                                               QUEST_DEVICE_MAX_DEVICES + 4,
+                                                               &count,
+                                                               false));
+    TEST_ASSERT_EQUAL_UINT(1, count);
+    TEST_ASSERT_EQUAL_STRING("relay", s_reg_devices_with_system[0].id);
+
+    memset(s_reg_devices_with_system, 0, sizeof(s_reg_devices_with_system));
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      orchestrator_registry_list_quest_devices(s_reg_devices_with_system,
+                                                               QUEST_DEVICE_MAX_DEVICES + 4,
+                                                               &count,
+                                                               true));
+    TEST_ASSERT_EQUAL_UINT(5, count);
+    TEST_ASSERT_EQUAL_STRING("relay", s_reg_devices_with_system[0].id);
+    TEST_ASSERT_EQUAL_STRING(QUEST_DEVICE_SYSTEM_AUDIO_ID, s_reg_devices_with_system[1].id);
+    TEST_ASSERT_EQUAL_STRING(QUEST_DEVICE_SYSTEM_RELAY_ID, s_reg_devices_with_system[2].id);
+    TEST_ASSERT_EQUAL_STRING(QUEST_DEVICE_SYSTEM_MOSFET_ID, s_reg_devices_with_system[3].id);
+    TEST_ASSERT_EQUAL_STRING(QUEST_DEVICE_SYSTEM_IO_ID, s_reg_devices_with_system[4].id);
+}
+
+static void test_orchestrator_registry_lists_device_issues_for_saved_device(void)
+{
+    orch_issue_entry_t issues[ORCH_REGISTRY_MAX_ISSUES] = {0};
+    size_t count = 0;
+
+    reg_bootstrap();
+    reg_add_device("relay", "Relay", true);
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      orchestrator_registry_list_device_issues("relay",
+                                                               issues,
+                                                               ORCH_REGISTRY_MAX_ISSUES,
+                                                               &count));
+    TEST_ASSERT_EQUAL_UINT(1, count);
+    TEST_ASSERT_EQUAL_STRING("device_offline", issues[0].code);
+    TEST_ASSERT_EQUAL(ORCH_ISSUE_SCOPE_DEVICE, issues[0].scope);
+    TEST_ASSERT_EQUAL(ORCH_ISSUE_SEVERITY_ERROR, issues[0].severity);
+    TEST_ASSERT_EQUAL_STRING("relay", issues[0].device_id);
+}
+
+static void test_orchestrator_registry_lists_backend_scenario_step_schemas(void)
+{
+    orch_room_scenario_step_schema_t schemas[ORCH_ROOM_SCENARIO_MAX_STEP_SCHEMAS] = {0};
+    size_t count = 0;
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      orchestrator_registry_list_scenario_step_schemas(schemas,
+                                                                       ORCH_ROOM_SCENARIO_MAX_STEP_SCHEMAS,
+                                                                       &count));
+    TEST_ASSERT_EQUAL_UINT(ORCH_ROOM_SCENARIO_MAX_STEP_SCHEMAS, count);
+    TEST_ASSERT_EQUAL_STRING("DEVICE_COMMAND", schemas[0].type);
+    TEST_ASSERT_EQUAL_STRING("Device command", schemas[0].label);
+    TEST_ASSERT_EQUAL_UINT(3, schemas[0].field_count);
+    TEST_ASSERT_EQUAL_STRING("device_id", schemas[0].fields[0].key);
+    TEST_ASSERT_TRUE(schemas[0].fields[0].required);
+    TEST_ASSERT_EQUAL_STRING("WAIT_DEVICE_EVENT", schemas[2].type);
+    TEST_ASSERT_EQUAL_UINT(6, schemas[2].field_count);
+    TEST_ASSERT_EQUAL_STRING("allow_operator_skip", schemas[2].fields[4].key);
+    TEST_ASSERT_EQUAL_STRING("END_GAME", schemas[count - 1].type);
+    TEST_ASSERT_EQUAL_UINT(0, schemas[count - 1].field_count);
 }
 
 void register_orchestrator_registry_tests(void)
@@ -213,4 +408,9 @@ void register_orchestrator_registry_tests(void)
     RUN_TEST(test_orchestrator_registry_service_fault_creates_system_issue);
     RUN_TEST(test_orchestrator_registry_cache_version_changes_after_invalidate);
     RUN_TEST(test_orchestrator_registry_lists_room_scenarios_and_details);
+    RUN_TEST(test_orchestrator_registry_lists_rooms_without_full_snapshot);
+    RUN_TEST(test_orchestrator_registry_lists_room_profiles_from_read_model);
+    RUN_TEST(test_orchestrator_registry_lists_quest_devices_with_optional_system_entries);
+    RUN_TEST(test_orchestrator_registry_lists_backend_scenario_step_schemas);
+    RUN_TEST(test_orchestrator_registry_lists_device_issues_for_saved_device);
 }

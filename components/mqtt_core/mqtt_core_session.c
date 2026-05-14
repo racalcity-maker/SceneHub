@@ -15,6 +15,10 @@ mqtt_session_t *alloc_session(void)
     for (size_t i = 0; i < MQTT_MAX_CLIENTS; ++i) {
         if (!s_sessions[i].active) {
             memset(&s_sessions[i], 0, sizeof(s_sessions[i]));
+            s_sessions[i].tx_lock = xSemaphoreCreateMutexStatic(&s_sessions[i].tx_lock_buf);
+            if (!s_sessions[i].tx_lock) {
+                return NULL;
+            }
             s_sessions[i].active = true;
             s_sessions[i].sock = -1;
             // Pre-CONNECT sessions should not look infinitely idle to the sweep timer.

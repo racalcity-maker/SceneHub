@@ -19,8 +19,21 @@ typedef struct {
 
 EXT_RAM_BSS_ATTR static room_scenario_slot_t s_scenarios[ROOM_SCENARIO_MAX_SCENARIOS];
 static SemaphoreHandle_t s_lock = NULL;
+static SemaphoreHandle_t s_scratch_lock = NULL;
+static StaticSemaphore_t s_scratch_lock_storage;
 static portMUX_TYPE s_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_generation = 0;
+static room_scenario_t *s_scratch_scenario = NULL;
+static room_scenario_validation_report_t *s_scratch_report = NULL;
+
+static void *room_scenario_heap_alloc(size_t size)
+{
+    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ptr) {
+        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    return ptr;
+}
 
 static esp_err_t room_scenario_ensure_lock(void)
 {
@@ -33,6 +46,34 @@ static esp_err_t room_scenario_ensure_lock(void)
     }
     portEXIT_CRITICAL(&s_init_lock);
     return s_lock ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t room_scenario_ensure_scratch(void)
+{
+    if (s_scratch_lock && s_scratch_scenario && s_scratch_report) {
+        return ESP_OK;
+    }
+    portENTER_CRITICAL(&s_init_lock);
+    if (!s_scratch_lock) {
+        s_scratch_lock = xSemaphoreCreateMutexStatic(&s_scratch_lock_storage);
+    }
+    portEXIT_CRITICAL(&s_init_lock);
+    if (!s_scratch_lock) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (!s_scratch_scenario) {
+        s_scratch_scenario = room_scenario_heap_alloc(sizeof(*s_scratch_scenario));
+        if (!s_scratch_scenario) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    if (!s_scratch_report) {
+        s_scratch_report = room_scenario_heap_alloc(sizeof(*s_scratch_report));
+        if (!s_scratch_report) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return ESP_OK;
 }
 
 static esp_err_t room_scenario_lock(void)
@@ -75,26 +116,39 @@ static room_scenario_slot_t *room_scenario_find_free_locked(void)
     return NULL;
 }
 
-static room_scenario_t *room_scenario_alloc_import_items(size_t count)
-{
-    room_scenario_t *items = NULL;
-    if (count == 0) {
-        return NULL;
-    }
-    items = heap_caps_calloc(count,
-                             sizeof(*items),
-                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!items) {
-        items = heap_caps_calloc(count,
-                                 sizeof(*items),
-                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return items;
-}
-
 esp_err_t room_scenario_init(void)
 {
     return room_scenario_ensure_lock();
+}
+
+esp_err_t room_scenario_acquire_scratch(room_scenario_t **out_scenario,
+                                        room_scenario_validation_report_t **out_report)
+{
+    esp_err_t err = ESP_OK;
+    if (!out_scenario && !out_report) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = room_scenario_ensure_scratch();
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (xSemaphoreTake(s_scratch_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (out_scenario) {
+        *out_scenario = s_scratch_scenario;
+    }
+    if (out_report) {
+        *out_report = s_scratch_report;
+    }
+    return ESP_OK;
+}
+
+void room_scenario_release_scratch(void)
+{
+    if (s_scratch_lock) {
+        xSemaphoreGive(s_scratch_lock);
+    }
 }
 
 esp_err_t room_scenario_add(const room_scenario_t *scenario)
@@ -346,7 +400,8 @@ esp_err_t room_scenario_store_import_json(const cJSON *root)
 {
     const cJSON *version = NULL;
     const cJSON *array = NULL;
-    room_scenario_t *items = NULL;
+    char seen_ids[ROOM_SCENARIO_MAX_SCENARIOS][ROOM_SCENARIO_ID_MAX_LEN] = {{0}};
+    room_scenario_t *scratch = NULL;
     int count = 0;
     esp_err_t err = ESP_OK;
 
@@ -365,40 +420,43 @@ esp_err_t room_scenario_store_import_json(const cJSON *root)
     if (count < 0 || count > ROOM_SCENARIO_MAX_SCENARIOS) {
         return ESP_ERR_INVALID_SIZE;
     }
-    if (count > 0) {
-        items = room_scenario_alloc_import_items((size_t)count);
-        if (!items) {
-            return ESP_ERR_NO_MEM;
-        }
+    err = room_scenario_acquire_scratch(&scratch, NULL);
+    if (err != ESP_OK) {
+        return err;
     }
     for (int i = 0; i < count; ++i) {
         const cJSON *scenario_obj = cJSON_GetArrayItem(array, i);
-        err = room_scenario_from_json(scenario_obj, &items[i]);
+        err = room_scenario_from_json(scenario_obj, scratch);
         if (err != ESP_OK) {
-            heap_caps_free(items);
+            room_scenario_release_scratch();
             return err;
         }
         for (int j = 0; j < i; ++j) {
-            if (strcmp(items[j].id, items[i].id) == 0) {
-                heap_caps_free(items);
+            if (strcmp(seen_ids[j], scratch->id) == 0) {
+                room_scenario_release_scratch();
                 return ESP_ERR_INVALID_ARG;
             }
         }
+        snprintf(seen_ids[i], sizeof(seen_ids[i]), "%s", scratch->id);
     }
+    room_scenario_release_scratch();
 
     err = room_scenario_lock();
     if (err != ESP_OK) {
-        heap_caps_free(items);
         return err;
     }
     memset(s_scenarios, 0, sizeof(s_scenarios));
     for (int i = 0; i < count; ++i) {
+        err = room_scenario_from_json(cJSON_GetArrayItem(array, i), &s_scenarios[i].scenario);
+        if (err != ESP_OK) {
+            memset(s_scenarios, 0, sizeof(s_scenarios));
+            room_scenario_unlock();
+            return err;
+        }
         s_scenarios[i].in_use = true;
-        s_scenarios[i].scenario = items[i];
     }
     s_generation++;
     room_scenario_unlock();
-    heap_caps_free(items);
     return ESP_OK;
 }
 

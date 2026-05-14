@@ -199,8 +199,7 @@ await gmExpectOk(res);
 questDeviceEditor.device_id=device.id;
 questDeviceEditor.open=true;
 clearQuestDeviceDirty();
-await loadGM(true,true);
-if(typeof window.__gmRefreshManualSidebar==='function')await window.__gmRefreshManualSidebar();
+await refreshQuestDevicesAfterMutation();
 setGMStatus('Device saved','gm-ok');
 }
 
@@ -216,8 +215,7 @@ questDeviceEditor.device_id='';
 questDeviceEditor.open=false;
 }
 clearQuestDeviceDirty();
-await loadGM(true,true);
-if(typeof window.__gmRefreshManualSidebar==='function')await window.__gmRefreshManualSidebar();
+await refreshQuestDevicesAfterMutation();
 setGMStatus('Device deleted','gm-ok');
 }
 
@@ -235,13 +233,14 @@ if(!name||!scenarioId||!Number.isFinite(minutes)||minutes<=0)throw new Error('Fi
 const profile={
 id,name,room_id:profileEditor.room_id,scenario_id:scenarioId,duration_ms:Math.round(minutes*60000),hint_pack_id:hintPack,audio_pack_id:audioPack,enabled}
 ;
+const roomId=profile.room_id;
 setGMStatus('Saving game mode...');
 const res=await api.room.profileSave({profile});
 await gmExpectOk(res);
 profileEditor.profile_id=id;
 profileEditor.open=true;
 clearProfileDirty();
-await loadGM(true,true);
+await refreshRoomProfilesAfterMutation(roomId);
 setGMStatus('Game mode saved','gm-ok');
 }
 
@@ -249,6 +248,7 @@ async function deleteProfileEditor(profileId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!profileId)return;
 if(!confirmHandled&&!confirm(`Delete game mode ${profileId}?`))return;
+const roomId=profileEditor.room_id||roomIdForProfile(profileId);
 setGMStatus('Deleting game mode...');
 const res=await api.room.profileDelete(profileId);
 await gmExpectOk(res);
@@ -257,7 +257,7 @@ profileEditor.profile_id='';
 profileEditor.open=false;
 }
 clearProfileDirty();
-await loadGM(true,true);
+await refreshRoomProfilesAfterMutation(roomId);
 setGMStatus('Game mode deleted','gm-ok');
 }
 
@@ -347,7 +347,7 @@ await gmExpectOk(res);
 scenarioEditor.scenario_id=scenario.id;
 scenarioEditor.open=true;
 clearScenarioDirty();
-await loadGM(true,true);
+await refreshRoomScenariosAfterMutation(scenario.room_id);
 setGMStatus('Scenario saved','gm-ok');
 }
 
@@ -355,6 +355,7 @@ async function deleteScenarioEditor(scenarioId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!scenarioId)return;
 if(!confirmHandled&&!confirm(`Delete scenario ${scenarioId}?`))return;
+const roomId=scenarioEditor.room_id||roomIdForScenario(scenarioId);
 setGMStatus('Deleting scenario...');
 const res=await api.room.scenarioDelete(scenarioId);
 await gmExpectOk(res);
@@ -363,7 +364,7 @@ scenarioEditor.scenario_id='';
 scenarioEditor.open=false;
 }
 clearScenarioDirty();
-await loadGM(true,true);
+await refreshRoomScenariosAfterMutation(roomId);
 setGMStatus('Scenario deleted','gm-ok');
 }
 
@@ -378,7 +379,21 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+if(url==='/api/gm/devices/import'){
+await refreshQuestDevicesAfterMutation();
+}
+else if(url==='/api/gm/room/scenarios/import'){
+await loadRoomScenarios(true);
+if(isAdmin())await loadScenarioEditorCatalogs(true);
+render();
+}
+else if(url==='/api/gm/profiles/import'){
+await loadRoomProfiles(true);
+render();
+}
+else{
+await loadGMFullSnapshot(true,true);
+}
 setGMStatus(`${label} imported`,'gm-ok');
 }
 
@@ -389,7 +404,27 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+if(url===api.storage.commandUrl('device','save')||
+   url===api.storage.commandUrl('scenario','save')||
+   url===api.storage.commandUrl('profile','save')){
+setGMStatus(`${label} done`,'gm-ok');
+return;
+}
+if(url===api.storage.commandUrl('device','load')){
+await refreshQuestDevicesAfterMutation();
+}
+else if(url===api.storage.commandUrl('scenario','load')){
+await loadRoomScenarios(true);
+if(isAdmin())await loadScenarioEditorCatalogs(true);
+render();
+}
+else if(url===api.storage.commandUrl('profile','load')){
+await loadRoomProfiles(true);
+render();
+}
+else{
+await loadGMFullSnapshot(true,true);
+}
 setGMStatus(`${label} done`,'gm-ok');
 }
 

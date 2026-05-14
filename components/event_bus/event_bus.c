@@ -10,7 +10,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 #include "service_status.h"
+
+#ifndef CONFIG_SCENEHUB_EVENT_BUS_SKIP_EVENT_VALIDATION
+#define CONFIG_SCENEHUB_EVENT_BUS_SKIP_EVENT_VALIDATION 0
+#endif
 
 #define EVENT_BUS_QUEUE_LEN 128
 #define EVENT_BUS_JOB_QUEUE_LEN 32
@@ -32,7 +37,7 @@ static TaskHandle_t s_job_task = NULL;
 static EXT_RAM_BSS_ATTR StackType_t s_job_task_stack[EVENT_BUS_JOB_TASK_STACK_BYTES];
 static StaticTask_t s_job_task_tcb;
 static bool s_initialized = false;
-static event_bus_message_t *s_message_pool = NULL;
+static scenehub_event_t *s_message_pool = NULL;
 static bool s_message_pool_in_use[EVENT_BUS_QUEUE_LEN];
 
 static event_bus_handler_t s_handlers[EVENT_BUS_MAX_HANDLERS];
@@ -65,28 +70,28 @@ static esp_err_t ensure_message_pool(void)
     }
 
     s_message_pool = heap_caps_calloc(EVENT_BUS_QUEUE_LEN,
-                                      sizeof(event_bus_message_t),
+                                      sizeof(scenehub_event_t),
                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (s_message_pool) {
         ESP_LOGI(TAG, "event message pool allocated in PSRAM (%u bytes)",
-                 (unsigned)(EVENT_BUS_QUEUE_LEN * sizeof(event_bus_message_t)));
+                 (unsigned)(EVENT_BUS_QUEUE_LEN * sizeof(scenehub_event_t)));
         return ESP_OK;
     }
 
     s_message_pool = heap_caps_calloc(EVENT_BUS_QUEUE_LEN,
-                                      sizeof(event_bus_message_t),
+                                      sizeof(scenehub_event_t),
                                       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!s_message_pool) {
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGW(TAG, "event message pool allocated in internal RAM (%u bytes)",
-             (unsigned)(EVENT_BUS_QUEUE_LEN * sizeof(event_bus_message_t)));
+             (unsigned)(EVENT_BUS_QUEUE_LEN * sizeof(scenehub_event_t)));
     return ESP_OK;
 }
 
-static event_bus_message_t *message_pool_alloc(void)
+static scenehub_event_t *message_pool_alloc(void)
 {
-    event_bus_message_t *slot = NULL;
+    scenehub_event_t *slot = NULL;
 
     if (!s_message_pool) {
         return NULL;
@@ -108,7 +113,7 @@ static event_bus_message_t *message_pool_alloc(void)
     return slot;
 }
 
-static void message_pool_free(event_bus_message_t *message)
+static void message_pool_free(scenehub_event_t *message)
 {
     if (!message || !s_message_pool) {
         return;
@@ -189,7 +194,7 @@ static void publish_status(void)
                                     stats.job_queue_waiting);
 }
 
-static void dispatch_message(const event_bus_message_t *message)
+static void dispatch_message(const scenehub_event_t *message)
 {
     event_bus_handler_t handlers[EVENT_BUS_MAX_HANDLERS] = {0};
     size_t handler_count = 0;
@@ -209,8 +214,8 @@ static void dispatch_message(const event_bus_message_t *message)
             uint32_t elapsed_ms = (uint32_t)((esp_timer_get_time() - start_us) / 1000);
             stats_record_handler_duration(elapsed_ms);
             if (elapsed_ms > EVENT_BUS_HANDLER_WARN_MS) {
-                ESP_LOGW(TAG, "slow handler type=%d elapsed_ms=%lu",
-                         message ? message->type : EVENT_NONE,
+                ESP_LOGW(TAG, "slow handler type=%s elapsed_ms=%lu",
+                         scenehub_event_type_to_string(message ? message->type : SCENEHUB_EVENT_NONE),
                          (unsigned long)elapsed_ms);
             }
         }
@@ -221,7 +226,7 @@ static void event_bus_task(void *param)
 {
     (void)param;
 
-    event_bus_message_t *message = NULL;
+    scenehub_event_t *message = NULL;
     while (true) {
         if (xQueueReceive(s_queue, &message, portMAX_DELAY) == pdTRUE) {
             dispatch_message(message);
@@ -263,10 +268,10 @@ esp_err_t event_bus_init(void)
 
     if (!s_queue) {
         s_queue = xQueueCreateWithCaps(EVENT_BUS_QUEUE_LEN,
-                                       sizeof(event_bus_message_t *),
+                                       sizeof(scenehub_event_t *),
                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_queue) {
-            s_queue = xQueueCreate(EVENT_BUS_QUEUE_LEN, sizeof(event_bus_message_t *));
+            s_queue = xQueueCreate(EVENT_BUS_QUEUE_LEN, sizeof(scenehub_event_t *));
         }
         if (!s_queue) {
             return ESP_ERR_NO_MEM;
@@ -340,7 +345,7 @@ esp_err_t event_bus_start(void)
     return ESP_OK;
 }
 
-esp_err_t event_bus_post(const event_bus_message_t *message, TickType_t timeout)
+esp_err_t event_bus_post(const scenehub_event_t *message, TickType_t timeout)
 {
     event_bus_priority_t priority = EVENT_BUS_PRIORITY_NORMAL;
     if (message) {
@@ -352,7 +357,7 @@ esp_err_t event_bus_post(const event_bus_message_t *message, TickType_t timeout)
     return event_bus_post_priority(message, priority, timeout);
 }
 
-esp_err_t event_bus_post_priority(const event_bus_message_t *message,
+esp_err_t event_bus_post_priority(const scenehub_event_t *message,
                                   event_bus_priority_t priority,
                                   TickType_t timeout)
 {
@@ -362,12 +367,24 @@ esp_err_t event_bus_post_priority(const event_bus_message_t *message,
     if (!s_queue) {
         return ESP_ERR_INVALID_STATE;
     }
+#if !CONFIG_SCENEHUB_EVENT_BUS_SKIP_EVENT_VALIDATION
+    if (!scenehub_event_is_valid(message)) {
+        stats_increment(&s_drop_count);
+        ESP_LOGW(TAG,
+                 "drop invalid event type=%s payload_type=%s topic=%s",
+                 scenehub_event_type_to_string(message->type),
+                 scenehub_event_payload_type_to_string(message->payload_type),
+                 message->topic);
+        publish_status();
+        return ESP_ERR_INVALID_ARG;
+    }
+#endif
 
-    event_bus_message_t *queued = message_pool_alloc();
+    scenehub_event_t *queued = message_pool_alloc();
     if (!queued) {
         stats_increment(&s_drop_count);
-        ESP_LOGW(TAG, "drop event type=%d topic=%s: message pool exhausted",
-                 message->type,
+        ESP_LOGW(TAG, "drop event type=%s topic=%s: message pool exhausted",
+                 scenehub_event_type_to_string(message->type),
                  message->topic);
         publish_status();
         return ESP_ERR_NO_MEM;
@@ -387,10 +404,10 @@ esp_err_t event_bus_post_priority(const event_bus_message_t *message,
     }
 
     if (ok != pdTRUE) {
-        event_bus_type_t type = queued->type;
+        scenehub_event_type_t type = queued->type;
         const char *topic = queued->topic;
         stats_increment(&s_drop_count);
-        ESP_LOGW(TAG, "drop event type=%d topic=%s", type, topic);
+        ESP_LOGW(TAG, "drop event type=%s topic=%s", scenehub_event_type_to_string(type), topic);
         message_pool_free(queued);
         publish_status();
         return ESP_ERR_TIMEOUT;

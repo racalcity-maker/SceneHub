@@ -22,11 +22,12 @@ static sdmmc_card_t *s_card = NULL;
 static bool s_spi_init = false;
 static SemaphoreHandle_t s_sd_mutex = NULL;
 
-static void sd_storage_post_state(event_bus_type_t type)
+static void sd_storage_post_state(scenehub_event_type_t type)
 {
-    event_bus_message_t msg = {
-        .type = type,
-    };
+    scenehub_event_t msg = {0};
+    if (scenehub_event_make_text(&msg, type, NULL, NULL) != ESP_OK) {
+        return;
+    }
     esp_err_t err = event_bus_post(&msg, 0);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "failed to post sd state event %d: %s", (int)type, esp_err_to_name(err));
@@ -118,10 +119,10 @@ esp_err_t sd_storage_mount(void)
     if (ret != ESP_OK) {
         s_card = NULL;
         ESP_LOGE(TAG, "failed to mount SD card: %s", esp_err_to_name(ret));
-        sd_storage_post_state(EVENT_CARD_BAD);
+        sd_storage_post_state(SCENEHUB_EVENT_CARD_BAD);
     } else {
         ESP_LOGI(TAG, "SD mounted at %s", SD_STORAGE_ROOT_PATH);
-        sd_storage_post_state(EVENT_CARD_OK);
+        sd_storage_post_state(SCENEHUB_EVENT_CARD_OK);
     }
     sd_unlock();
     return ret;

@@ -1,9 +1,35 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
+function inferScenarioEditorStepType(step){
+const raw=String(step&&step.type||'').trim();
+const low=raw.toLowerCase();
+if(low==='device_command')return 'DEVICE_COMMAND';
+if(low==='device_command_group')return 'DEVICE_COMMAND_GROUP';
+if(low==='wait_device_event')return 'WAIT_DEVICE_EVENT';
+if(low==='wait_any_device_event')return 'WAIT_ANY_DEVICE_EVENT';
+if(low==='wait_all_device_events')return 'WAIT_ALL_DEVICE_EVENTS';
+if(low==='operator_approval')return 'OPERATOR_APPROVAL';
+if(low==='show_operator_message'||low==='operator_message')return 'SHOW_OPERATOR_MESSAGE';
+if(low==='set_flag')return 'SET_FLAG';
+if(low==='wait_flags')return 'WAIT_FLAGS';
+if(low==='end_game'||low==='finish_game')return 'END_GAME';
+if(step&&step.device_id&&step.event_id)return 'WAIT_DEVICE_EVENT';
+if(step&&Array.isArray(step.events)&&step.events.length)return 'WAIT_ANY_DEVICE_EVENT';
+if(step&&(step.prompt||step.operator_prompt||step.approve_label||step.operator_approve_label))return 'OPERATOR_APPROVAL';
+if(step&&(step.message||step.operator_message))return 'SHOW_OPERATOR_MESSAGE';
+if(step&&Array.isArray(step.commands)&&step.commands.length)return 'DEVICE_COMMAND_GROUP';
+if(step&&step.device_id&&step.command_id)return 'DEVICE_COMMAND';
+if(step&&Array.isArray(step.flags)&&step.flags.length)return 'WAIT_FLAGS';
+if(step&&step.flag_name)return 'SET_FLAG';
+if(low==='wait_time')return 'WAIT_TIME';
+return 'WAIT_TIME';
+}
+
 function normalizeScenarioEditorStep(step){
 step=step||{};
+const type=inferScenarioEditorStepType(step);
 const out={
-id:step.id||'',label:step.label||'',enabled:step.enabled!==false,type:step.type||'WAIT_TIME'}
-;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms)out.duration_ms=step.duration_ms;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:cmd.params&&typeof cmd.params==='object'?cmd.params:{}}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;return out;}
+id:step.id||'',label:step.label||'',enabled:step.enabled!==false,type}
+;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms!==undefined&&step.duration_ms!==null)out.duration_ms=Number(step.duration_ms)||0;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:cmd.params&&typeof cmd.params==='object'?cmd.params:{}}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;if(type==='WAIT_TIME'&&(!Number.isFinite(Number(out.duration_ms))||Number(out.duration_ms)<=0))out.duration_ms=1000;return out;}
 function scenarioBranchTypeValue(branch){
 const raw=String(branch&&branch.type||'normal').toLowerCase();
 return raw==='reactive'||raw==='reaction'?'reactive':'normal';
@@ -216,27 +242,10 @@ type=scenarioStepTypeValue({type});
 return type==='WAIT_TIME'||type==='WAIT_DEVICE_EVENT'||type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS'||type==='WAIT_FLAGS';
 }
 
-function scenarioFallbackStepSchemas(){
-const skipFields=[{key:'allow_operator_skip',type:'checkbox',label:'Allow operator skip'},{key:'operator_skip_label',type:'text',label:'Skip label'}];
-return [
-{type:'DEVICE_COMMAND',label:'Device command',fields:[{key:'device_id',type:'device_select',label:'Device',required:true},{key:'command_id',type:'device_command_select',label:'Command',depends_on:'device_id',required:true},{key:'params',type:'params_object',label:'Parameters',depends_on:'command_id'}]},
-{type:'DEVICE_COMMAND_GROUP',label:'Command group',fields:[{key:'commands',type:'command_group',label:'Commands',required:true}]},
-{type:'WAIT_DEVICE_EVENT',label:'Wait device event',fields:[{key:'device_id',type:'device_select',label:'Device',required:true},{key:'event_id',type:'device_event_select',label:'Event',depends_on:'device_id',required:true},{key:'timeout_ms',type:'optional_duration_ms',label:'Timeout'},{key:'timeout_message',type:'textarea',label:'Timeout message'},...skipFields]},
-{type:'WAIT_ANY_DEVICE_EVENT',label:'Wait any device event',fields:[{key:'events',type:'event_group',label:'Events',required:true},...skipFields]},
-{type:'WAIT_ALL_DEVICE_EVENTS',label:'Wait all device events',fields:[{key:'events',type:'event_group',label:'Events',required:true},...skipFields]},
-{type:'WAIT_TIME',label:'Wait time',fields:[{key:'duration_ms',type:'duration_ms',label:'Duration',required:true},...skipFields]},
-{type:'OPERATOR_APPROVAL',label:'Operator approval',fields:[{key:'prompt',type:'text',label:'Prompt',required:true},{key:'approve_label',type:'text',label:'Button label'}]},
-{type:'SHOW_OPERATOR_MESSAGE',label:'Show operator message',fields:[{key:'message',type:'textarea',label:'Message',required:true}]},
-{type:'SET_FLAG',label:'Set flag',fields:[{key:'flag_name',type:'text',label:'Flag',required:true},{key:'value',type:'checkbox',label:'Value',required:true}]},
-{type:'WAIT_FLAGS',label:'Wait flags',fields:[{key:'flags',type:'flag_list',label:'Flags',required:true},{key:'timeout_ms',type:'optional_duration_ms',label:'Timeout'},{key:'timeout_message',type:'textarea',label:'Timeout message'},...skipFields]},
-{type:'END_GAME',label:'End game',fields:[]}
-];
-}
-
 function scenarioStepSchemas(){
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const schemas=Array.isArray(catalog.step_schemas)?catalog.step_schemas:[];
-return schemas.length?schemas:scenarioFallbackStepSchemas();
+return schemas;
 }
 
 function scenarioReactiveTriggerTypes(){
@@ -375,12 +384,73 @@ return all.map(t=>`<option value='${esc(t)}' ${type===t?'selected':''}>${esc(sce
 }
 
 function scenarioCatalogDevices(){
+if(!gmHardwareIo.loaded&&!gmHardwareIo.loading&&typeof loadHardwareIoStatus==='function'){
+setTimeout(()=>loadHardwareIoStatus(true),0);
+}
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const catalogDevices=Array.isArray(catalog.quest_devices)?catalog.quest_devices:[];
-if(catalogDevices.length)return catalogDevices;
-return questDevices().map(device=>({
+const base=catalogDevices.length?catalogDevices:questDevices().map(device=>({
 id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
 )).filter(device=>device.id);
+return base.map(scenarioNormalizeHardwareDevice).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
+}
+
+function scenarioIoModeText(mode){
+const value=Number(mode)||0;
+if(value===1)return 'input';
+if(value===2)return 'output';
+return 'disabled';
+}
+
+function scenarioIoChannelFromId(id){
+const match=String(id||'').match(/^ch([1-4])_/);
+return match?Number(match[1]):0;
+}
+
+function scenarioHardwareStatusItems(key){
+const data=gmHardwareIo&&gmHardwareIo.data;
+return data&&Array.isArray(data[key])?data[key]:[];
+}
+
+function scenarioEnabledChannels(key){
+return new Set(scenarioHardwareStatusItems(key).filter(item=>item&&item.enabled).map(item=>Number(item.channel)||0));
+}
+
+function scenarioNormalizeChannelCommand(command,channelLabelPrefix,channels){
+const cmd={...command};
+cmd.label=cmd.label||cmd.id||'Command';
+cmd.channel_options=Array.from(channels||[]).filter(Boolean).sort((a,b)=>a-b).map(channel=>({id:String(channel),name:`${channelLabelPrefix} ${channel}`}));
+cmd.args_schema=Array.isArray(cmd.args_schema)?cmd.args_schema:[];
+cmd.args_schema=cmd.args_schema.map(param=>param&&param.key==='channel'?{...param,label:'Channel'}:param);
+return cmd;
+}
+
+function scenarioNormalizeHardwareDevice(device){
+if(!device||!device.id)return device;
+const out={...device};
+out.commands=Array.isArray(device.commands)?device.commands.slice():[];
+out.events=Array.isArray(device.events)?device.events.slice():[];
+if(device.id==='system_relay'){
+const channels=scenarioEnabledChannels('relays');
+out.name='Relay channels';
+out.commands=out.commands.filter(cmd=>cmd.id!=='toggle'||cmd.manual_allowed!==false).map(cmd=>scenarioNormalizeChannelCommand(cmd,'Relay',channels));
+if(gmHardwareIo.loaded&&!channels.size)out.commands=[];
+}
+else if(device.id==='system_mosfet'){
+const channels=scenarioEnabledChannels('mosfets');
+out.name='MOSFET channels';
+out.commands=out.commands.map(cmd=>scenarioNormalizeChannelCommand(cmd,'MOSFET',channels));
+if(gmHardwareIo.loaded&&!channels.size)out.commands=out.commands.filter(cmd=>cmd.id==='all_off');
+}
+else if(device.id==='system_io'){
+const items=scenarioHardwareStatusItems('ios');
+const inputChannels=new Set(items.filter(item=>item&&item.enabled&&scenarioIoModeText(item.mode)==='input').map(item=>Number(item.channel)||0));
+const outputChannels=new Set(items.filter(item=>item&&item.enabled&&scenarioIoModeText(item.mode)==='output').map(item=>Number(item.channel)||0));
+out.name='IO channels';
+out.commands=out.commands.filter(cmd=>cmd.id==='get_state'?inputChannels.size||outputChannels.size:outputChannels.size).map(cmd=>scenarioNormalizeChannelCommand(cmd,'IO',cmd.id==='get_state'?new Set([...inputChannels,...outputChannels]):outputChannels));
+out.events=out.events.filter(event=>inputChannels.has(scenarioIoChannelFromId(event.id)));
+}
+return out;
 }
 
 function firstScenarioDevice(requireCommand){

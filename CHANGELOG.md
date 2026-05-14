@@ -8,8 +8,10 @@ All notable project changes are documented in this file.
 
 - Added planning docs for local hardware IO, Universal IO Node, and the P2.2 command executor/runtime split.
 - Added a `command_executor` component as the first P2.2 extraction step, routing SceneHub-native MQTT and system audio command side effects behind one executor API.
+- Added a `scenehub_scenario_validation` component so product/runtime-aware scenario checks can live outside the `room_scenario` model layer.
 - Added GM room runtime refresh endpoint and audio path metadata warmup/cache for selected profiles.
 - Added dedicated command executor backend tests for dispatch metadata, policy checks, pending results, terminal result clearing, and timeout events.
+- Added backend tests that verify planned command dispatch is dropped safely after session reset/stop or branch/action desync for both normal and Reactive Branch v2 paths.
 - Added the first `hardware_io` implementation slice with configurable local relay GPIO channels.
 - Added built-in `system_relay` Quest Device commands: `set`, `pulse`, and `toggle`.
 - Added relay module active-low configuration and defaulted the first relay set to GPIO 15-18 for the current board bring-up.
@@ -22,6 +24,9 @@ All notable project changes are documented in this file.
 - Added HTTP error diagnostics with URI and heap counters for low-memory Web UI failures.
 - Added a GM Panel bundle freshness checker so split frontend sources can be verified against the generated `gm_panel.js`.
 - Added a memory allocation policy document for internal heap, PSRAM, DMA buffers, runtime-hot paths, and audio buffer cleanup.
+- Added a dedicated `scenehub_events` implementation layer with event builders, validation helpers, string helpers, and semantic match helpers.
+- Added event-bus-side invalid-event rejection by default, with an explicit `CONFIG_SCENEHUB_EVENT_BUS_SKIP_EVENT_VALIDATION` escape hatch.
+- Added a dedicated GM runtime event-driven migration plan and runtime inbox/deadline-timer infrastructure in `gm_core`.
 
 ### Changed
 
@@ -68,6 +73,8 @@ All notable project changes are documented in this file.
 - Reworked GM Panel refresh behavior toward selective rendering: room runtime polling patches only the runtime panel, visible clocks update locally, and the manual-button sidebar skips DOM replacement unless its render key changes.
 - Reworked GM Panel static-data polling to use `/api/gm/versions` for changed devices, observed clients, scenarios, and profiles instead of forcing broad GM snapshot reloads.
 - Kept full GM Panel rendering as the fallback for navigation, editor save/delete, room structural changes, and unknown state transitions.
+- Split `scenehub_control` into focused room/profile/scenario/device modules and removed the remaining generic success path that could fall back to broad GM state invalidation.
+- Completed the changed-only GM refresh transition for profile/scenario/device editor and storage/import flows. Browser GM Panel and desktop app now consume the same `gm.invalidate` websocket contract with targeted slice refresh, while explicit recovery uses `gm.resync.required` instead of overloading routine invalidation.
 - Split GM Panel scenario editor collection so branch settings and normal step collection are handled by focused helpers instead of one large `collectScenarioEditor()` body.
 - Added `json` field support to the shared GM Panel schema-form helper.
 - Moved hot-path GM runtime wait/reactive scratch storage toward static PSRAM-backed buffers to reduce repeated heap allocation/free churn.
@@ -93,10 +100,30 @@ All notable project changes are documented in this file.
 - Reduced the in-memory room scenario catalog limit from 24 to 12 scenarios to return about 1.3 MB of PSRAM on the current firmware shape.
 - Removed per-message MQTT PUBLISH payload allocation by parsing incoming payloads in reusable per-client RX packet buffers.
 - Replaced MQTT event bridge `malloc` copies with a fixed PSRAM job pool for outgoing event-to-MQTT publishing.
+- Replaced transient `cJSON_Parse()` use in orchestrator room-runtime asset scanning and GM audio-prepare warmup with bounded `"file"` field scanners, keeping those common runtime/control helper paths allocation-free.
+- Completed the P0 transport-independent backend extraction: `scenehub_control` now owns GM write-side commands, `scenehub_state` owns GM state-change notifications, public orchestrator room DTOs no longer expose `gm_room_session`, and Web UI room runtime/profile/scenario read paths now act as thin adapters over `scenehub_control` and `orchestrator_registry`.
+- Completed the main P1 layer-cleanup items: `room_scenario` now exposes separate static/runtime validation entry points, `gm_core` declares its explicit `service_status` dependency, public orchestrator registry DTOs no longer expose `gm_room_session`, and event schema types are split into `scenehub_events` while `event_bus` stays transport infrastructure. The remaining P1 structural follow-up is the full read-model extraction out of `orchestrator_core`.
+- Split scenario validation along the intended boundary: `room_scenario` now owns only model/static/runtime-semantic checks, while SceneHub-specific quest-device and local hardware environment validation moved to `scenehub_scenario_validation` and is consumed by `scenehub_control`, `gm_core`, and `scenehub_read_model`.
+- Changed `room_scenario_validate_by_id(...)` to reuse the shared scenario scratch buffer instead of heap-allocating a full bounded scenario object.
+- Moved scenario progress ownership out of browser/desktop heuristics: `gm_core` and `scenehub_read_model` now publish explicit branch counters and `steps[].state` runtime data, while Web UI and the desktop app render backend-owned `done/current/waiting/error` state instead of deriving it from step indexes.
+- Closed the temporary Web UI thin-facade rollout: `web_ui` now acts as a transport/serialization layer over `scenehub_control`, `gm_core`, and `scenehub_read_model`, runtime refresh paths use narrow backend-owned semantics instead of broad GM snapshot fallbacks, and the temporary thin-facade plan was retired.
+- Completed the `scenehub_events` contract migration: runtime code, tests, and `event_bus` now use SceneHub-native event types directly instead of transport-era aliases.
+- Reworked GM runtime scheduling away from fixed `100 ms` polling: event progression now flows through a runtime inbox, and time-based continuation is driven by a one-shot runtime deadline timer instead of an unconditional sleep loop.
+- Reorganized `room_scenario` into `json/` and `storage/` source families while keeping model/domain validation in the component root.
+- Moved GM wait-event and Reactive Branch v2 device-event metadata resolution fully outside `gm_session_lock`, using pre-resolved local match data during lock-held event matching.
+- Reworked `orchestrator_timeline` and `error_monitor` event-bus consumers to stay adapter-only through bounded `event_bus_post_job(...)` staging instead of dedicated service queues and task stacks.
+- Replaced `/api/gm/room/runtime` cJSON response building with a bounded chunked JSON serializer that streams directly from static runtime-view scratch.
+- Added a lighter `/api/gm/room/runtime?detail=summary` mode and switched multi-room GM refresh paths to it so dashboard/rooms polling no longer pulls full branch/asset runtime detail for every room.
+- Trimmed duplicate scalar fields from the remaining `/api/gm/room/runtime` detail payload, removing unused wait/count metadata and other redundant runtime fields from the hot room-control response.
+- Updated locking and memory policy docs to reflect the current GM scratch-lock topology, adapter-only event-bus handlers, and static scratch use in scenario-start/reactive resolve paths.
 
 ### Fixed
 
 - Fixed GM game start stack pressure by avoiding duplicate full profile validation in the HTTP task and moving room-scenario validation Quest Device scratch storage to PSRAM.
+- Fixed `FLAG_CHANGED` event emission so scenario flag updates no longer publish invalid pseudo-`DEVICE_CONTROL` events.
+- Fixed MQTT text-event construction so injected MQTT events no longer rely on an implicit zeroed `payload_type`.
+- Fixed GM runtime/operator UI wait labels for `WAIT_TIME`: Room Control and branch progress now show a useful time summary such as `30 sec` instead of the generic `time`.
+- Fixed scenario-start `httpd` stack overflows by moving large start-path scratch and Reactive Branch v2 trigger-resolve `quest_device_t` storage off the HTTP task stack and into static PSRAM-backed scratch protected by mutexes.
 
 ## 2026-05-03
 
@@ -220,3 +247,93 @@ All notable project changes are documented in this file.
 - Stop background now fades out smoothly.
 - OTA confirmation no longer causes persistent gray noise.
 - WAV background repeat no longer clicks at loop start.
+
+
+### Added
+
+- Added `ws_runtime` component for lightweight WebSocket runtime notifications.
+- Added WebSocket endpoint `/api/ws`.
+- Added WebSocket client subscription flow.
+- Added common WebSocket envelope format with:
+  - `type`
+  - `seq`
+  - `schema_version`
+  - `snapshot_generation`
+  - `server_time_ms`
+  - `payload`
+- Added `connection.ready` event after successful WebSocket subscription.
+- Added `subscription.ready` event after successful subscribe request.
+- Added `pong` response for WebSocket `ping` messages.
+- Added `gm.versions.changed` WebSocket event for notifying clients about GM state/version changes.
+- Added monotonic WebSocket versions notification generation counter.
+- Added `gm_orchestrator_notify_state_changed()` as a centralized notification bridge for GM API state mutations.
+
+### Changed
+
+- Changed WebSocket endpoint from temporary `/ws/gm` to documented `/api/ws`.
+- Changed WebSocket messages to follow the desktop app envelope contract.
+- Replaced temporary `hello`/`subscribed` plain messages with envelope-based events:
+  - `connection.ready`
+  - `subscription.ready`
+- Replaced scattered `orchestrator_registry_invalidate()` + `gm_versions_notify_if_changed()` calls with centralized `gm_orchestrator_notify_state_changed()`.
+- Updated GM API mutation handlers to trigger centralized state-change notifications.
+
+### Fixed
+
+- Fixed WebSocket message format mismatch with desktop app expectations.
+- Fixed non-monotonic `gm.versions.changed.payload.generation` values by introducing a separate increasing notification counter.
+- Fixed missing WebSocket notifications for GM actions such as `Start game` by routing API state mutations through the centralized notify helper.
+
+### Notes
+
+- WebSocket is currently used only as a lightweight invalidation/notification channel.
+- Full runtime, scenarios, devices, profiles, and other heavy data are still fetched through HTTP.
+- `gm.versions.changed` does not carry full runtime data. Clients should use it as a signal to call `/api/gm/versions` and then refresh only the changed data.
+Если хочешь на русском
+
+Можно так:
+
+# Журнал изменений
+
+## Unreleased
+
+### Добавлено
+
+- Добавлен компонент `ws_runtime` для лёгких WebSocket-уведомлений.
+- Добавлен WebSocket endpoint `/api/ws`.
+- Добавлена подписка клиента на WebSocket-события.
+- Добавлен общий формат WebSocket envelope:
+  - `type`
+  - `seq`
+  - `schema_version`
+  - `snapshot_generation`
+  - `server_time_ms`
+  - `payload`
+- Добавлено событие `connection.ready`.
+- Добавлено событие `subscription.ready`.
+- Добавлен ответ `pong` на WebSocket-сообщение `ping`.
+- Добавлено событие `gm.versions.changed` для уведомления клиентов об изменениях GM-состояния.
+- Добавлен монотонный счётчик generation для WebSocket-уведомлений.
+- Добавлена функция `gm_orchestrator_notify_state_changed()` как единая точка уведомления об изменении GM-состояния.
+
+### Изменено
+
+- Временный endpoint `/ws/gm` заменён на документированный `/api/ws`.
+- WebSocket-сообщения приведены к контракту desktop-приложения.
+- Временные сообщения `hello` и `subscribed` заменены на envelope-события:
+  - `connection.ready`
+  - `subscription.ready`
+- Повторяющиеся вызовы `orchestrator_registry_invalidate()` и `gm_versions_notify_if_changed()` заменены на единый вызов `gm_orchestrator_notify_state_changed()`.
+- GM API handlers, изменяющие состояние, теперь вызывают централизованное уведомление об изменении состояния.
+
+### Исправлено
+
+- Исправлено несовпадение формата WebSocket-сообщений с ожиданиями desktop-приложения.
+- Исправлена немонотонность `gm.versions.changed.payload.generation`.
+- Исправлено отсутствие WebSocket-уведомлений после действий вроде `Start game`.
+
+### Примечания
+
+- WebSocket пока используется только как лёгкий канал уведомлений.
+- Тяжёлые данные — runtime, сценарии, устройства, профили — по-прежнему загружаются через HTTP.
+- `gm.versions.changed` не содержит полный runtime. Клиент должен воспринимать его как сигнал выполнить `/api/gm/v

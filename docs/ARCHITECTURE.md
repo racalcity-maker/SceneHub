@@ -41,6 +41,8 @@ those capabilities.
 
 Current gameplay execution is owned by `gm_core` and `room_scenario`; current
 device state comes from `quest_device` and `device_control_ingest`.
+Product-aware scenario environment checks are owned by
+`scenehub_scenario_validation`, not by the `room_scenario` model itself.
 
 ## Main Components
 
@@ -53,12 +55,15 @@ device state comes from `quest_device` and `device_control_ingest`.
 | `room_catalog` | File-backed room list at `/sdcard/quest/rooms.json` |
 | `quest_device` | File-backed Quest Device store and command/event capability model |
 | `device_control_ingest` | Control-contract telemetry ingest for observed physical clients |
-| `room_scenario` | Scenario model, validation, JSON import/export |
+| `room_scenario` | Scenario model, static/runtime-semantic validation, JSON import/export |
+| `scenehub_scenario_validation` | SceneHub-specific scenario environment validation against Quest Device and local hardware capabilities |
 | `command_executor` | Command dispatch boundary for MQTT devices, system audio and local hardware IO |
 | `gm_game_profile` | Game Mode model, validation, JSON import/export |
 | `gm_core` | Room session runtime, timer, game start/stop/reset, scenario execution |
+| `scenehub_control` | Write-side application facade for GM/scenario/profile/device actions |
+| `scenehub_read_model` | Read-side room/runtime/profile/scenario projections for APIs and UI |
 | `orchestrator_core` | GM read model, health aggregation, audit and timeline |
-| `hardware_io` | Built-in relay/MOSFET/input/GPIO control, safe-off and status snapshots |
+| `hardware_io` | Built-in relay/MOSFET/universal IO control, safe-off and status snapshots |
 | `audio_player` | Local audio playback service, background/effect mixer and system audio command handling |
 | `web_ui` | HTTP API, auth, GM panel assets and UI endpoints |
 | `error_monitor` | Fault collection for dashboard/room health |
@@ -78,9 +83,15 @@ Game start:
 
 Scenario execution:
 
+- Under the session lock, `gm_core` decides the next command as a small planned
+  dispatch.
+- The actual external command is executed after unlock through
+  `command_executor`.
+- If the session is reset/stopped or the branch/action state changes before the
+  planned dispatch is applied, the stale plan is dropped as a no-op.
 - `DEVICE_COMMAND` sends one saved Quest Device command through `command_executor`.
 - `DEVICE_COMMAND_GROUP` sends several saved commands in order.
-- `WAIT_TIME` resumes from the tick handler.
+- `WAIT_TIME` resumes from the GM runtime deadline wake path.
 - `WAIT_DEVICE_EVENT`, `WAIT_ANY_DEVICE_EVENT` and `WAIT_ALL_DEVICE_EVENTS`
   resume from device events.
 - `OPERATOR_APPROVAL` resumes from operator approval.
@@ -93,16 +104,16 @@ Game stop:
 1. Room scenario runtime stops.
 2. Game timer stops.
 3. System audio receives a best-effort stop command.
-4. Built-in relay/MOSFET/GPIO outputs are forced to safe/off after the GM
+4. Built-in relay/MOSFET/IO outputs are forced to safe/off after the GM
    session lock is released; failures are surfaced through `service_status`.
 5. Audio output drains a short silence buffer before I2S reset so the DAC does
    not hold the last sample.
 6. The room session returns to stopped/finished state.
 
-Game reset also forces built-in relay/MOSFET/GPIO outputs to safe/off after the
+Game reset also forces built-in relay/MOSFET/IO outputs to safe/off after the
 GM session lock is released. `END_GAME` does not; scenarios that need finale
 cleanup should add explicit `system_audio.stop`, `system_relay.set/off`,
-`system_mosfet.all_off` or `system_gpio.set/inactive` steps.
+`system_mosfet.all_off` or `system_io.set/inactive` steps.
 
 Service runtime faults are promoted into the orchestrator issue list. For
 example, a `hardware_io` safe-off failure becomes a system issue visible in GM
@@ -197,6 +208,21 @@ normal branch may later continue from `WAIT_FLAGS secret_path_unlocked=true`.
 Use explicit normal-flow `END_GAME` steps for game completion; do not hide game
 completion behind reactive flags.
 
+## Validation Boundary
+
+Scenario validation is intentionally split into two layers:
+
+- `room_scenario` validates the scenario model itself: required fields, branch
+  structure, step payload shape, reactive policy semantics, and other bounded
+  rules that do not need live product state.
+- `scenehub_scenario_validation` validates the same scenario against the active
+  SceneHub environment: saved Quest Devices, command/event capability presence,
+  and local hardware/system-device availability.
+
+This keeps the scenario model portable and predictable while still letting GM
+start flows, write-side APIs, and read-model projections surface real
+device/environment issues to operators.
+
 ## Persistence
 
 Current persistent files:
@@ -237,9 +263,18 @@ events, manual buttons and optional interface discovery import.
 ## Event Hot Paths
 
 `event_bus` owns the shared internal event pool/job queue. Scenario matching in
-`gm_core` has a dedicated FreeRTOS queue that stores `event_bus_message_t`
+`gm_core` has a dedicated FreeRTOS queue that stores `scenehub_event_t`
 values directly. The GM session event handler does not allocate/free heap memory
 per event.
+
+Event-bus handlers are adapter-only boundaries:
+
+- a handler may validate lightweight preconditions and copy/post the event into
+  its own component queue
+- a handler must not do broad runtime scans, build snapshots, parse large JSON
+  payloads, call hardware, or execute scenario progression inline
+- heavy or blocking follow-up work belongs in the receiving component task or
+  in an explicit `event_bus_post_job(...)` job, not in the bus dispatch task
 
 Command side effects are separated from scenario state progression by
 `command_executor`. Runtime decides that a command should run; the executor
@@ -263,6 +298,8 @@ an unseen client is degraded/warning until it sends the first valid telemetry.
 - New gameplay behavior belongs in Room Scenarios.
 - Devices expose capabilities; they do not own quest flow.
 - Game Modes are selection presets, not a second scenario engine.
+- Event-bus handlers are transport adapters, not execution sites for heavy
+  domain logic.
 - UI should show names first and hide ids behind advanced/debug sections.
 - Scenario step editors should be schema-driven where practical.
 - HTTP APIs should remain documented in `gm_api_contract.md`.

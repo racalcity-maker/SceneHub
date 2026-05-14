@@ -814,9 +814,11 @@ Current room scenario limits:
 }
 ```
 
-`END_GAME` finishes the game timer and marks the game complete. It does not stop audio automatically; use a separate `DEVICE_COMMAND` to `system_audio.stop` when silence is required. It also does not force local relay/MOSFET/GPIO safe-off; use explicit `system_relay`, `system_mosfet` or `system_gpio` commands for finale cleanup.
+`END_GAME` finishes the game timer and marks the game complete. It does not stop audio automatically; use a separate `DEVICE_COMMAND` to `system_audio.stop` when silence is required. It also does not force local relay/MOSFET/IO safe-off; use explicit `system_relay`, `system_mosfet` or `system_io` commands for finale cleanup.
 
-Runtime responses include branch progress when a scenario is running:
+Runtime responses include branch progress when a scenario is running. Branch and
+step status are controller-owned; browser and desktop clients should render
+them directly instead of inferring `done/current/waiting` from indexes:
 
 ```json
 {
@@ -831,17 +833,37 @@ Runtime responses include branch progress when a scenario is running:
       "required_for_completion": false,
       "step_start_index": 0,
       "step_count": 3,
+      "total_steps": 3,
       "current_step_index": 2,
+      "current_step_local_index": 2,
+      "done_steps": 2,
+      "completed_step_count": 2,
+      "failed_step_index": -1,
+      "current_step_state": "waiting",
       "state": "waiting",
-      "wait_type": "any_events"
+      "wait_type": "any_events",
+      "steps": [
+        { "index": 0, "global_index": 0, "state": "done" },
+        { "index": 1, "global_index": 1, "state": "done" },
+        { "index": 2, "global_index": 2, "state": "waiting" }
+      ]
     }
   ]
 }
 ```
 
-Future reactive branch runtime entries will use the same `scenario_branches[]`
-array with `type: "reactive"` and reaction-oriented states such as
-`listening`, `running`, `cooldown` and `disabled`.
+Step state values:
+
+- `pending`
+- `current`
+- `waiting`
+- `done`
+- `error`
+- `skipped` reserved for future use
+
+Reactive branches use the same `scenario_branches[]` array with `type:
+"reactive"`. They still expose `done_steps`, `total_steps` and `steps[].state`,
+but an idle trigger-listening branch may legitimately have no `current` step.
 
 ### `GET /api/gm/room/scenarios?room_id=room_1`
 
@@ -1052,22 +1074,85 @@ Response:
   "selected_profile_id": "easy",
   "selected_profile_name": "Easy",
   "selected_profile_scenario_id": "easy_flow",
-  "selected_profile_duration_ms": 3600000,
   "selected_scenario_id": "easy_flow",
   "selected_scenario_name": "Easy Flow",
   "running_scenario_id": "easy_flow",
   "running_scenario_name": "Easy Flow",
   "running_scenario_generation": 12,
   "scenario_runtime_state": "waiting",
-  "scenario_current_step_index": 0,
   "scenario_wait_type": "event",
   "scenario_wait_until_ms": 0,
   "scenario_wait_started_at_ms": 123456,
-  "scenario_wait_event_type": "puzzle_done",
-  "scenario_wait_source_id": "box_1",
   "scenario_wait_operator_prompt": "",
   "scenario_wait_operator_label": "",
   "scenario_last_error": ""
+}
+```
+
+### `GET /api/gm/room/runtime?room_id=room_1`
+
+Returns room-scoped runtime state used by browser and desktop clients for live
+scenario rendering.
+
+Query options:
+
+- default: full runtime detail for the active room-control view
+- `detail=summary`: lighter runtime payload for dashboard/rooms refresh; omits
+  heavy arrays such as branch step runtime, runtime flags, wait-event groups,
+  issue-id lists, and asset readiness detail
+
+Relevant runtime fields:
+
+- `scenario_runtime_state`
+- `scenario_wait_type`
+- `scenario_wait_until_ms`
+- `scenario_wait_started_at_ms`
+- `scenario_wait_events[]`
+- `scenario_wait_flags[]`
+- `scenario_branches[]`
+
+Example:
+
+```json
+{
+  "ok": true,
+  "runtime_schema_version": 1,
+  "room_id": "room_1",
+  "running_scenario_id": "easy_flow",
+  "running_scenario_name": "Easy Flow",
+  "scenario_runtime_state": "waiting",
+  "scenario_wait_type": "event",
+  "scenario_wait_until_ms": 0,
+  "scenario_wait_started_at_ms": 123456,
+  "scenario_branches": [
+    {
+      "index": 0,
+      "id": "main",
+      "name": "Main",
+      "type": "normal",
+      "active": true,
+      "required_for_completion": true,
+      "step_start_index": 0,
+      "step_count": 5,
+      "total_steps": 5,
+      "current_step_index": 2,
+      "current_step_local_index": 2,
+      "done_steps": 2,
+      "completed_step_count": 2,
+      "failed_step_index": -1,
+      "current_step_state": "waiting",
+      "state": "waiting",
+      "wait_type": "event",
+      "wait_until_ms": 0,
+      "steps": [
+        { "index": 0, "global_index": 0, "state": "done" },
+        { "index": 1, "global_index": 1, "state": "done" },
+        { "index": 2, "global_index": 2, "state": "waiting" },
+        { "index": 3, "global_index": 3, "state": "pending" },
+        { "index": 4, "global_index": 4, "state": "pending" }
+      ]
+    }
+  ]
 }
 ```
 
@@ -1160,9 +1245,9 @@ Success response:
 
 `start_game` requires a selected profile. It reloads/validates the profile and scenario, applies profile duration, starts the timer and starts room scenario runtime.
 
-`stop_game` stops scenario runtime, finishes the timer/session, stops audio and forces built-in relay/MOSFET/GPIO outputs to safe/off after the GM session lock is released.
+`stop_game` stops scenario runtime, finishes the timer/session, stops audio and forces built-in relay/MOSFET/IO outputs to safe/off after the GM session lock is released.
 
-`reset_game` resets scenario runtime and timer duration, stops audio and forces built-in relay/MOSFET/GPIO outputs to safe/off after the GM session lock is released. If a profile is selected, the profile duration is re-applied.
+`reset_game` resets scenario runtime and timer duration, stops audio and forces built-in relay/MOSFET/IO outputs to safe/off after the GM session lock is released. If a profile is selected, the profile duration is re-applied.
 
 ## Timer Runtime
 

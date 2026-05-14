@@ -12,6 +12,7 @@
 static EXT_RAM_BSS_ATTR audio_player_asset_info_t s_audio_asset_cache[AUDIO_ASSET_CACHE_MAX];
 static size_t s_audio_asset_cache_count;
 static size_t s_audio_asset_cache_next;
+static uint32_t s_audio_asset_generation;
 
 static uint32_t audio_asset_now_ms(void)
 {
@@ -200,6 +201,7 @@ esp_err_t audio_player_prepare_path(const char *path, audio_player_asset_info_t 
     if (out) {
         *out = info;
     }
+    s_audio_asset_generation++;
     return ESP_OK;
 }
 
@@ -221,9 +223,15 @@ esp_err_t audio_player_asset_get(const char *path, audio_player_asset_info_t *ou
     return ESP_OK;
 }
 
+uint32_t audio_player_asset_generation(void)
+{
+    return s_audio_asset_generation;
+}
+
 void audio_player_asset_cache_clear(void)
 {
     memset(s_audio_asset_cache, 0, sizeof(s_audio_asset_cache));
     s_audio_asset_cache_count = 0;
     s_audio_asset_cache_next = 0;
+    s_audio_asset_generation++;
 }

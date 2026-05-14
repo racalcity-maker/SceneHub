@@ -61,13 +61,13 @@ static void ce_add_relay_device(bool manual_allowed,
     TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&device));
 }
 
-static void ce_make_result_event(event_bus_message_t *msg,
+static void ce_make_result_event(scenehub_event_t *msg,
                                  const command_executor_dispatch_t *dispatch,
                                  const char *status)
 {
     memset(msg, 0, sizeof(*msg));
-    msg->type = EVENT_DEVICE_CONTROL;
-    msg->payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
+    msg->type = SCENEHUB_EVENT_DEVICE_CONTROL;
+    msg->payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL;
     ce_test_copy(msg->payload, sizeof(msg->payload), status);
     ce_test_copy(msg->data.device_control.device_id,
                  sizeof(msg->data.device_control.device_id),
@@ -147,8 +147,8 @@ static void test_command_executor_accepted_result_keeps_pending_until_timeout(vo
 {
     command_executor_request_t request = {0};
     command_executor_dispatch_t dispatch = {0};
-    event_bus_message_t event = {0};
-    event_bus_message_t timeout_event = {0};
+    scenehub_event_t event = {0};
+    scenehub_event_t timeout_event = {0};
 
     ce_test_bootstrap();
     ce_add_relay_device(true, true, true, 1);
@@ -164,7 +164,7 @@ static void test_command_executor_accepted_result_keeps_pending_until_timeout(vo
     vTaskDelay(pdMS_TO_TICKS(50));
 
     TEST_ASSERT_EQUAL(1, command_executor_poll_timeouts(&timeout_event, 1));
-    TEST_ASSERT_EQUAL(EVENT_DEVICE_CONTROL, timeout_event.type);
+    TEST_ASSERT_EQUAL(SCENEHUB_EVENT_DEVICE_CONTROL, timeout_event.type);
     TEST_ASSERT_EQUAL_STRING(SCENEHUB_COMMAND_RESULT_TIMEOUT, timeout_event.payload);
     TEST_ASSERT_EQUAL_STRING(dispatch.request_id, timeout_event.data.device_control.action_id);
 }
@@ -173,8 +173,8 @@ static void test_command_executor_terminal_result_clears_pending(void)
 {
     command_executor_request_t request = {0};
     command_executor_dispatch_t dispatch = {0};
-    event_bus_message_t event = {0};
-    event_bus_message_t timeout_event = {0};
+    scenehub_event_t event = {0};
+    scenehub_event_t timeout_event = {0};
 
     ce_test_bootstrap();
     ce_add_relay_device(true, true, true, 1);
@@ -196,7 +196,7 @@ static void test_command_executor_cancel_request_clears_pending(void)
 {
     command_executor_request_t request = {0};
     command_executor_dispatch_t dispatch = {0};
-    event_bus_message_t timeout_event = {0};
+    scenehub_event_t timeout_event = {0};
 
     ce_test_bootstrap();
     ce_add_relay_device(true, true, true, 1);

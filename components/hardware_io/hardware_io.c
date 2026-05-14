@@ -65,10 +65,10 @@ esp_err_t hardware_io_init(void)
         err = hardware_io_mosfet_init_locked();
     }
     if (err == ESP_OK) {
-        err = hardware_io_input_init_locked();
+        err = hardware_io_mosfet_effects_init_locked();
     }
     if (err == ESP_OK) {
-        err = hardware_io_gpio_init_locked();
+        err = hardware_io_io_init_locked();
     }
     if (err != ESP_OK) {
         hardware_io_unlock();
@@ -104,7 +104,7 @@ esp_err_t hardware_io_safe_off_all(void)
     if (err != ESP_OK && first_err == ESP_OK) {
         first_err = err;
     }
-    err = hardware_io_gpio_safe_off_all_locked();
+    err = hardware_io_io_safe_off_all_locked();
     if (err != ESP_OK && first_err == ESP_OK) {
         first_err = err;
     }

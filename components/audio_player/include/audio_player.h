@@ -77,4 +77,5 @@ void audio_player_get_status(audio_player_status_t *out);
 esp_err_t audio_player_prepare_path(const char *path, audio_player_asset_info_t *out);
 bool audio_player_asset_is_prepared(const char *path);
 esp_err_t audio_player_asset_get(const char *path, audio_player_asset_info_t *out);
+uint32_t audio_player_asset_generation(void);
 void audio_player_asset_cache_clear(void);

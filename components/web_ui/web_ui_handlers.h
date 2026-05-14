@@ -1,9 +1,13 @@
 #pragma once
 
+#include "cJSON.h"
 #include "esp_err.h"
 #include "esp_http_server.h"
+#include "scenehub_state.h"
 
 esp_err_t web_ui_system_init(void);
+esp_err_t meta_handler(httpd_req_t *req);
+cJSON *web_ui_build_meta_json(void);
 esp_err_t status_handler(httpd_req_t *req);
 esp_err_t ota_status_handler(httpd_req_t *req);
 esp_err_t ota_upload_handler(httpd_req_t *req);
@@ -26,6 +30,7 @@ esp_err_t ap_stop_handler(httpd_req_t *req);
 esp_err_t root_get_handler(httpd_req_t *req);
 esp_err_t gm_page_handler(httpd_req_t *req);
 esp_err_t gm_state_handler(httpd_req_t *req);
+esp_err_t gm_system_summary_handler(httpd_req_t *req);
 esp_err_t gm_versions_handler(httpd_req_t *req);
 esp_err_t gm_rooms_handler(httpd_req_t *req);
 esp_err_t gm_room_save_handler(httpd_req_t *req);
@@ -78,3 +83,4 @@ esp_err_t gm_session_finish_handler(httpd_req_t *req);
 esp_err_t gm_hint_send_handler(httpd_req_t *req);
 esp_err_t gm_hint_clear_handler(httpd_req_t *req);
 esp_err_t hardware_io_status_handler(httpd_req_t *req);
+esp_err_t hardware_io_io_mode_handler(httpd_req_t *req);

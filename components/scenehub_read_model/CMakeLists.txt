@@ -1,0 +1,33 @@
+idf_component_register(
+    SRCS
+        "registry/orchestrator_registry.c"
+        "registry/orch_registry_runtime_view.c"
+        "registry/orch_registry_runtime_assets.c"
+        "registry/orch_registry_step_schemas.c"
+        "orch_common.c"
+        "orch_snapshot_builder.c"
+        "orch_device_view.c"
+        "orch_room_view.c"
+        "orch_room_profile_view.c"
+        "orch_room_scenario_view.c"
+        "orch_issue_builder.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "."
+        "registry"
+    REQUIRES
+        audio_player
+        device_control_ingest
+        event_bus
+        esp_timer
+        freertos
+        gm_core
+        json
+        quest_common
+        quest_device
+        room_scenario
+        room_catalog
+        scenehub_scenario_validation
+        service_status
+)

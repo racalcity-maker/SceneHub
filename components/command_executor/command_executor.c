@@ -16,6 +16,10 @@ static portMUX_TYPE s_execute_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static EXT_RAM_BSS_ATTR quest_device_t s_execute_device;
 static EXT_RAM_BSS_ATTR quest_device_command_t s_execute_command;
 
+typedef struct {
+    char client_id[QUEST_DEVICE_CLIENT_ID_MAX_LEN];
+} command_executor_device_snapshot_t;
+
 typedef enum {
     COMMAND_EXECUTOR_PARAM_MISSING = 0,
     COMMAND_EXECUTOR_PARAM_STRING,
@@ -469,8 +473,8 @@ esp_err_t command_executor_execute(const command_executor_request_t *request,
                                    char *error,
                                    size_t error_size)
 {
-    quest_device_t *device = NULL;
-    quest_device_command_t *command = NULL;
+    command_executor_device_snapshot_t device = {0};
+    quest_device_command_t command = {0};
     esp_err_t err = ESP_OK;
     if (!request || !request->device_id[0] || !request->command_id[0]) {
         return command_executor_fail(error, error_size, ESP_ERR_INVALID_ARG, "device_command_invalid");
@@ -487,44 +491,49 @@ esp_err_t command_executor_execute(const command_executor_request_t *request,
     }
     memset(&s_execute_device, 0, sizeof(s_execute_device));
     memset(&s_execute_command, 0, sizeof(s_execute_command));
-    device = &s_execute_device;
-    command = &s_execute_command;
-    err = quest_device_get(request->device_id, device);
+    err = quest_device_get(request->device_id, &s_execute_device);
     if (err != ESP_OK) {
         err = command_executor_fail(error, error_size, err, "device_not_found");
         goto done;
     }
-    if (!device->enabled) {
+    if (!s_execute_device.enabled) {
         err = command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_disabled");
         goto done;
     }
-    err = quest_device_get_command(request->device_id, request->command_id, command);
+    err = quest_device_get_command(request->device_id, request->command_id, &s_execute_command);
     if (err != ESP_OK) {
         err = command_executor_fail(error, error_size, err, "device_command_not_found");
         goto done;
     }
-    if (request->require_manual_allowed && !command->manual_allowed) {
-        err = command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_command_manual_disabled");
-        goto done;
-    }
-    if (request->require_scenario_allowed && !command->scenario_allowed) {
-        err = command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_command_scenario_disabled");
-        goto done;
-    }
-    if (strcmp(request->device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0 ||
-        strncmp(command->command, "audio.", strlen("audio.")) == 0) {
-        err = command_executor_execute_audio(request, command, error, error_size);
-    } else if (strcmp(request->device_id, QUEST_DEVICE_SYSTEM_RELAY_ID) == 0 ||
-               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0 ||
-               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_INPUT_ID) == 0 ||
-               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_GPIO_ID) == 0) {
-        err = command_executor_execute_hardware(request, command, error, error_size);
-    } else {
-        err = command_executor_execute_mqtt(device, command, request, out_dispatch, error, error_size);
-    }
+    quest_str_copy(device.client_id, sizeof(device.client_id), s_execute_device.client_id);
+    memcpy(&command, &s_execute_command, sizeof(command));
 done:
     xSemaphoreGive(s_execute_mutex);
-    return err;
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (request->require_manual_allowed && !command.manual_allowed) {
+        err = command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_command_manual_disabled");
+        return err;
+    }
+    if (request->require_scenario_allowed && !command.scenario_allowed) {
+        err = command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_command_scenario_disabled");
+        return err;
+    }
+    if (strcmp(request->device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0 ||
+        strncmp(command.command, "audio.", strlen("audio.")) == 0) {
+        return command_executor_execute_audio(request, &command, error, error_size);
+    } else if (strcmp(request->device_id, QUEST_DEVICE_SYSTEM_RELAY_ID) == 0 ||
+               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0 ||
+               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
+        return command_executor_execute_hardware(request, &command, error, error_size);
+    }
+    return command_executor_execute_mqtt(device.client_id,
+                                         &command,
+                                         request,
+                                         out_dispatch,
+                                         error,
+                                         error_size);
 }
 
 esp_err_t command_executor_execute_device_command(const char *device_id,

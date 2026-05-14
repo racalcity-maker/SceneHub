@@ -9,6 +9,13 @@
 
 static const char *TAG = "mqtt_core";
 
+typedef struct {
+    size_t slot;
+    int sock;
+    uint16_t pid;
+    char client_id[CONFIG_STORE_CLIENT_ID_MAX];
+} publish_target_t;
+
 static int parse_utf8_str(const uint8_t *buf, size_t len, size_t *offset, char *out, size_t out_len)
 {
     if (*offset + 2 > len) {
@@ -52,6 +59,8 @@ static bool mqtt_authenticate_client(const char *client_id, const char *username
 
 void publish_to_subscribers(const char *topic, const char *payload, uint8_t qos, bool retain_flag, mqtt_session_t *exclude)
 {
+    publish_target_t targets[MQTT_MAX_CLIENTS] = {0};
+    size_t target_count = 0;
     if (!s_sessions || !s_lock) {
         ESP_LOGW(TAG, "publish ignored: mqtt core not initialized");
         return;
@@ -62,20 +71,33 @@ void publish_to_subscribers(const char *topic, const char *payload, uint8_t qos,
     }
     for (size_t i = 0; i < MQTT_MAX_CLIENTS; ++i) {
         mqtt_session_t *s = &s_sessions[i];
-        if (!s->active || s == exclude) {
+        if (!s->active || s->closing || s->sock < 0 || s == exclude) {
             continue;
         }
         for (size_t j = 0; j < s->sub_count; ++j) {
             if (topic_matches_filter(s->subs[j].topic, topic)) {
-                uint16_t pid = (qos ? (uint16_t)(esp_random() & 0xFFFF) : 0);
-                if (send_publish_packet(s, topic, payload, qos, retain_flag, pid) < 0) {
-                    ESP_LOGW(TAG, "send publish failed to %s", s->client_id);
-                }
+                publish_target_t *target = &targets[target_count++];
+                target->slot = i;
+                target->sock = s->sock;
+                target->pid = (qos ? (uint16_t)(esp_random() & 0xFFFF) : 0);
+                strncpy(target->client_id, s->client_id, sizeof(target->client_id) - 1);
                 break;
             }
         }
     }
     unlock();
+
+    for (size_t i = 0; i < target_count; ++i) {
+        publish_target_t *target = &targets[i];
+        (void)send_publish_packet_to_session_slot(target->slot,
+                                                  target->sock,
+                                                  target->client_id,
+                                                  topic,
+                                                  payload,
+                                                  qos,
+                                                  retain_flag,
+                                                  target->pid);
+    }
 }
 
 int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
@@ -220,7 +242,7 @@ int handle_unsubscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len)
         }
     }
 
-    return send_unsuback(sess->sock, pid);
+    return send_unsuback(sess, pid);
 }
 
 int handle_publish(mqtt_session_t *sess, uint8_t header, uint8_t *buf, size_t len)
@@ -264,7 +286,7 @@ int handle_publish(mqtt_session_t *sess, uint8_t header, uint8_t *buf, size_t le
     publish_to_subscribers(topic, payload, qos, retain, NULL);
 
     if (qos == 1) {
-        send_puback(sess->sock, pid);
+        send_puback(sess, pid);
     }
     return 0;
 }

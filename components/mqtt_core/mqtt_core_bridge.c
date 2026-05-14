@@ -10,32 +10,32 @@
 #define MQTT_BRIDGE_JOB_POOL_LEN 32
 
 typedef struct {
-    event_bus_type_t type;
+    scenehub_event_type_t type;
     const char *topic;
 } event_topic_map_t;
 
 static const event_topic_map_t k_outgoing_map[] = {
-    {EVENT_AUDIO_PLAY, "audio/play"},
-    {EVENT_SYSTEM_STATUS, "sys/broker/metrics"},
-    {EVENT_CARD_OK, "access/card/ok"},
-    {EVENT_CARD_BAD, "access/card/bad"},
-    {EVENT_RELAY_CMD, "relay/cmd"},
-    {EVENT_WEB_COMMAND, "web/cmd"},
+    {SCENEHUB_EVENT_AUDIO_PLAY, "audio/play"},
+    {SCENEHUB_EVENT_SYSTEM_STATUS, "sys/broker/metrics"},
+    {SCENEHUB_EVENT_CARD_OK, "access/card/ok"},
+    {SCENEHUB_EVENT_CARD_BAD, "access/card/bad"},
+    {SCENEHUB_EVENT_RELAY_CMD, "relay/cmd"},
+    {SCENEHUB_EVENT_WEB_COMMAND, "web/cmd"},
 };
 
 static const event_topic_map_t k_incoming_map[] = {
-    {EVENT_AUDIO_PLAY, "audio/play"},
-    {EVENT_RELAY_CMD, "relay/"},
-    {EVENT_WEB_COMMAND, "web/cmd"},
+    {SCENEHUB_EVENT_AUDIO_PLAY, "audio/play"},
+    {SCENEHUB_EVENT_RELAY_CMD, "relay/"},
+    {SCENEHUB_EVENT_WEB_COMMAND, "web/cmd"},
 };
 
-static EXT_RAM_BSS_ATTR event_bus_message_t s_bridge_job_pool[MQTT_BRIDGE_JOB_POOL_LEN];
+static EXT_RAM_BSS_ATTR scenehub_event_t s_bridge_job_pool[MQTT_BRIDGE_JOB_POOL_LEN];
 static bool s_bridge_job_pool_in_use[MQTT_BRIDGE_JOB_POOL_LEN];
 static portMUX_TYPE s_bridge_job_pool_lock = portMUX_INITIALIZER_UNLOCKED;
 
-static event_bus_message_t *bridge_job_alloc(void)
+static scenehub_event_t *bridge_job_alloc(void)
 {
-    event_bus_message_t *slot = NULL;
+    scenehub_event_t *slot = NULL;
 
     portENTER_CRITICAL(&s_bridge_job_pool_lock);
     for (size_t i = 0; i < MQTT_BRIDGE_JOB_POOL_LEN; ++i) {
@@ -53,7 +53,7 @@ static event_bus_message_t *bridge_job_alloc(void)
     return slot;
 }
 
-static void bridge_job_free(event_bus_message_t *slot)
+static void bridge_job_free(scenehub_event_t *slot)
 {
     if (!slot) {
         return;
@@ -69,7 +69,7 @@ static void bridge_job_free(event_bus_message_t *slot)
     portEXIT_CRITICAL(&s_bridge_job_pool_lock);
 }
 
-const char *find_topic_by_type(event_bus_type_t type)
+const char *find_topic_by_type(scenehub_event_type_t type)
 {
     for (size_t i = 0; i < sizeof(k_outgoing_map) / sizeof(k_outgoing_map[0]); ++i) {
         if (k_outgoing_map[i].type == type) {
@@ -79,15 +79,15 @@ const char *find_topic_by_type(event_bus_type_t type)
     return NULL;
 }
 
-const char *mqtt_core_topic_for_event(event_bus_type_t type)
+const char *mqtt_core_topic_for_event(scenehub_event_type_t type)
 {
     return find_topic_by_type(type);
 }
 
-event_bus_type_t find_type_by_topic(const char *topic)
+scenehub_event_type_t find_type_by_topic(const char *topic)
 {
     if (!topic) {
-        return EVENT_NONE;
+        return SCENEHUB_EVENT_NONE;
     }
     for (size_t i = 0; i < sizeof(k_incoming_map) / sizeof(k_incoming_map[0]); ++i) {
         const char *t = k_incoming_map[i].topic;
@@ -96,12 +96,12 @@ event_bus_type_t find_type_by_topic(const char *topic)
             return k_incoming_map[i].type;
         }
     }
-    return EVENT_NONE;
+    return SCENEHUB_EVENT_NONE;
 }
 
 static void publish_event_message(void *ctx)
 {
-    event_bus_message_t *msg = (event_bus_message_t *)ctx;
+    scenehub_event_t *msg = (scenehub_event_t *)ctx;
     if (!msg) {
         return;
     }
@@ -114,7 +114,7 @@ static void publish_event_message(void *ctx)
     bridge_job_free(msg);
 }
 
-void on_event_bus_message(const event_bus_message_t *msg)
+void on_event_bus_message(const scenehub_event_t *msg)
 {
     if (!msg) {
         return;
@@ -123,7 +123,7 @@ void on_event_bus_message(const event_bus_message_t *msg)
         return;
     }
 
-    event_bus_message_t *copy = bridge_job_alloc();
+    scenehub_event_t *copy = bridge_job_alloc();
     if (!copy) {
         return;
     }

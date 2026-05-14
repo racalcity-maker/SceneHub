@@ -12,6 +12,7 @@ extern "C" {
 
 #define ORCH_TIMELINE_CAPACITY 128
 #define ORCH_TIMELINE_SOURCE_MAX_LEN 16
+#define ORCH_TIMELINE_TEXT_MAX_LEN 24
 #define ORCH_TIMELINE_TITLE_MAX_LEN 64
 #define ORCH_TIMELINE_DETAILS_MAX_LEN 128
 
@@ -35,7 +36,9 @@ typedef enum {
 typedef struct {
     uint64_t timestamp_ms;
     orchestrator_timeline_type_t type;
+    char type_text[ORCH_TIMELINE_TEXT_MAX_LEN];
     orchestrator_timeline_severity_t severity;
+    char severity_text[ORCH_TIMELINE_TEXT_MAX_LEN];
     char source[ORCH_TIMELINE_SOURCE_MAX_LEN];
     char room_id[QUEST_ROOM_ID_MAX_LEN];
     char device_id[QUEST_ID_MAX_LEN];

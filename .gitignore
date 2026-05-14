@@ -21,6 +21,7 @@ legacy/tests/**/managed_components/
 *.bak
 build_unused.log
 v.1.03.zip
+SceneHub.zip
 
 # Test app build output
 tests/**/build/
@@ -50,3 +51,11 @@ Thumbs.db
 
 # Generated web assets
 components/web_ui/assets/devices_wizard.js
+
+# Local scratch archives and generated app artifacts
+/assets/
+desktop_app/.tauri-icons/
+desktop_app/*.zip
+desktop_app/src/*.zip
+desktop_app/src-tauri/*.zip
+desktop_app/src-tauri/target-check/

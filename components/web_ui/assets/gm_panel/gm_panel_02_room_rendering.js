@@ -32,13 +32,11 @@ const selected=profiles.find(p=>p.id===selectedId)||null;
 const selectedName=room.selected_profile_name||((selected&&selected.id===selectedId)?selected.name:'');
 const scenarioId=room.selected_profile_scenario_id||((selected&&selected.scenario_id)||room.selected_scenario_id||'');
 const scenario=roomSelectedScenarioObject(room);
-const steps=roomScenarioSteps(room);
 const runtime=room.scenario_runtime_state||'idle';
 const waitType=room.scenario_wait_type||'none';
 const hasBranchRuntime=Array.isArray(room.scenario_branches)&&room.scenario_branches.length>1;
 const runningName=room.running_scenario_name||scenarioDisplayName(room.room_id,room.running_scenario_id||scenarioId,'none');
-const currentStep=roomCurrentScenarioStep(room);
-const currentStepText=currentStep?scenarioStepText(currentStep):scenarioStepLabel(room,steps.length);
+const currentStepText=roomCurrentScenarioText(room)||'';
 const canStart=!!selected&&selected.valid!==false;
 const sessionPresent=!!room.session_present||['running','paused','finished'].includes(room.session_state||'');
 const canStop=sessionPresent&&room.session_state!=='finished';
@@ -68,7 +66,7 @@ profiles.map(p=>`<option value='${esc(p.id)}' ${selected&&selected.id===p.id?'se
 esc(selectedName||selectedId||'none')}
 </span></div><div class='kv'><span class='k'>Scenario</span><span class='v'> ${
 esc(scenarioName(room.room_id,scenarioId))}
-</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div>${renderRoomGameButtons(room,canStart,canStop,canReset)}</div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room,steps.length))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText)}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
+</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div>${renderRoomGameButtons(room,canStart,canStop,canReset)}</div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText||'none')}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
 esc(waitPrompt)}
 </div>`:''}${canSkipWait?`<div class='operator-prompt'>Operator override available: ${esc(skipWaitLabel)}</div>`:''}${room.scenario_operator_message?`<div class='operator-prompt'>${
 esc(room.scenario_operator_message)}
@@ -81,7 +79,7 @@ uiButton({label:'Pause',action:'room.timer',dataset:{op:'pause','room-id':room.r
 uiButton({label:'Resume',action:'room.timer',dataset:{op:'resume','room-id':room.room_id},disabled:!canResume}),
 uiButton({label:'+1 min',action:'room.timer',dataset:{op:'plus1','room-id':room.room_id},disabled:!canAdjust}),
 uiButton({label:'-1 min',action:'room.timer',dataset:{op:'minus1','room-id':room.room_id},disabled:!canAdjust}),
-])}<details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'>${uiButton({label:'Start timer',action:'room.timer',dataset:{op:'start','room-id':room.room_id}})}</div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario||steps)}</div><div style='height:12px'></div>`;
+])}<details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'>${uiButton({label:'Start timer',action:'room.timer',dataset:{op:'start','room-id':room.room_id}})}</div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario)}</div><div style='height:12px'></div>`;
 }
 
 function renderRoomScenarioControl(room){

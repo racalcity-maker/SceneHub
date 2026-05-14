@@ -173,6 +173,8 @@ info:()=>gmGet('/api/session/info'),
 gm:{
 state:()=>gmGet('/api/gm/state'),
 stateJson:()=>gmGetJson('/api/gm/state'),
+systemSummary:()=>gmGet('/api/gm/system/summary'),
+systemSummaryJson:()=>gmGetJson('/api/gm/system/summary'),
 versions:()=>gmGet('/api/gm/versions'),
 versionsJson:()=>gmGetJson('/api/gm/versions'),
 },
@@ -186,6 +188,7 @@ list:path=>gmGet(`/api/files?path=${enc(path)}`),
 },
 hardwareIo:{
 status:()=>gmGet('/api/hardware-io/status'),
+setIoMode:body=>gmPostJson('/api/hardware-io/io-mode',body),
 },
 device:{
 list:(includeSystem=true)=>gmGet(`/api/gm/devices?include_system=${includeSystem?'1':'0'}`),
@@ -199,8 +202,8 @@ command_id:commandId,
 }),
 },
 room:{
-runtime:roomId=>gmGet(`/api/gm/room/runtime?room_id=${enc(roomId)}`),
-runtimeJson:roomId=>gmGetJson(`/api/gm/room/runtime?room_id=${enc(roomId)}`),
+runtime:(roomId,detail='detail')=>gmGet(`/api/gm/room/runtime?room_id=${enc(roomId)}${detail&&detail!=='detail'?`&detail=${enc(detail)}`:''}`),
+runtimeJson:(roomId,detail='detail')=>gmGetJson(`/api/gm/room/runtime?room_id=${enc(roomId)}${detail&&detail!=='detail'?`&detail=${enc(detail)}`:''}`),
 scenarios:roomId=>gmGet(`/api/gm/room/scenarios?room_id=${enc(roomId)}`),
 profiles:roomId=>gmGet(`/api/gm/room/profiles?room_id=${enc(roomId)}`),
 scenarioEditorCatalog:roomId=>gmGet(`/api/gm/room/scenario-editor/catalog?room_id=${enc(roomId)}`),
@@ -421,7 +424,7 @@ currentRoomId=nextRoomId;
 currentView='room';
 roomTab='control';
 await loadGMViewData(false);
-render();
+await loadGMRuntimeOnly(currentRoomId,false);
 });
 
 gmRegisterAction('device.setup.open',async el=>{
@@ -716,7 +719,7 @@ document.querySelectorAll('[data-view]').forEach(el=>{if(['profiles','scenarios'
 async function loadGMSession(){try{const res=await api.session.info();if(res.ok){gmSession=await res.json();}}catch(err){gmSession={role:'user',username:''};}window.__WEB_SESSION=gmSession;applyGMRoleLayout();return gmSession;}
 function metric(label,value){return `<div class='card metric'><div class='label'>${esc(label)}</div><div class='value'>${esc(value)}</div></div>`;}
 function status(v){return `<span class='status ${stateClass(v)}'>${esc(healthLabel(v))}</span>`;}
-function roomCard(r){const derived=roomDerivedHealth(r);const scenarioIssues=roomQuestDeviceIssues(r).length;const issueCount=(Number(r.issue_count)||0)+scenarioIssues;return `<article class='card clickable' data-action='room.open' data-room-id='${esc(r.room_id)}'><div class='card-head'><div><div class='card-title'>${esc(r.title||r.name||r.room_id)}</div><div class='card-sub'>Room</div></div>${status(derived)}</div><div class='kvs'><div class='kv'><span class='k'>Devices</span><span class='v'>${esc(roomScenarioDeviceIds(r).length||r.device_count||0)}</span></div><div class='kv'><span class='k'>Issues</span><span class='v'>${esc(issueCount)}</span></div><div class='kv'><span class='k'>Timer</span>${roomClockHtml(r,'span','v')}</div></div></article>`;}
+function roomCard(r){const derived=roomDerivedHealth(r);const issueCount=Number(r&&r.issue_count)||0;const deviceCount=Number(r&&r.scenario_device_count)||Number(r&&r.device_count)||0;return `<article class='card clickable' data-action='room.open' data-room-id='${esc(r.room_id)}'><div class='card-head'><div><div class='card-title'>${esc(r.title||r.name||r.room_id)}</div><div class='card-sub'>Room</div></div>${status(derived)}</div><div class='kvs'><div class='kv'><span class='k'>Devices</span><span class='v'>${esc(deviceCount)}</span></div><div class='kv'><span class='k'>Issues</span><span class='v'>${esc(issueCount)}</span></div><div class='kv'><span class='k'>Timer</span>${roomClockHtml(r,'span','v')}</div></div></article>`;}
 function issueRow(i){const subject=i.device_id?deviceDisplayName(i.device_id):(i.room_id?roomName(i.room_id):i.scope);return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(subject)} - ${esc(i.title||i.code)}</div><div class='row-meta'>${esc(i.details||'')}</div></div>${status(i.severity)}</div>`;}
 function noProfilesHtml(roomId){return isAdmin()?`<div class='empty'>No game modes for this room</div><div class='actions'>${uiButton({label:'Create game mode',action:'admin.open',dataset:{view:'profiles','room-id':roomId||''}})}</div>`:`<div class='empty'>No game modes available. Ask admin.</div>`;}
 function noScenariosHtml(roomId){return isAdmin()?`<div class='empty'>No room scenarios</div><div class='actions'>${uiButton({label:'Create scenario',action:'admin.open',dataset:{view:'scenarios','room-id':roomId||''}})}</div>`:`<div class='empty'>No room scenarios</div>`;}
@@ -747,72 +750,40 @@ out.push(copy);
 });
 return out;
 }
-function scenarioFlattenedSteps(scenario){if(!scenario)return [];if(Array.isArray(scenario.branches)&&scenario.branches.length){return scenario.branches.reduce((out,branch)=>out.concat(scenarioBranchDisplaySteps(branch)),[]);}return Array.isArray(scenario.steps)?scenario.steps:[];}
-function roomScenarioSteps(room){const scenario=roomSelectedScenarioObject(room);return scenarioFlattenedSteps(scenario);}
-function roomCurrentScenarioStep(room){const steps=roomScenarioSteps(room);const index=Math.max(0,Number(room&&room.scenario_current_step_index)||0);return steps[index]||null;}
-function roomScenarioDeviceIds(room){const ids=new Set();roomScenarioSteps(room).forEach(step=>{const type=String(step&&step.type||'').toLowerCase();if((type==='device_command'||type==='wait_device_event')&&step.device_id)ids.add(step.device_id);});return Array.from(ids);}
-function roomQuestDeviceIssues(room){return roomScenarioDeviceIds(room).map(id=>questDeviceById(id)).filter(Boolean).map(dev=>{const health=questDeviceHealth(dev);if(health==='ok')return null;return {device_id:dev.id,title:health==='fault'?'Device offline':'Device degraded',details:`${dev.name||dev.id}: ${questDeviceStatusText(dev)}`,severity:health};}).filter(Boolean);}
-function roomDerivedHealth(room){const issues=roomQuestDeviceIssues(room);if(issues.some(i=>i.severity==='fault'))return 'fault';if(issues.some(i=>i.severity==='degraded'))return 'degraded';return room&&room.health||'unknown';}
+function roomCurrentScenarioText(room){return room&&room.scenario_current_step_text||'';}
+function roomScenarioDeviceIds(room){return Array.isArray(room&&room.scenario_device_ids)?room.scenario_device_ids.filter(Boolean):[];}
+function roomQuestDeviceIssues(room){return [];}
+function roomDerivedHealth(room){return room&&room.health||'unknown';}
+function scenarioRuntimeBranches(room){return Array.isArray(room&&room.scenario_branches)?room.scenario_branches:[];}
+function scenarioFlowRuntimeBranches(room){const branches=scenarioRuntimeBranches(room);const flow=branches.filter(branch=>String(branch&&branch.type||'normal').toLowerCase()!=='reactive');return flow.length?flow:branches;}
+function scenarioTotalStepCount(room){return Math.max(0,Number(room&&room.scenario_total_steps)||0);}
+function scenarioDoneStepCount(room){return Math.max(0,Number(room&&room.scenario_done_steps)||0);}
 function scenarioAudioStepText(s){const params=s&&s.params&&typeof s.params==='object'?s.params:{};const command=String(s&&s.command_id||'');const channel=String(params.channel||'effect').toLowerCase();const file=compactText(audioBaseName(params.file||''),34);if(command==='play'){const kind=channel==='background'||channel==='bg'||channel==='music'?'bg':'sfx';return file?`Play ${kind}: ${file}`:`Play ${kind}`;}if(command==='stop')return `Stop audio${params.channel?`: ${params.channel}`:''}`;if(command==='pause')return 'Pause audio';if(command==='resume')return 'Resume audio';if(command==='set_volume')return `Set volume: ${params.volume??''}`;return `Audio: ${questDeviceCommandName('system_audio',command)}`;}
 function scenarioStepText(s){if(!s)return '';const type=String(s.type||'').toLowerCase();if(type==='device_command'){if(String(s.device_id||'')==='system_audio')return scenarioAudioStepText(s);return `${deviceDisplayName(s.device_id)} -> ${questDeviceCommandName(s.device_id,s.command_id)}`;}if(type==='wait_device_event')return `Wait ${deviceDisplayName(s.device_id)}: ${questDeviceEventName(s.device_id,s.event_id)}`;if(type==='wait_time')return `Wait ${Math.max(1,Math.round((Number(s.duration_ms)||1000)/1000))} sec`;if(type==='operator_approval')return `Operator approval: ${s.operator_prompt||s.prompt||s.label||'Confirm'}`;return s.label||s.id||s.type||'Step';}
-function scenarioStepLabel(room,total){const state=room.scenario_runtime_state||'idle';const idx=Number(room.scenario_current_step_index)||0;if(!total)return '0 / 0';if(state==='idle'||state==='stopped')return `0 / ${total}`;if(state==='done')return `${total} / ${total}`;return `${Math.min(total,idx+1)} / ${total}`;}
-function scenarioWaitText(room){const t=room.scenario_wait_type||'none';if(t==='time')return `time until ${room.scenario_wait_until_ms||0}`;if(t==='command_result')return `command result ${room.scenario_wait_event_type||''}`;if(t==='event'||t==='any_events'||t==='all_events'){const events=Array.isArray(room.scenario_wait_events)?room.scenario_wait_events:[];if(events.length>1)return `${t==='all_events'?'all of':'any of'} ${events.length} events`;const source=room.scenario_wait_source_id||'';const eventType=room.scenario_wait_event_type||'any';return `${source?deviceDisplayName(source):'Any device'}: ${source?questDeviceEventNameByType(source,eventType):eventType}`;}if(t==='flags'){const flags=Array.isArray(room.scenario_wait_flags)?room.scenario_wait_flags:[];return flags.length?`flags: ${flags.map(flag=>`${flag.name||'flag'}=${flag.value?'true':'false'}`).join(', ')}`:'flags';}if(t==='operator')return `operator: ${room.scenario_wait_operator_prompt||'approval'}`;return 'none';}
-function scenarioProgressStepState(room,index){const runtime=room&&room.scenario_runtime_state||'idle';const current=Math.max(0,Number(room&&room.scenario_current_step_index)||0);if(runtime==='done')return 'done';if(runtime==='error')return index<current?'done':(index===current?'error':'pending');if(runtime==='running'||runtime==='waiting')return index<current?'done':(index===current?'current':'pending');return 'pending';}
-function scenarioProgressBranchCurrentIndex(branchRuntime){if(!branchRuntime)return null;const rawNumber=Number(branchRuntime.current_step_index);if(!Number.isFinite(rawNumber))return null;const raw=Math.max(0,Math.floor(rawNumber));const start=Math.max(0,Number(branchRuntime.step_start_index)||0);const count=Math.max(0,Number(branchRuntime.step_count)||0);if(count>0&&start>0&&raw>=start&&raw<start+count){return raw-start;}if(count>0){return Math.max(0,Math.min(count-1,raw));}return raw;}
-function scenarioProgressBranchState(room,branchRuntime,localIndex,globalIndex){const runtime=(branchRuntime&&branchRuntime.state)||room&&room.scenario_runtime_state||'idle';const branchCurrent=scenarioProgressBranchCurrentIndex(branchRuntime);const current=branchCurrent!==null?branchCurrent:Math.max(0,Number(room&&room.scenario_current_step_index)||0);const index=branchRuntime?localIndex:globalIndex;if(runtime==='done')return 'done';if(runtime==='error')return index<current?'done':(index===current?'error':'pending');if(runtime==='running'||runtime==='waiting')return index<current?'done':(index===current?'current':'pending');return 'pending';}
+function scenarioStepLabel(room){const runtime=String(room&&room.scenario_runtime_state||'idle').toLowerCase();const totalSteps=scenarioTotalStepCount(room);const doneSteps=scenarioDoneStepCount(room);if(!totalSteps)return '0 / 0';if(runtime==='idle'||runtime==='stopped')return `0 / ${totalSteps}`;if(runtime==='done')return `${totalSteps} / ${totalSteps}`;return `${Math.min(totalSteps,doneSteps+1)} / ${totalSteps}`;}
+function scenarioWaitText(room){return room&&room.scenario_wait_summary||'none';}
+function scenarioProgressBranchStepState(branchRuntime,localIndex){const steps=Array.isArray(branchRuntime&&branchRuntime.steps)?branchRuntime.steps:[];const step=steps.find(item=>Number(item&&item.index)===localIndex);const state=String(step&&step.state||'').toLowerCase();return state||null;}
+function scenarioProgressBranchState(room,branchRuntime,localIndex,globalIndex){return scenarioProgressBranchStepState(branchRuntime,localIndex)||'pending';}
 function scenarioProgressIcon(state){if(state==='done')return '&#10003;';if(state==='current')return '&rarr;';if(state==='error')return '!';return '';}
-function scenarioProgressBranches(scenarioOrSteps){if(scenarioOrSteps&&Array.isArray(scenarioOrSteps.branches)&&scenarioOrSteps.branches.length)return scenarioOrSteps.branches.map((branch,index)=>{const type=String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal';return {id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type,enabled:branch.enabled!==false,required_for_completion:type==='normal'&&branch.required_for_completion!==false,trigger:branch.trigger||null,steps:scenarioBranchDisplaySteps(branch)};});const steps=Array.isArray(scenarioOrSteps)?scenarioOrSteps:(scenarioOrSteps&&Array.isArray(scenarioOrSteps.steps)?scenarioOrSteps.steps:[]);return steps.length?[{id:'main',name:'Main',type:'normal',enabled:true,required_for_completion:true,steps}]:[];}
+function scenarioProgressBranches(room,scenarioOrSteps){if(room&&Array.isArray(room.scenario_branches)&&room.scenario_branches.some(branch=>Array.isArray(branch&&branch.steps)&&branch.steps.length))return room.scenario_branches.map((branch,index)=>({id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type:String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal',enabled:branch.active!==false,required_for_completion:branch.required_for_completion!==false,trigger:branch.trigger||null,current_step_text:branch.current_step_text||'',wait_summary:branch.wait_summary||'',steps:Array.isArray(branch.steps)?branch.steps:[]}));if(scenarioOrSteps&&Array.isArray(scenarioOrSteps.branches)&&scenarioOrSteps.branches.length)return scenarioOrSteps.branches.map((branch,index)=>{const type=String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal';return {id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type,enabled:branch.enabled!==false,required_for_completion:type==='normal'&&branch.required_for_completion!==false,trigger:branch.trigger||null,steps:scenarioBranchDisplaySteps(branch)};});const steps=Array.isArray(scenarioOrSteps)?scenarioOrSteps:(scenarioOrSteps&&Array.isArray(scenarioOrSteps.steps)?scenarioOrSteps.steps:[]);return steps.length?[{id:'main',name:'Main',type:'normal',enabled:true,required_for_completion:true,steps}]:[];}
 function scenarioProgressBranchRuntime(room,branch,index){const runtimes=Array.isArray(room&&room.scenario_branches)?room.scenario_branches:[];const byIndex=runtimes.find(item=>Number(item.index)===index);if(byIndex)return byIndex;const branchId=branch&&branch.id||'';if(branchId)return runtimes.find(item=>(item.id||'')===branchId)||null;return null;}
-function renderScenarioProgressStep(room,step,index,globalIndex,branchRuntime){const disabled=step&&step.enabled===false;const state=disabled?'disabled':scenarioProgressBranchState(room,branchRuntime,index,globalIndex);return `<div class='scenario-progress-step ${state}'><span class='scenario-progress-icon'>${scenarioProgressIcon(state)}</span><span class='scenario-progress-index'>${esc(index+1)}.</span><span class='scenario-progress-text'>${esc(scenarioStepText(step))}</span>${disabled?`<span class='badge'>disabled</span>`:''}</div>`;}
+function renderScenarioProgressStep(room,step,index,globalIndex,branchRuntime){const disabled=step&&step.enabled===false;const state=disabled?'disabled':scenarioProgressBranchState(room,branchRuntime,index,globalIndex);const text=step&&step.text||scenarioStepText(step);return `<div class='scenario-progress-step ${state}'><span class='scenario-progress-icon'>${scenarioProgressIcon(state)}</span><span class='scenario-progress-index'>${esc(index+1)}.</span><span class='scenario-progress-text'>${esc(text)}</span>${disabled?`<span class='badge'>disabled</span>`:''}</div>`;}
 function scenarioBranchDoneCount(room,branch,branchRuntime,globalStart){
 const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
 const total=steps.length;
 if(!total)return 0;
-const runtime=(branchRuntime&&branchRuntime.state)||room&&room.scenario_runtime_state||'idle';
-if(branch&&branch.type==='reactive'&&runtime==='waiting'&&(!branchRuntime||!branchRuntime.wait_type||branchRuntime.wait_type==='none'))return 0;
-if(runtime==='done')return total;
-if(runtime==='idle'||runtime==='stopped'||runtime==='disabled')return 0;
-if(runtime==='running'||runtime==='waiting'||runtime==='error'){
-const current=scenarioProgressBranchCurrentIndex(branchRuntime);
-if(current!==null)return Math.max(0,Math.min(total,current));
-return Math.max(0,Math.min(total,Math.max(0,Number(room&&room.scenario_current_step_index)||0)-globalStart));
-}
-return 0;
-}
-function scenarioReactiveTriggerText(branch){
-const trigger=branch&&branch.trigger||{};
-const kind=String(trigger.kind||'device_event').toLowerCase();
-if(kind==='device_event'){
-const dev=questDeviceById(trigger.device_id);
-const name=dev?questDeviceDisplayName(dev):deviceDisplayName(trigger.device_id);
-const eventName=questDeviceEventName(trigger.device_id,trigger.event_id);
-return `Waiting for ${name}: ${eventName}`;
-}
-if(kind==='flag_changed')return `Waiting for flag: ${trigger.flag_name||trigger.event_id||'flag'}`;
-if(kind==='operator_event')return `Waiting for operator event: ${trigger.operator_event||trigger.event_id||'event'}`;
-if(kind==='runtime_event')return `Waiting for runtime event: ${trigger.runtime_event||trigger.event_id||'event'}`;
-return 'Waiting for trigger';
+return Math.min(total,Math.max(0,Number(branchRuntime&&((branchRuntime.done_steps??branchRuntime.completed_step_count)||0))||0));
 }
 function scenarioBranchCurrentStep(branch,branchRuntime){
 const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
 if(!steps.length)return branch&&branch.type==='reactive'?'No actions':'No steps';
-const runtime=branchRuntime&&branchRuntime.state||'idle';
-if(branch&&branch.type==='reactive'&&runtime==='waiting'&&(!branchRuntime||!branchRuntime.wait_type||branchRuntime.wait_type==='none'))return scenarioReactiveTriggerText(branch);
-if(runtime==='done')return 'Complete';
-const current=scenarioProgressBranchCurrentIndex(branchRuntime);
-if(current!==null&&steps[current])return scenarioStepText(steps[current]);
-return scenarioStepText(steps[0]);
+if(branch&&branch.current_step_text)return branch.current_step_text;
+return '';
 }
 function scenarioProgressBar(done,total){const pct=total?Math.max(0,Math.min(100,Math.round(done*100/total))):0;return `<div class='scenario-progress-bar' title='${esc(done)} / ${esc(total)}'><span style='width:${pct}%'></span></div>`;}
 function scenarioProgressTypeLabel(branch){return branch.type==='reactive'?'reaction':(branch.required_for_completion?'required':'optional');}
-function scenarioBranchWaitText(branchRuntime){
-const t=branchRuntime&&branchRuntime.wait_type||'none';
-if(t==='time')return `time until ${branchRuntime.wait_until_ms||0}`;
-if(t==='command_result')return `command result ${branchRuntime.wait_event_type||''}`;
-if(t==='event'||t==='any_events'||t==='all_events'){const events=Array.isArray(branchRuntime.wait_events)?branchRuntime.wait_events:[];if(events.length>1)return `${t==='all_events'?'all of':'any of'} ${events.length} events`;return branchRuntime.wait_event_type||branchRuntime.wait_event_id||'device event';}
-if(t==='flags'){const flags=Array.isArray(branchRuntime.wait_flags)?branchRuntime.wait_flags:[];return flags.length?flags.map(flag=>`${flag.name||flag.flag_name||'flag'}=${flag.value?'true':'false'}`).join(', '):'flags';}
-if(t==='operator')return branchRuntime.wait_operator_prompt||'operator approval';
-return 'none';
+function scenarioBranchWaitText(branchRuntime,branch){
+return branch&&branch.wait_summary||'none';
 }
 function renderScenarioBranchSkipButton(room,branch,branchRuntime){
 if(!room||!branchRuntime||branchRuntime.state!=='waiting'||!branchRuntime.wait_operator_skip_allowed)return '';
@@ -830,7 +801,7 @@ const waits=items.filter(item=>item.runtime&&item.runtime.state==='waiting'&&ite
 if(!waits.length)return '';
 return `<div class='scenario-active-waits'>${waits.map(item=>{
 const skip=renderScenarioBranchSkipButton(room,item.branch,item.runtime);
-return `<div class='scenario-active-wait'><div><span class='badge'>operator skip</span> <strong>${esc(item.branch.name||item.branch.id)}</strong><div class='row-meta'>${esc(scenarioBranchWaitText(item.runtime))}</div></div>${skip?`<div class='branch-runtime-actions'>${skip}</div>`:''}</div>`;
+return `<div class='scenario-active-wait'><div><span class='badge'>operator skip</span> <strong>${esc(item.branch.name||item.branch.id)}</strong><div class='row-meta'>${esc(scenarioBranchWaitText(item.runtime,item.branch))}</div></div>${skip?`<div class='branch-runtime-actions'>${skip}</div>`:''}</div>`;
 }).join('')}</div>`;
 }
 function renderScenarioProgressBranch(room,item){
@@ -839,12 +810,13 @@ const steps=Array.isArray(branch.steps)?branch.steps:[];
 const branchRuntime=item.runtime;
 const state=(branchRuntime&&branchRuntime.state)||(!branch.enabled?'disabled':'idle');
 const waitType=(branchRuntime&&branchRuntime.wait_type)||'none';
+const waitText=scenarioBranchWaitText(branchRuntime,branch);
 const done=scenarioBranchDoneCount(room,branch,branchRuntime,item.start);
 const current=scenarioBranchCurrentStep(branch,branchRuntime);
 const detailsKey=`room-progress-steps:${room&&room.room_id||'room'}:${branch.id||item.index}`;
 const skip=renderScenarioBranchSkipButton(room,branch,branchRuntime);
 const unit=branch.type==='reactive'?'actions':'steps';
-const meta=branch.type==='reactive'?`${esc(done)} / ${esc(steps.length)} ${esc(unit)} / ${esc(scenarioProgressTypeLabel(branch))}`:`${esc(done)} / ${esc(steps.length)} ${esc(unit)} / ${esc(scenarioProgressTypeLabel(branch))}${waitType&&waitType!=='none'?` / waiting ${esc(waitType)}`:''}`;
+const meta=branch.type==='reactive'?`${esc(done)} / ${esc(steps.length)} ${esc(unit)} / ${esc(scenarioProgressTypeLabel(branch))}`:`${esc(done)} / ${esc(steps.length)} ${esc(unit)} / ${esc(scenarioProgressTypeLabel(branch))}${waitType&&waitType!=='none'?` / waiting ${esc(waitText)}`:''}`;
 const actionRuntime=branch.type==='reactive'&&state==='waiting'&&(!waitType||waitType==='none')?null:branchRuntime;
 return `<section class='scenario-progress-branch ${!branch.enabled?'disabled':''} ${branch.type==='reactive'?'reactive':''} ${state}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(branch.name||branch.id||`Branch ${item.index+1}`)}</div><span class='badge'>${esc(state)}</span></div><div class='row-meta'>${meta}</div><div class='scenario-progress-current'>${esc(current)}</div>${scenarioProgressBar(done,steps.length)}</div>${skip?`<div class='branch-runtime-actions'>${skip}</div>`:''}</div><details class='scenario-progress-step-details' ${detailsAttrs(detailsKey,false)}><summary>Show ${esc(unit)}</summary><div class='scenario-progress'>${steps.length?steps.map((step,stepIndex)=>renderScenarioProgressStep(room,step,stepIndex,item.start+stepIndex,actionRuntime)).join(''):`<div class='empty'>No ${esc(unit)}</div>`}</div></details></section>`;
 }
@@ -853,7 +825,7 @@ if(!items.length)return '';
 return `<div class='scenario-progress-section'><div class='scenario-progress-section-title'>${esc(title)}</div><div class='scenario-progress-branches ${esc(mode||'flow')}'>${items.map(item=>renderScenarioProgressBranch(item.room,item)).join('')}</div></div>`;
 }
 function renderScenarioProgress(room,scenarioOrSteps){
-const branches=scenarioProgressBranches(scenarioOrSteps);
+const branches=scenarioProgressBranches(room,scenarioOrSteps);
 if(!branches.length)return `<div class='scenario-progress empty'>No scenario steps</div>`;
 let offset=0;
 const items=branches.map((branch,index)=>{
@@ -906,8 +878,8 @@ function markQuestDeviceDirty(){questDeviceEditor.dirty=true;if(document.querySe
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 function questDeviceDisplayName(dev){return dev&&(dev.name||dev.display_name||dev.id)||'Device';}
 function observedDisplayName(item){if(!item)return 'Device';const reg=observedRegistration(item.device_id);return reg&&(reg.name||reg.device_id)||item.name||item.display_name||item.device_id||'Device';}
-function questDeviceHealth(dev){if(!dev)return 'offline';if(dev.system_device)return 'ok';if(dev.enabled===false)return 'degraded';const observed=observedByClientId(dev.client_id||dev.id);if(!observed)return 'fault';if(observed.connectivity==='offline'||observed.connectivity==='unknown')return 'fault';if(observed.health==='fault'||observed.state==='fault')return 'fault';if(observed.health==='degraded'||observed.state==='degraded')return 'degraded';return 'ok';}
-function questDeviceStatusText(dev){if(!dev)return 'missing device';if(dev.system_device)return 'system device';if(dev.enabled===false)return 'disabled';const observed=observedByClientId(dev.client_id||dev.id);if(!observed)return 'not observed';if(observed.connectivity==='offline'||observed.connectivity==='unknown')return 'offline';return observed.health||observed.state||'online';}
+function questDeviceHealth(dev){return dev&&(dev.health||'unknown')||'unknown';}
+function questDeviceStatusText(dev){return dev&&(dev.status_text||dev.state_text||'unknown')||'missing device';}
 function questDeviceMonitorRow(dev){const observed=observedByClientId(dev.client_id||dev.id);const health=questDeviceHealth(dev);const meta=[`${(dev.commands||[]).length} commands`,`${(dev.events||[]).length} events`,dev.enabled===false?'disabled':'enabled'].join(' / ');const setup=isAdmin()?uiButton({label:'Device Setup',action:'device.setup.open',dataset:{'device-id':dev.id||'1'}}):'';const debug=isAdmin()?`<details class='scenario-advanced'><summary>Debug ids</summary><div class='row-meta'>Device ID: ${esc(dev.id||'')}</div><div class='row-meta'>Client: ${esc(dev.client_id||'none')}</div></details>`:'';return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(questDeviceDisplayName(dev))} ${dev.enabled===false?`<span class='badge'>disabled</span>`:''}</div><div class='row-meta'>${esc(meta)}</div><div class='row-meta'>${observed?`${esc(observed.connectivity||'unknown')} / fw ${esc(observed.fw_version||'n/a')}`:'not observed'}</div>${debug}</div><div>${status(health)}<div class='row-meta'>${esc(questDeviceStatusText(dev))}</div></div><div class='actions'>${setup}</div></div>`;}
 function commandPolicy(cmd){return cmd&&cmd.policy&&typeof cmd.policy==='object'?cmd.policy:{};}
 function commandRequiresConfirmation(cmd){const p=commandPolicy(cmd);return !!p.requires_confirmation||(p.danger_level&&p.danger_level!=='normal');}
@@ -977,6 +949,14 @@ function roomName(id){const r=roomById(id);return r&&(r.title||r.name||r.room_id
 function deviceDisplayName(id){const live=deviceById(id);const quest=questDevices().find(d=>(d.id||'')===id);const cfg=configDevices().find(d=>(d.id||d.device_id||'')===id);return live&&(live.display_name||live.device_id)||quest&&(quest.name||quest.id)||cfg&&(cfg.display_name||cfg.name||cfg.id||cfg.device_id)||id||'Device';}
 function roomDevices(id){return (gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).filter(d=>d.room_id===id);}
 function roomIssues(id){return (gmState&&Array.isArray(gmState.issues)?gmState.issues:[]).filter(i=>!id||!i.room_id||i.room_id===id);}
+function roomRelatedIssues(room){
+const all=(gmState&&Array.isArray(gmState.issues)?gmState.issues:[]);
+if(Array.isArray(room&&room.related_issue_ids)&&room.related_issue_ids.length){
+const wanted=new Set(room.related_issue_ids.filter(Boolean));
+return all.filter(issue=>wanted.has(String(issue&&issue.issue_id||'')));
+}
+return roomIssues(room&&room.room_id);
+}
 function observedRegistration(id){const key=String(id||'');if(!key)return null;const live=(gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).find(d=>d.device_id===key);if(live)return {device_id:live.device_id,name:live.display_name||live.device_id,via:'direct'};const quest=questDevices().find(dev=>(dev.client_id||dev.id||'')===key);if(quest)return {device_id:quest.id,name:quest.name||quest.id,via:'quest_device'};const cfg=configDevices().find(dev=>(Array.isArray(dev.bindings)?dev.bindings:[]).some(b=>(b&&b.client_id||'')===key));if(cfg){const devId=cfg.id||cfg.device_id||'';return {device_id:devId,name:cfg.display_name||cfg.name||devId,via:'binding'};}return null;}
 function knownDeviceIds(){const ids=new Set((gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).map(d=>d.device_id));questDevices().forEach(dev=>{if(dev.id)ids.add(dev.id);if(dev.client_id)ids.add(dev.client_id);});configDevices().forEach(dev=>(Array.isArray(dev.bindings)?dev.bindings:[]).forEach(b=>{if(b&&b.client_id)ids.add(b.client_id);}));return ids;}
 function observedItems(){return (gmObserved&&Array.isArray(gmObserved.items))?gmObserved.items:[];}
@@ -1027,13 +1007,11 @@ const selected=profiles.find(p=>p.id===selectedId)||null;
 const selectedName=room.selected_profile_name||((selected&&selected.id===selectedId)?selected.name:'');
 const scenarioId=room.selected_profile_scenario_id||((selected&&selected.scenario_id)||room.selected_scenario_id||'');
 const scenario=roomSelectedScenarioObject(room);
-const steps=roomScenarioSteps(room);
 const runtime=room.scenario_runtime_state||'idle';
 const waitType=room.scenario_wait_type||'none';
 const hasBranchRuntime=Array.isArray(room.scenario_branches)&&room.scenario_branches.length>1;
 const runningName=room.running_scenario_name||scenarioDisplayName(room.room_id,room.running_scenario_id||scenarioId,'none');
-const currentStep=roomCurrentScenarioStep(room);
-const currentStepText=currentStep?scenarioStepText(currentStep):scenarioStepLabel(room,steps.length);
+const currentStepText=roomCurrentScenarioText(room)||'';
 const canStart=!!selected&&selected.valid!==false;
 const sessionPresent=!!room.session_present||['running','paused','finished'].includes(room.session_state||'');
 const canStop=sessionPresent&&room.session_state!=='finished';
@@ -1063,7 +1041,7 @@ profiles.map(p=>`<option value='${esc(p.id)}' ${selected&&selected.id===p.id?'se
 esc(selectedName||selectedId||'none')}
 </span></div><div class='kv'><span class='k'>Scenario</span><span class='v'> ${
 esc(scenarioName(room.room_id,scenarioId))}
-</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div>${renderRoomGameButtons(room,canStart,canStop,canReset)}</div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room,steps.length))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText)}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
+</span></div><div class='kv'><span class='k'>Duration</span><span class='v'>${esc(selected?fmtClock(selected.duration_ms):'none')}</span></div></div>${assetHtml}`:noProfilesHtml(room.room_id)}<div style='height:12px'></div>${renderRoomGameButtons(room,canStart,canStop,canReset)}</div><div class='card ${canApprove?'operator-gate':(waitType!=='none'?'room-wait':'')}'><h2 class='section-title'>Runtime</h2><div class='kvs'><div class='kv'><span class='k'>Scenario</span><span class='v'>${esc(runningName)}</span></div><div class='kv'><span class='k'>Runtime</span><span class='v'>${esc(runtime)}</span></div><div class='kv'><span class='k'>Step</span><span class='v'>${esc(scenarioStepLabel(room))}</span></div><div class='kv'><span class='k'>Current</span><span class='v'>${esc(currentStepText||'none')}</span></div><div class='kv'><span class='k'>Waiting</span><span class='v'>${esc(scenarioWaitText(room))}</span></div></div>${canApprove?`<div class='operator-prompt'>${
 esc(waitPrompt)}
 </div>`:''}${canSkipWait?`<div class='operator-prompt'>Operator override available: ${esc(skipWaitLabel)}</div>`:''}${room.scenario_operator_message?`<div class='operator-prompt'>${
 esc(room.scenario_operator_message)}
@@ -1076,7 +1054,7 @@ uiButton({label:'Pause',action:'room.timer',dataset:{op:'pause','room-id':room.r
 uiButton({label:'Resume',action:'room.timer',dataset:{op:'resume','room-id':room.room_id},disabled:!canResume}),
 uiButton({label:'+1 min',action:'room.timer',dataset:{op:'plus1','room-id':room.room_id},disabled:!canAdjust}),
 uiButton({label:'-1 min',action:'room.timer',dataset:{op:'minus1','room-id':room.room_id},disabled:!canAdjust}),
-])}<details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'>${uiButton({label:'Start timer',action:'room.timer',dataset:{op:'start','room-id':room.room_id}})}</div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario||steps)}</div><div style='height:12px'></div>`;
+])}<details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'>${uiButton({label:'Start timer',action:'room.timer',dataset:{op:'start','room-id':room.room_id}})}</div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario)}</div><div style='height:12px'></div>`;
 }
 
 function renderRoomScenarioControl(room){
@@ -1148,11 +1126,11 @@ const profileId=roomSelectedProfileId(room.room_id)||room.selected_profile_id||'
 const profile=roomProfiles(room.room_id).find(p=>p.id===profileId)||null;
 const gameName=profile&&(profile.name||profile.id)||room.selected_profile_name||room.profile_name||'none';
 const scenarioNameText=scenario&&(scenario.name||scenario.id)||room.running_scenario_name||room.selected_profile_scenario_id||room.selected_scenario_id||'none';
-const current=roomCurrentScenarioStep(room);
-const issues=roomQuestDeviceIssues(room).length+(Number(room.issue_count)||0);
-const devices=roomScenarioDeviceIds(room).length||room.device_count||0;
+const currentText=roomCurrentScenarioText(room);
+const issues=Number(room&&room.issue_count)||0;
+const devices=Number(room&&room.scenario_device_count)||Number(room&&room.device_count)||0;
 const runtime=room.scenario_runtime_state||room.session_state||'idle';
-return `<tr class='clickable-row' data-action='room.open' data-room-id='${esc(room.room_id)}'><td><strong>${esc(room.title||room.name||room.room_id)}</strong><span>${esc(room.room_id||'')}</span></td><td>${status(roomDerivedHealth(room))}</td><td><strong>${esc(gameName)}</strong><span>${esc(scenarioNameText)}</span></td><td>${roomClockHtml(room,'span','')}</td><td>${esc(runtime)}</td><td>${esc(current?scenarioStepText(current):'none')}</td><td>${esc(scenarioWaitText(room))}</td><td>${esc(devices)}</td><td>${esc(issues)}</td><td class='observed-actions'>${uiButton({label:'Open',kind:'small-btn',action:'room.open',dataset:{'room-id':room.room_id}})}</td></tr>`;
+return `<tr class='clickable-row' data-action='room.open' data-room-id='${esc(room.room_id)}'><td><strong>${esc(room.title||room.name||room.room_id)}</strong><span>${esc(room.room_id||'')}</span></td><td>${status(roomDerivedHealth(room))}</td><td><strong>${esc(gameName)}</strong><span>${esc(scenarioNameText)}</span></td><td>${roomClockHtml(room,'span','')}</td><td>${esc(runtime)}</td><td>${esc(currentText||'none')}</td><td>${esc(scenarioWaitText(room))}</td><td>${esc(devices)}</td><td>${esc(issues)}</td><td class='observed-actions'>${uiButton({label:'Open',kind:'small-btn',action:'room.open',dataset:{'room-id':room.room_id}})}</td></tr>`;
 }
 
 function dashboardIssueRow(issue){
@@ -1169,7 +1147,8 @@ summary:{
 setPage('Dashboard','What is happening now');
 const rooms=Array.isArray(s.rooms)?s.rooms:[];
 const baseIssues=Array.isArray(s.issues)?s.issues:[];
-const questIssues=rooms.reduce((out,room)=>out.concat(roomQuestDeviceIssues(room).map(issue=>Object.assign({room_id:room.room_id},issue))),[]);
+const baseIssueIds=new Set(baseIssues.map(issue=>String(issue&&issue.issue_id||'')).filter(Boolean));
+const questIssues=rooms.reduce((out,room)=>out.concat(roomRelatedIssues(room).filter(issue=>!baseIssueIds.has(String(issue&&issue.issue_id||''))).map(issue=>Object.assign({room_id:room.room_id},issue))),[]);
 const allIssues=baseIssues.concat(questIssues);
 const runningRooms=rooms.filter(r=>['running','waiting'].includes(String(r.scenario_runtime_state||r.session_state||''))).length;
 const savedQuestDevices=questDevices().filter(d=>d&&!d.system_device);
@@ -1196,13 +1175,13 @@ const adminActions=isAdmin()?`<div class='actions' style='margin-bottom:14px'>${
 const devs=roomDevices(room.room_id);
 const questIds=roomScenarioDeviceIds(room);
 const questDevs=questIds.map(id=>questDeviceById(id)).filter(Boolean);
-const issues=roomIssues(room.room_id).concat(roomQuestDeviceIssues(room));
+const issues=roomRelatedIssues(room);
 const canReset=room.session_present;
 const canFinish=room.session_present&&room.session_state!=='finished';
 const canScenarioNext=(room.selected_scenario_id||room.running_scenario_id)&&(room.scenario_runtime_state==='running'||room.scenario_runtime_state==='waiting');
 let body='';
 if(roomTab==='overview'){
-body=`<div class='grid cols-2'><div class='card'><div class='card-head'><div><div class='card-title'>Room state</div><div class='card-sub'>${esc(room.title||room.name||'Room')}</div></div>${status(roomDerivedHealth(room))}</div><div class='kvs'><div class='kv'><span class='k'>Timer</span>${roomClockHtml(room,'span','v')}</div><div class='kv'><span class='k'>Session</span><span class='v'>${esc(room.session_state||'idle')}</span></div><div class='kv'><span class='k'>Scenario devices</span><span class='v'>${esc(questDevs.length)}</span></div><div class='kv'><span class='k'>Hints</span><span class='v'>${esc(room.hint_sent_count||0)}</span></div></div></div><div class='card'><h2 class='section-title'>Problems</h2><div class='list'>${issues.length?issues.slice(0,4).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>`;
+body=`<div class='grid cols-2'><div class='card'><div class='card-head'><div><div class='card-title'>Room state</div><div class='card-sub'>${esc(room.title||room.name||'Room')}</div></div>${status(roomDerivedHealth(room))}</div><div class='kvs'><div class='kv'><span class='k'>Timer</span>${roomClockHtml(room,'span','v')}</div><div class='kv'><span class='k'>Session</span><span class='v'>${esc(room.session_state||'idle')}</span></div><div class='kv'><span class='k'>Scenario devices</span><span class='v'>${esc(Number(room&&room.scenario_device_count)||0)}</span></div><div class='kv'><span class='k'>Hints</span><span class='v'>${esc(room.hint_sent_count||0)}</span></div></div></div><div class='card'><h2 class='section-title'>Problems</h2><div class='list'>${issues.length?issues.slice(0,4).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>`;
 }
 else if(roomTab==='devices'){
 const questRows=questDevs.length?questDevs.map(questDeviceMonitorRow).join(''):`<div class='card empty'>No quest devices referenced by selected scenario</div>`;
@@ -1281,15 +1260,17 @@ return `<div class='card empty'>Admin editor section is reserved for the next im
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 const HARDWARE_IO_RELAY_DEVICE='system_relay';
 const HARDWARE_IO_MOSFET_DEVICE='system_mosfet';
-const HARDWARE_IO_INPUT_DEVICE='system_input';
-const HARDWARE_IO_GPIO_DEVICE='system_gpio';
+const HARDWARE_IO_IO_DEVICE='system_io';
 
 const HARDWARE_IO_SCHEMAS={
-relayPulse:[{name:'duration_ms',label:'Pulse ms',type:'number',min:1,step:1,default:1000}],
+relayPulse:[{name:'duration_ms',label:'Pulse ms',type:'number',min:1,step:1,default:1000},{name:'on_ms',label:'On ms',type:'number',min:1,step:1,default:500},{name:'off_ms',label:'Off ms',type:'number',min:1,step:1,default:500},{name:'count',label:'Count',type:'number',min:0,step:1,default:3}],
 mosfetSet:[{name:'value',label:'Value 0-255',type:'number',min:0,max:255,step:1,default:255}],
 mosfetFade:[{name:'target',label:'Target 0-255',type:'number',min:0,max:255,step:1,default:255},{name:'duration_ms',label:'Fade ms',type:'number',min:1,step:1,default:1000}],
 mosfetPulse:[{name:'value',label:'Value 0-255',type:'number',min:0,max:255,step:1,default:255},{name:'duration_ms',label:'Pulse ms',type:'number',min:1,step:1,default:1000}],
-gpioPulse:[{name:'duration_ms',label:'Pulse ms',type:'number',min:1,step:1,default:1000}],
+ioPulse:[{name:'duration_ms',label:'Pulse ms',type:'number',min:1,step:1,default:1000},{name:'on_ms',label:'On ms',type:'number',min:1,step:1,default:500},{name:'off_ms',label:'Off ms',type:'number',min:1,step:1,default:500},{name:'count',label:'Count',type:'number',min:0,step:1,default:3}],
+blink:[{name:'on_ms',label:'On ms',type:'number',min:1,step:1,default:500},{name:'off_ms',label:'Off ms',type:'number',min:1,step:1,default:500},{name:'count',label:'Count',type:'number',min:0,step:1,default:3}],
+mosfetBlink:[{name:'value',label:'Value 0-255',type:'number',min:0,max:255,step:1,default:255},{name:'on_ms',label:'On ms',type:'number',min:1,step:1,default:500},{name:'off_ms',label:'Off ms',type:'number',min:1,step:1,default:500},{name:'count',label:'Count',type:'number',min:0,step:1,default:3}],
+mosfetBreathe:[{name:'min',label:'Min 0-255',type:'number',min:0,max:255,step:1,default:0},{name:'max',label:'Max 0-255',type:'number',min:0,max:255,step:1,default:255},{name:'fade_ms',label:'Fade ms',type:'number',min:1,step:1,default:1000},{name:'hold_ms',label:'Hold ms',type:'number',min:0,step:1,default:0},{name:'count',label:'Count',type:'number',min:0,step:1,default:3}],
 };
 
 async function loadHardwareIoStatus(renderAfter){
@@ -1306,7 +1287,7 @@ catch(err){
 gmHardwareIo.error=err.message||'Hardware IO status failed';
 }
 gmHardwareIo.loading=false;
-if(renderAfter&&currentView==='hardware_io')render();
+if(renderAfter)render();
 }
 
 function hardwareIoStatusItem(kind,channel){
@@ -1325,15 +1306,8 @@ function hardwareIoMosfetStatusBadge(channel){
 const item=hardwareIoStatusItem('mosfets',channel);
 if(!item)return uiBadge('unknown');
 if(!item.enabled)return uiBadge('disabled');
-const mode=item.fade_active?'fade':(item.pulse_active?'pulse':'value');
-return uiBadge(`${mode} ${item.value||0}`,item.value||item.fade_active||item.pulse_active?'selected-badge':'');
-}
-
-function hardwareIoInputStatusBadge(channel){
-const item=hardwareIoStatusItem('inputs',channel);
-if(!item)return uiBadge('unknown');
-if(!item.enabled)return uiBadge('disabled');
-return uiBadge(item.active?'pressed':'released',item.active?'selected-badge':'');
+const mode=item.effect_active?'effect':(item.fade_active?'fade':(item.pulse_active?'pulse':'value'));
+return uiBadge(`${mode} ${item.value||0}`,item.value||item.fade_active||item.pulse_active||item.effect_active?'selected-badge':'');
 }
 
 function hardwareIoGpioModeText(mode){
@@ -1343,8 +1317,18 @@ if(value===2)return 'output';
 return 'disabled';
 }
 
+function hardwareIoGpioModeValue(mode){
+const text=hardwareIoGpioModeText(mode);
+return text==='input'?'input':(text==='output'?'output':'disabled');
+}
+
+function hardwareIoGpioModeOptions(mode){
+const selected=hardwareIoGpioModeValue(mode);
+return ['disabled','input','output'].map(value=>`<option value='${esc(value)}' ${value===selected?'selected':''}>${esc(value)}</option>`).join('');
+}
+
 function hardwareIoGpioStatusBadge(channel){
-const item=hardwareIoStatusItem('gpios',channel);
+const item=hardwareIoStatusItem('ios',channel);
 if(!item)return uiBadge('unknown');
 if(!item.enabled)return uiBadge('disabled');
 const mode=hardwareIoGpioModeText(item.mode);
@@ -1355,11 +1339,10 @@ return uiBadge(item.active?'active':'inactive',item.active?'selected-badge':'');
 function hardwareIoChannelMeta(kind,channel){
 const item=hardwareIoStatusItem(kind,channel);
 if(!item)return 'Status not loaded yet';
-const parts=[`GPIO ${item.gpio}`,item.enabled?'enabled':'disabled'];
+const parts=[item.enabled?'enabled':'disabled'];
 if(kind==='relays')parts.push(item.active_low?'active low':'active high');
 if(kind==='mosfets')parts.push(`${item.pwm_freq_hz||0} Hz`);
-if(kind==='inputs')parts.push(item.active_low?'active low':'active high',`debounce ${item.debounce_ms||0} ms`,item.physical_high?'pin high':'pin low');
-if(kind==='gpios')parts.push(hardwareIoGpioModeText(item.mode),item.active_low?'active low':'active high',item.physical_high?'pin high':'pin low');
+if(kind==='ios')parts.push(hardwareIoGpioModeText(item.mode),item.active_low?'active low':'active high',item.physical_high?'pin high':'pin low');
 return parts.join(' / ');
 }
 
@@ -1453,35 +1436,36 @@ return `<section class='builder-step' data-hardware-form='relay' data-hardware-s
 hardwareIoButton('On',HARDWARE_IO_RELAY_DEVICE,'set',{channel,on:true},{kind:'approve',disabled,noForm:true}),
 hardwareIoButton('Off',HARDWARE_IO_RELAY_DEVICE,'set',{channel,on:false},{disabled,noForm:true}),
 hardwareIoButton('Pulse',HARDWARE_IO_RELAY_DEVICE,'pulse',{channel},{kind:'approve',disabled}),
+hardwareIoButton('Blink',HARDWARE_IO_RELAY_DEVICE,'blink',{channel},{kind:'approve',disabled}),
 hardwareIoButton('Toggle',HARDWARE_IO_RELAY_DEVICE,'toggle',{channel},{disabled,noForm:true}),
 ])}</section>`;
 }
 
 function hardwareIoMosfetChannel(channel){
 const scope=`mosfet_${channel}`;
+const effectsKey=`hardware-io:mosfet:${channel}:effects`;
 const channelStatus=hardwareIoStatusItem('mosfets',channel);
 const disabled=channelStatus?channelStatus.enabled===false:false;
-return `<section class='builder-step' data-hardware-channel='mosfet' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>MOSFET ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('mosfets',channel))}</div></div>${hardwareIoMosfetStatusBadge(channel)}</div><div class='grid cols-3'><div data-hardware-form='mosfet-set' data-hardware-schema='mosfetSet' data-hardware-scope='${esc(scope)}_set'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetSet,hardwareIoFormModel(`${scope}_set`,{value:255}),`${scope}_set`)}${uiActions([hardwareIoButton('Set',HARDWARE_IO_MOSFET_DEVICE,'set',{channel},{kind:'approve',disabled}),hardwareIoButton('Off',HARDWARE_IO_MOSFET_DEVICE,'set',{channel,value:0},{kind:'danger',disabled,noForm:true})])}</div><div data-hardware-form='mosfet-fade' data-hardware-schema='mosfetFade' data-hardware-scope='${esc(scope)}_fade'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetFade,hardwareIoFormModel(`${scope}_fade`,{target:255,duration_ms:1000}),`${scope}_fade`)}${uiActions([hardwareIoButton('Fade',HARDWARE_IO_MOSFET_DEVICE,'fade',{channel},{disabled})])}</div><div data-hardware-form='mosfet-pulse' data-hardware-schema='mosfetPulse' data-hardware-scope='${esc(scope)}_pulse'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetPulse,hardwareIoFormModel(`${scope}_pulse`,{value:255,duration_ms:1000}),`${scope}_pulse`)}${uiActions([hardwareIoButton('Pulse',HARDWARE_IO_MOSFET_DEVICE,'pulse',{channel},{disabled})])}</div></div></section>`;
-}
-
-function hardwareIoInputChannel(channel){
-const item=hardwareIoStatusItem('inputs',channel);
-const events=['changed','high','low','pressed','released'].map(name=>`ch${channel}_${name}`).join(', ');
-return `<section class='builder-step'><div class='builder-step-head'><div><div class='builder-step-title'>Input ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('inputs',channel))}</div></div>${hardwareIoInputStatusBadge(channel)}</div><div class='kvs'><div class='kv'><span class='k'>Logical</span><span class='v'>${esc(item&&item.active?'active':'inactive')}</span></div><div class='kv'><span class='k'>Physical</span><span class='v'>${esc(item&&item.physical_high?'HIGH':'LOW')}</span></div></div><div class='row-meta'>Events: ${esc(events)}</div></section>`;
+return `<section class='builder-step compact-step' data-hardware-channel='mosfet' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>MOSFET ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('mosfets',channel))}</div></div>${hardwareIoMosfetStatusBadge(channel)}</div><div class='grid cols-3'><div data-hardware-form='mosfet-set' data-hardware-schema='mosfetSet' data-hardware-scope='${esc(scope)}_set'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetSet,hardwareIoFormModel(`${scope}_set`,{value:255}),`${scope}_set`)}${uiActions([hardwareIoButton('Set',HARDWARE_IO_MOSFET_DEVICE,'set',{channel},{kind:'approve',disabled}),hardwareIoButton('Off',HARDWARE_IO_MOSFET_DEVICE,'set',{channel,value:0},{kind:'danger',disabled,noForm:true})])}</div><div data-hardware-form='mosfet-fade' data-hardware-schema='mosfetFade' data-hardware-scope='${esc(scope)}_fade'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetFade,hardwareIoFormModel(`${scope}_fade`,{target:255,duration_ms:1000}),`${scope}_fade`)}${uiActions([hardwareIoButton('Fade',HARDWARE_IO_MOSFET_DEVICE,'fade',{channel},{disabled})])}</div><div data-hardware-form='mosfet-pulse' data-hardware-schema='mosfetPulse' data-hardware-scope='${esc(scope)}_pulse'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetPulse,hardwareIoFormModel(`${scope}_pulse`,{value:255,duration_ms:1000}),`${scope}_pulse`)}${uiActions([hardwareIoButton('Pulse',HARDWARE_IO_MOSFET_DEVICE,'pulse',{channel},{disabled})])}</div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(effectsKey,false)}><summary>Effects</summary><div class='grid cols-2'><div data-hardware-form='mosfet-blink' data-hardware-schema='mosfetBlink' data-hardware-scope='${esc(scope)}_blink'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetBlink,hardwareIoFormModel(`${scope}_blink`,{value:255,on_ms:500,off_ms:500,count:3}),`${scope}_blink`)}${uiActions([hardwareIoButton('Blink',HARDWARE_IO_MOSFET_DEVICE,'blink',{channel,final_value:0},{disabled})])}</div><div data-hardware-form='mosfet-breathe' data-hardware-schema='mosfetBreathe' data-hardware-scope='${esc(scope)}_breathe'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetBreathe,hardwareIoFormModel(`${scope}_breathe`,{min:0,max:255,fade_ms:1000,hold_ms:0,count:3}),`${scope}_breathe`)}${uiActions([hardwareIoButton('Breathe',HARDWARE_IO_MOSFET_DEVICE,'breathe',{channel,final_value:0},{disabled})])}</div></div><div class='row-meta'>Count 0 repeats until Set, Off, Fade, Pulse, All off, Stop game or Reset game.</div></details></section>`;
 }
 
 function hardwareIoGpioChannel(channel){
-const scope=`gpio_${channel}`;
-const item=hardwareIoStatusItem('gpios',channel);
+const scope=`io_${channel}`;
+const item=hardwareIoStatusItem('ios',channel);
 const mode=hardwareIoGpioModeText(item&&item.mode);
 const disabled=!item||!item.enabled||mode!=='output';
-const events=['changed','high','low','active','inactive'].map(name=>`ch${channel}_${name}`).join(', ');
-return `<section class='builder-step' data-hardware-form='gpio' data-hardware-schema='gpioPulse' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>GPIO ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('gpios',channel))}</div></div>${hardwareIoGpioStatusBadge(channel)}</div><div class='kvs'><div class='kv'><span class='k'>Mode</span><span class='v'>${esc(mode)}</span></div><div class='kv'><span class='k'>Physical</span><span class='v'>${esc(item&&item.physical_high?'HIGH':'LOW')}</span></div></div><div class='field-grid'>${renderFormFields(HARDWARE_IO_SCHEMAS.gpioPulse,hardwareIoFormModel(scope,{duration_ms:1000}),scope)}</div>${uiActions([
-hardwareIoButton('Active',HARDWARE_IO_GPIO_DEVICE,'set',{channel,active:true},{kind:'approve',disabled,noForm:true}),
-hardwareIoButton('Inactive',HARDWARE_IO_GPIO_DEVICE,'set',{channel,active:false},{disabled,noForm:true}),
-hardwareIoButton('Pulse active',HARDWARE_IO_GPIO_DEVICE,'pulse',{channel,active:true},{kind:'approve',disabled}),
-hardwareIoButton('Toggle',HARDWARE_IO_GPIO_DEVICE,'toggle',{channel},{disabled,noForm:true}),
-])}<div class='row-meta'>Input events: ${esc(events)}</div></section>`;
+const modeDisabled=!item||Number(item.gpio)<0||!hardwareIoServiceAvailable();
+const events=['changed','active','inactive','high','low'].map(name=>`ch${channel}_${name}`).join(', ');
+const modeControls=`<div class='field-grid'><label><span>Mode</span><select data-hardware-io-mode='${esc(channel)}' ${modeDisabled?'disabled':''}>${hardwareIoGpioModeOptions(item&&item.mode)}</select></label></div>${uiActions([uiButton({label:'Apply mode',action:'hardware.io.mode',dataset:{channel},disabled:modeDisabled})])}`;
+const outputControls=mode==='output'?`<div data-hardware-form='io' data-hardware-schema='ioPulse' data-hardware-scope='${esc(scope)}'><div class='field-grid'>${renderFormFields(HARDWARE_IO_SCHEMAS.ioPulse,hardwareIoFormModel(scope,{duration_ms:1000}),scope)}</div>${uiActions([
+hardwareIoButton('Active',HARDWARE_IO_IO_DEVICE,'set',{channel,active:true},{kind:'approve',disabled,noForm:true}),
+hardwareIoButton('Inactive',HARDWARE_IO_IO_DEVICE,'set',{channel,active:false},{disabled,noForm:true}),
+hardwareIoButton('Pulse active',HARDWARE_IO_IO_DEVICE,'pulse',{channel,active:true},{kind:'approve',disabled}),
+hardwareIoButton('Blink',HARDWARE_IO_IO_DEVICE,'blink',{channel},{kind:'approve',disabled}),
+hardwareIoButton('Toggle',HARDWARE_IO_IO_DEVICE,'toggle',{channel},{disabled,noForm:true}),
+])}</div>`:'';
+const inputHint=modeDisabled?`<div class='row-meta'>Board channel is not assigned.</div>`:(mode==='input'?`<div class='row-meta'>Main scenario events: ${esc(`ch${channel}_active, ch${channel}_inactive`)}. All input events: ${esc(events)}</div>`:`<div class='row-meta'>Switch to input to use ${esc(`ch${channel}_active`)} / ${esc(`ch${channel}_inactive`)} in scenarios.</div>`);
+return `<section class='builder-step'><div class='builder-step-head'><div><div class='builder-step-title'>IO ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('ios',channel))}</div></div>${hardwareIoGpioStatusBadge(channel)}</div>${modeControls}<div class='kvs'><div class='kv'><span class='k'>Mode</span><span class='v'>${esc(mode)}</span></div><div class='kv'><span class='k'>Physical</span><span class='v'>${esc(item&&item.physical_high?'HIGH':'LOW')}</span></div></div>${outputControls}${inputHint}</section>`;
 }
 
 function renderHardwareIoHeader(){
@@ -1507,13 +1491,11 @@ return uiCard({title,subtitle,status:statusHtml,content});
 function renderHardwareIoSummaryCards(){
 const relay=questDeviceById(HARDWARE_IO_RELAY_DEVICE);
 const mosfet=questDeviceById(HARDWARE_IO_MOSFET_DEVICE);
-const input=questDeviceById(HARDWARE_IO_INPUT_DEVICE);
-const gpio=questDeviceById(HARDWARE_IO_GPIO_DEVICE);
+const io=questDeviceById(HARDWARE_IO_IO_DEVICE);
 const relayStatus=relay?status(questDeviceHealth(relay)):`<span class='status state-fault'>missing</span>`;
 const mosfetStatus=mosfet?status(questDeviceHealth(mosfet)):`<span class='status state-fault'>missing</span>`;
-const inputStatus=input?status(questDeviceHealth(input)):`<span class='status state-fault'>missing</span>`;
-const gpioStatus=gpio?status(questDeviceHealth(gpio)):`<span class='status state-fault'>missing</span>`;
-return `<div class='grid cols-2'>${renderHardwareIoDeviceSummary(HARDWARE_IO_RELAY_DEVICE,'System Relay','4 digital relay outputs. Logic level and GPIO pins are configured in menuconfig.',relayStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_MOSFET_DEVICE,'System MOSFET','4 PWM low-side outputs. Disabled channels keep value 0.',mosfetStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_INPUT_DEVICE,'System Input','4 debounced digital inputs. Use channel events in scenario waits.',inputStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_GPIO_DEVICE,'System GPIO','4 universal lines configured as disabled, input or output in menuconfig.',gpioStatus)}</div>`;
+const ioStatus=io?status(questDeviceHealth(io)):`<span class='status state-fault'>missing</span>`;
+return `<div class='grid cols-2'>${renderHardwareIoDeviceSummary(HARDWARE_IO_RELAY_DEVICE,'Relay channels','Relay 1-4 outputs.',relayStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_MOSFET_DEVICE,'MOSFET channels','MOSFET 1-4 PWM outputs.',mosfetStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_IO_DEVICE,'IO channels','IO 1-4 configurable input/output channels.',ioStatus)}</div>`;
 }
 
 function renderHardwareRelaySection(){
@@ -1524,16 +1506,12 @@ function renderHardwareMosfetSection(){
 return `<section><div class='card-head'><h2 class='section-title'>MOSFET PWM</h2><div class='actions'>${hardwareIoButton('All off',HARDWARE_IO_MOSFET_DEVICE,'all_off',{}, {kind:'danger'})}</div></div><div class='list'>${[1,2,3,4].map(hardwareIoMosfetChannel).join('')}</div></section>`;
 }
 
-function renderHardwareInputSection(){
-return `<section><h2 class='section-title'>Digital inputs</h2><div class='grid cols-2'>${[1,2,3,4].map(hardwareIoInputChannel).join('')}</div></section>`;
-}
-
 function renderHardwareGpioSection(){
-return `<section><h2 class='section-title'>Universal GPIO</h2><div class='grid cols-2'>${[1,2,3,4].map(hardwareIoGpioChannel).join('')}</div></section>`;
+return `<section><h2 class='section-title'>IO channels</h2><div class='grid cols-2'>${[1,2,3,4].map(hardwareIoGpioChannel).join('')}</div></section>`;
 }
 
 function renderHardwareIoView(){
-setPage('Hardware IO','Built-in relay, MOSFET, input and GPIO channels');
+setPage('Hardware IO','Relay, MOSFET and IO channels');
 if(!gmHardwareIo.loaded&&!gmHardwareIo.loading){
 setTimeout(()=>loadHardwareIoStatus(true),0);
 }
@@ -1542,7 +1520,6 @@ renderHardwareIoHeader(),
 renderHardwareIoSummaryCards(),
 renderHardwareRelaySection(),
 renderHardwareMosfetSection(),
-renderHardwareInputSection(),
 renderHardwareGpioSection(),
 ].join('<div style="height:14px"></div>');
 }
@@ -1557,6 +1534,18 @@ const res=await api.device.runCommand(deviceId,commandId,params);
 await gmExpectOk(res);
 await loadHardwareIoStatus(true);
 setGMStatus('Hardware command sent','gm-ok');
+});
+
+gmRegisterAction('hardware.io.mode',async el=>{
+const channel=Number(el.dataset.channel)||0;
+const select=typeof document!=='undefined'?document.querySelector(`[data-hardware-io-mode="${channel}"]`):null;
+const mode=select&&select.value?select.value:'disabled';
+if(!channel)throw new Error('IO channel is incomplete');
+setGMStatus('Updating IO mode...');
+const res=await api.hardwareIo.setIoMode({channel,mode});
+await gmExpectOk(res);
+await loadHardwareIoStatus(true);
+setGMStatus('IO mode updated','gm-ok');
 });
 
 gmRegisterAction('hardware.status.refresh',async()=>{
@@ -1609,11 +1598,37 @@ editing?uiButton({label:'Select for room',action:'profile.select',dataset:{'prof
 return `<div class='scenario-room-bar'><div><h2 class='section-title'>Room</h2><select class='scenario-select' data-profile-room-select>${rooms.map(r=>`<option value='${esc(r.room_id)}' ${r.room_id===roomId?'selected':''}>${esc(r.title||r.room_id)}</option>`).join('')}</select></div><div class='row-meta'>Selected: <strong>${esc((selectedProfile&&(selectedProfile.name||selectedProfile.id))||'none')}</strong></div></div><div class='profile-admin-layout'><section><div class='card-head'><h2 class='section-title'>Game modes</h2>${uiActions([uiButton({label:'Add game mode',action:'profile.new'})])}</div><div class='list'>${profileRows}</div></section><section>${editorHtml}</section></div>`;
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
+function inferScenarioEditorStepType(step){
+const raw=String(step&&step.type||'').trim();
+const low=raw.toLowerCase();
+if(low==='device_command')return 'DEVICE_COMMAND';
+if(low==='device_command_group')return 'DEVICE_COMMAND_GROUP';
+if(low==='wait_device_event')return 'WAIT_DEVICE_EVENT';
+if(low==='wait_any_device_event')return 'WAIT_ANY_DEVICE_EVENT';
+if(low==='wait_all_device_events')return 'WAIT_ALL_DEVICE_EVENTS';
+if(low==='operator_approval')return 'OPERATOR_APPROVAL';
+if(low==='show_operator_message'||low==='operator_message')return 'SHOW_OPERATOR_MESSAGE';
+if(low==='set_flag')return 'SET_FLAG';
+if(low==='wait_flags')return 'WAIT_FLAGS';
+if(low==='end_game'||low==='finish_game')return 'END_GAME';
+if(step&&step.device_id&&step.event_id)return 'WAIT_DEVICE_EVENT';
+if(step&&Array.isArray(step.events)&&step.events.length)return 'WAIT_ANY_DEVICE_EVENT';
+if(step&&(step.prompt||step.operator_prompt||step.approve_label||step.operator_approve_label))return 'OPERATOR_APPROVAL';
+if(step&&(step.message||step.operator_message))return 'SHOW_OPERATOR_MESSAGE';
+if(step&&Array.isArray(step.commands)&&step.commands.length)return 'DEVICE_COMMAND_GROUP';
+if(step&&step.device_id&&step.command_id)return 'DEVICE_COMMAND';
+if(step&&Array.isArray(step.flags)&&step.flags.length)return 'WAIT_FLAGS';
+if(step&&step.flag_name)return 'SET_FLAG';
+if(low==='wait_time')return 'WAIT_TIME';
+return 'WAIT_TIME';
+}
+
 function normalizeScenarioEditorStep(step){
 step=step||{};
+const type=inferScenarioEditorStepType(step);
 const out={
-id:step.id||'',label:step.label||'',enabled:step.enabled!==false,type:step.type||'WAIT_TIME'}
-;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms)out.duration_ms=step.duration_ms;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:cmd.params&&typeof cmd.params==='object'?cmd.params:{}}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;return out;}
+id:step.id||'',label:step.label||'',enabled:step.enabled!==false,type}
+;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms!==undefined&&step.duration_ms!==null)out.duration_ms=Number(step.duration_ms)||0;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:cmd.params&&typeof cmd.params==='object'?cmd.params:{}}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;if(type==='WAIT_TIME'&&(!Number.isFinite(Number(out.duration_ms))||Number(out.duration_ms)<=0))out.duration_ms=1000;return out;}
 function scenarioBranchTypeValue(branch){
 const raw=String(branch&&branch.type||'normal').toLowerCase();
 return raw==='reactive'||raw==='reaction'?'reactive':'normal';
@@ -1826,27 +1841,10 @@ type=scenarioStepTypeValue({type});
 return type==='WAIT_TIME'||type==='WAIT_DEVICE_EVENT'||type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS'||type==='WAIT_FLAGS';
 }
 
-function scenarioFallbackStepSchemas(){
-const skipFields=[{key:'allow_operator_skip',type:'checkbox',label:'Allow operator skip'},{key:'operator_skip_label',type:'text',label:'Skip label'}];
-return [
-{type:'DEVICE_COMMAND',label:'Device command',fields:[{key:'device_id',type:'device_select',label:'Device',required:true},{key:'command_id',type:'device_command_select',label:'Command',depends_on:'device_id',required:true},{key:'params',type:'params_object',label:'Parameters',depends_on:'command_id'}]},
-{type:'DEVICE_COMMAND_GROUP',label:'Command group',fields:[{key:'commands',type:'command_group',label:'Commands',required:true}]},
-{type:'WAIT_DEVICE_EVENT',label:'Wait device event',fields:[{key:'device_id',type:'device_select',label:'Device',required:true},{key:'event_id',type:'device_event_select',label:'Event',depends_on:'device_id',required:true},{key:'timeout_ms',type:'optional_duration_ms',label:'Timeout'},{key:'timeout_message',type:'textarea',label:'Timeout message'},...skipFields]},
-{type:'WAIT_ANY_DEVICE_EVENT',label:'Wait any device event',fields:[{key:'events',type:'event_group',label:'Events',required:true},...skipFields]},
-{type:'WAIT_ALL_DEVICE_EVENTS',label:'Wait all device events',fields:[{key:'events',type:'event_group',label:'Events',required:true},...skipFields]},
-{type:'WAIT_TIME',label:'Wait time',fields:[{key:'duration_ms',type:'duration_ms',label:'Duration',required:true},...skipFields]},
-{type:'OPERATOR_APPROVAL',label:'Operator approval',fields:[{key:'prompt',type:'text',label:'Prompt',required:true},{key:'approve_label',type:'text',label:'Button label'}]},
-{type:'SHOW_OPERATOR_MESSAGE',label:'Show operator message',fields:[{key:'message',type:'textarea',label:'Message',required:true}]},
-{type:'SET_FLAG',label:'Set flag',fields:[{key:'flag_name',type:'text',label:'Flag',required:true},{key:'value',type:'checkbox',label:'Value',required:true}]},
-{type:'WAIT_FLAGS',label:'Wait flags',fields:[{key:'flags',type:'flag_list',label:'Flags',required:true},{key:'timeout_ms',type:'optional_duration_ms',label:'Timeout'},{key:'timeout_message',type:'textarea',label:'Timeout message'},...skipFields]},
-{type:'END_GAME',label:'End game',fields:[]}
-];
-}
-
 function scenarioStepSchemas(){
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const schemas=Array.isArray(catalog.step_schemas)?catalog.step_schemas:[];
-return schemas.length?schemas:scenarioFallbackStepSchemas();
+return schemas;
 }
 
 function scenarioReactiveTriggerTypes(){
@@ -1985,12 +1983,73 @@ return all.map(t=>`<option value='${esc(t)}' ${type===t?'selected':''}>${esc(sce
 }
 
 function scenarioCatalogDevices(){
+if(!gmHardwareIo.loaded&&!gmHardwareIo.loading&&typeof loadHardwareIoStatus==='function'){
+setTimeout(()=>loadHardwareIoStatus(true),0);
+}
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const catalogDevices=Array.isArray(catalog.quest_devices)?catalog.quest_devices:[];
-if(catalogDevices.length)return catalogDevices;
-return questDevices().map(device=>({
+const base=catalogDevices.length?catalogDevices:questDevices().map(device=>({
 id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
 )).filter(device=>device.id);
+return base.map(scenarioNormalizeHardwareDevice).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
+}
+
+function scenarioIoModeText(mode){
+const value=Number(mode)||0;
+if(value===1)return 'input';
+if(value===2)return 'output';
+return 'disabled';
+}
+
+function scenarioIoChannelFromId(id){
+const match=String(id||'').match(/^ch([1-4])_/);
+return match?Number(match[1]):0;
+}
+
+function scenarioHardwareStatusItems(key){
+const data=gmHardwareIo&&gmHardwareIo.data;
+return data&&Array.isArray(data[key])?data[key]:[];
+}
+
+function scenarioEnabledChannels(key){
+return new Set(scenarioHardwareStatusItems(key).filter(item=>item&&item.enabled).map(item=>Number(item.channel)||0));
+}
+
+function scenarioNormalizeChannelCommand(command,channelLabelPrefix,channels){
+const cmd={...command};
+cmd.label=cmd.label||cmd.id||'Command';
+cmd.channel_options=Array.from(channels||[]).filter(Boolean).sort((a,b)=>a-b).map(channel=>({id:String(channel),name:`${channelLabelPrefix} ${channel}`}));
+cmd.args_schema=Array.isArray(cmd.args_schema)?cmd.args_schema:[];
+cmd.args_schema=cmd.args_schema.map(param=>param&&param.key==='channel'?{...param,label:'Channel'}:param);
+return cmd;
+}
+
+function scenarioNormalizeHardwareDevice(device){
+if(!device||!device.id)return device;
+const out={...device};
+out.commands=Array.isArray(device.commands)?device.commands.slice():[];
+out.events=Array.isArray(device.events)?device.events.slice():[];
+if(device.id==='system_relay'){
+const channels=scenarioEnabledChannels('relays');
+out.name='Relay channels';
+out.commands=out.commands.filter(cmd=>cmd.id!=='toggle'||cmd.manual_allowed!==false).map(cmd=>scenarioNormalizeChannelCommand(cmd,'Relay',channels));
+if(gmHardwareIo.loaded&&!channels.size)out.commands=[];
+}
+else if(device.id==='system_mosfet'){
+const channels=scenarioEnabledChannels('mosfets');
+out.name='MOSFET channels';
+out.commands=out.commands.map(cmd=>scenarioNormalizeChannelCommand(cmd,'MOSFET',channels));
+if(gmHardwareIo.loaded&&!channels.size)out.commands=out.commands.filter(cmd=>cmd.id==='all_off');
+}
+else if(device.id==='system_io'){
+const items=scenarioHardwareStatusItems('ios');
+const inputChannels=new Set(items.filter(item=>item&&item.enabled&&scenarioIoModeText(item.mode)==='input').map(item=>Number(item.channel)||0));
+const outputChannels=new Set(items.filter(item=>item&&item.enabled&&scenarioIoModeText(item.mode)==='output').map(item=>Number(item.channel)||0));
+out.name='IO channels';
+out.commands=out.commands.filter(cmd=>cmd.id==='get_state'?inputChannels.size||outputChannels.size:outputChannels.size).map(cmd=>scenarioNormalizeChannelCommand(cmd,'IO',cmd.id==='get_state'?new Set([...inputChannels,...outputChannels]):outputChannels));
+out.events=out.events.filter(event=>inputChannels.has(scenarioIoChannelFromId(event.id)));
+}
+return out;
 }
 
 function firstScenarioDevice(requireCommand){
@@ -2160,6 +2219,10 @@ if(command&&command.id==='play'&&key==='repeat'){
 return audioChannelValue(values)==='background'?`<label class='row-meta'><input data-step-param='${esc(key)}' type='checkbox' ${value?'checked':''} style='min-width:auto'> Repeat background track</label>`:'';
 }
 if(param.type==='checkbox')return `<label class='row-meta'><input data-step-param='${esc(key)}' type='checkbox' ${value?'checked':''} style='min-width:auto'> ${esc(label)}</label>`;
+if(key==='channel'&&command&&Array.isArray(command.channel_options)&&command.channel_options.length){
+const selected=value===undefined?command.channel_options[0].id:String(value);
+return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'>${optionList(command.channel_options,selected,'Select channel')}</select></div>`;
+}
 if(command&&command.id==='play'&&key==='channel')return renderAudioChannelParam(key,label,value);
 if(param.type==='audio_file_select')return renderAudioFileParam(key,label,value,audioChannelValue(values));
 const inputType=param.type==='number'?'number':'text';
@@ -3155,7 +3218,9 @@ return event&&(event.label||event.id)||eventId||'event';
 function scenarioEditorSource(){
 const roomId=scenarioEditor.room_id;
 let source=null;
-if(scenarioEditor.draft&&scenarioEditor.draft.room_id===roomId)source=JSON.parse(JSON.stringify(scenarioEditor.draft));
+if(scenarioEditor.draft&&
+   scenarioEditor.draft.room_id===roomId&&
+   String(scenarioEditor.draft.id||'')===String(scenarioEditor.scenario_id||''))source=JSON.parse(JSON.stringify(scenarioEditor.draft));
 else{
 const editing=roomScenarios(roomId).find(s=>s.id===scenarioEditor.scenario_id)||null;
 source=scenarioEditableJson(editing,roomId);
@@ -3411,15 +3476,17 @@ function initDeviceSetupWizard(){
 return;
 }
 
+function syncGMSummaryStatus(){
+const summary=gmState&&gmState.summary?gmState.summary:{};
+setStatus(summary.has_fault?'fault':(summary.has_degraded?'degraded':'ok'),summary.has_fault?'state-fault':(summary.has_degraded?'state-degraded':'state-ok'));
+}
+
 function renderMainContent(){
 const root=document.getElementById('gm_content');
 if(!root)return;
 if(gmSkipScenarioDomSync)gmSkipScenarioDomSync=false;
 applyGMRoleLayout();
-const summary=gmState&&gmState.summary?gmState.summary:{
-}
-;
-setStatus(summary.has_fault?'fault':(summary.has_degraded?'degraded':'ok'),summary.has_fault?'state-fault':(summary.has_degraded?'state-degraded':'state-ok'));
+syncGMSummaryStatus();
 let html='';
 if(currentView==='dashboard')html=renderDashboard();
 else if(currentView==='rooms')html=renderRoomsView();
@@ -3449,6 +3516,7 @@ const GM_STATIC_TTL_MS=30000;
 const gmLoadTimes={observed:0,audit:0,timeline:0,questDevices:0,roomScenarios:0,roomProfiles:0,scenarioCatalogs:0};
 const gmRuntimeRenderKeys={};
 const gmRuntimeRequestSeq={};
+const gmLocalRuntimeRefreshUntil={};
 let gmLastVersions=null;
 let gmSnapshotRequestSeq=0;
 
@@ -3606,7 +3674,6 @@ loadGMAudioFiles(false);
 }
 
 window.__gmRefreshManualSidebar=async function(){
-await loadQuestDevices(true);
 renderRightSidebar(true);
 };
 
@@ -3616,14 +3683,57 @@ gmRoomScenarios={
 }
 ;
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
-await Promise.all(rooms.map(async r=>{
-try{
-const res=await api.room.scenarios(r.room_id);const data=res.ok?await res.json():null;gmRoomScenarios[r.room_id]=(data&&Array.isArray(data.scenarios))?data.scenarios:[];}
-catch(err){
-gmRoomScenarios[r.room_id]=[];}
-}
-));
+await Promise.all(rooms.map(async r=>loadRoomScenariosForRoom(r.room_id,true)));
 gmMarkStaticLoaded('roomScenarios');
+}
+
+function normalizeRoomScenarioSelection(roomId){
+if(!roomId)return;
+const scenarios=roomScenarios(roomId);
+const override=currentRoomScenarioId[roomId]||'';
+if(override&&scenarios.some(scenario=>(scenario&&scenario.id||'')===override))return;
+delete currentRoomScenarioId[roomId];
+}
+
+async function loadRoomScenariosForRoom(roomId,force){
+if(!roomId)return;
+if(!force&&gmStaticFresh('roomScenarios')&&gmRoomScenarios[roomId])return;
+try{
+const res=await api.room.scenarios(roomId);
+const data=res.ok?await res.json():null;
+gmRoomScenarios[roomId]=(data&&Array.isArray(data.scenarios))?data.scenarios:[];
+}
+catch(err){
+gmRoomScenarios[roomId]=[];
+}
+normalizeRoomScenarioSelection(roomId);
+}
+
+function roomIdForScenario(scenarioId){
+const target=String(scenarioId||'');
+if(!target)return '';
+const roomIds=Object.keys(gmRoomScenarios||{});
+for(const roomId of roomIds){
+if(roomScenarios(roomId).some(scenario=>(scenario&&scenario.id||'')===target)){
+return roomId;
+}
+}
+return '';
+}
+
+async function refreshRoomScenariosAfterMutation(roomId){
+if(!roomId){
+await loadRoomScenarios(true);
+if(isAdmin())await loadScenarioEditorCatalogs(true);
+render();
+return;
+}
+await loadRoomScenariosForRoom(roomId,true);
+if(roomById(roomId)){
+await loadGMRuntimeOnly(roomId,false);
+return;
+}
+render();
 }
 
 async function loadRoomProfiles(force){
@@ -3632,18 +3742,66 @@ gmRoomProfiles={
 }
 ;
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
-await Promise.all(rooms.map(async r=>{
-try{
-const res=await api.room.profiles(r.room_id);const data=res.ok?await res.json():null;gmRoomProfiles[r.room_id]=data&&Array.isArray(data.profiles)?data:{
-profiles:[],selected_profile_id:''}
-;}
-catch(err){
-gmRoomProfiles[r.room_id]={
-profiles:[],selected_profile_id:''}
-;}
-}
-));
+await Promise.all(rooms.map(async r=>loadRoomProfilesForRoom(r.room_id,true)));
 gmMarkStaticLoaded('roomProfiles');
+}
+
+function normalizeRoomProfilesSelection(roomId){
+if(!roomId)return;
+const data=gmRoomProfiles&&gmRoomProfiles[roomId]?gmRoomProfiles[roomId]:null;
+const profiles=data&&Array.isArray(data.profiles)?data.profiles:[];
+const selectedId=data&&data.selected_profile_id?data.selected_profile_id:'';
+if(selectedId){
+currentRoomProfileId[roomId]=selectedId;
+return;
+}
+const override=currentRoomProfileId[roomId]||'';
+if(override&&profiles.some(profile=>(profile&&profile.id||'')===override))return;
+delete currentRoomProfileId[roomId];
+}
+
+async function loadRoomProfilesForRoom(roomId,force){
+if(!roomId)return;
+if(!force&&gmStaticFresh('roomProfiles')&&gmRoomProfiles[roomId])return;
+try{
+const res=await api.room.profiles(roomId);
+const data=res.ok?await res.json():null;
+gmRoomProfiles[roomId]=data&&Array.isArray(data.profiles)?data:{
+profiles:[],selected_profile_id:''}
+;
+}
+catch(err){
+gmRoomProfiles[roomId]={
+profiles:[],selected_profile_id:''}
+;
+}
+normalizeRoomProfilesSelection(roomId);
+}
+
+function roomIdForProfile(profileId){
+const target=String(profileId||'');
+if(!target)return '';
+const roomIds=Object.keys(gmRoomProfiles||{});
+for(const roomId of roomIds){
+if(roomProfiles(roomId).some(profile=>(profile&&profile.id||'')===target)){
+return roomId;
+}
+}
+return '';
+}
+
+async function refreshRoomProfilesAfterMutation(roomId){
+if(!roomId){
+await loadRoomProfiles(true);
+render();
+return;
+}
+await loadRoomProfilesForRoom(roomId,true);
+if(roomById(roomId)){
+await loadGMRuntimeOnly(roomId,false);
+return;
+}
+render();
 }
 
 async function loadScenarioEditorCatalogs(force){
@@ -3670,8 +3828,22 @@ quest_devices:[],step_schemas:[]}
 gmMarkStaticLoaded('scenarioCatalogs');
 }
 
+async function refreshQuestDevicesAfterMutation(){
+if(!gmState){
+await loadGMFullSnapshot(true,true);
+return;
+}
+if(isAdmin()){
+await Promise.all([loadQuestDevices(true),loadScenarioEditorCatalogs(true)]);
+}
+else{
+await loadQuestDevices(true);
+}
+render();
+}
+
 async function loadGMLightStaticData(force){
-await Promise.all([loadObserved(force),loadQuestDevices(force),loadRoomScenarios(force),loadRoomProfiles(force)]);
+await Promise.all([loadObserved(force),loadQuestDevices(force)]);
 }
 
 async function loadGMViewData(force){
@@ -3689,7 +3861,43 @@ await loadGMLightStaticData(force);
 await loadGMViewData(force);
 }
 
-async function loadGM(silent,forceRender,opts){
+function mergeGMSystemSummary(data){
+if(!data||!data.summary)return false;
+if(!gmState||typeof gmState!=='object'){
+gmState={ok:true,rooms:[],devices:[],issues:[]};
+}
+gmState.ok=data.ok!==false;
+if(Object.prototype.hasOwnProperty.call(data,'generation'))gmState.generation=data.generation;
+gmState.summary=data.summary;
+return true;
+}
+
+async function loadGMSystemSummaryOnly(forceRender){
+if(!gmState){
+await loadGMFullSnapshot(true,true);
+return;
+}
+const data=await api.gm.systemSummaryJson();
+if(!mergeGMSystemSummary(data)){
+syncGMSummaryStatus();
+if(forceRender)render();
+else renderRightSidebar(true);
+return;
+}
+syncGMSummaryStatus();
+if(forceRender){
+render();
+return;
+}
+if(shouldDeferAutoRender()){
+gmAutoRenderDeferred=true;
+renderRightSidebar(true);
+return;
+}
+renderRightSidebar(true);
+}
+
+async function loadGMFullSnapshot(silent,forceRender,opts){
 opts=opts||{};
 const requestSeq=++gmSnapshotRequestSeq;
 if(!silent){
@@ -3701,11 +3909,21 @@ if(requestSeq!==gmSnapshotRequestSeq)return;
 gmState=data;
 syncRoomTimerBaselines();
 loadGMVersions().then(v=>{gmLastVersions=v;}).catch(()=>{});
-if(!opts.runtimeOnly){
-await loadGMStaticData(!silent||!!forceRender||!!opts.forceStatic);
-if(requestSeq!==gmSnapshotRequestSeq)return;
-}
 applyInitialOperatorRoute();
+const shouldRenderBeforeStatic=currentView==='dashboard'||currentView==='rooms';
+const staticLoadPromise=loadGMStaticData(!silent||!!forceRender||!!opts.forceStatic);
+if(shouldRenderBeforeStatic){
+if(silent&&!forceRender&&shouldDeferAutoRender()){
+gmAutoRenderDeferred=true;
+renderRightSidebar(false);
+}
+else{
+gmAutoRenderDeferred=false;
+render();
+}
+}
+await staticLoadPromise;
+if(requestSeq!==gmSnapshotRequestSeq)return;
 if(silent&&!forceRender&&shouldDeferAutoRender()){
 gmAutoRenderDeferred=true;
 renderRightSidebar(false);
@@ -3733,19 +3951,20 @@ const ROOM_RUNTIME_FIELDS=[
 'runtime_schema_version',
 'session_present','session_state','timer_state','timer_duration_ms','timer_remaining_ms',
 'hint_active','hint_sent_count','hint_message',
-'selected_profile_id','selected_profile_name','selected_profile_scenario_id','selected_profile_duration_ms',
+'selected_profile_id','selected_profile_name','selected_profile_scenario_id',
 'selected_scenario_id','selected_scenario_name',
 'running_scenario_id','running_scenario_name','running_scenario_generation',
-'scenario_runtime_state','scenario_current_step_index',
+'scenario_runtime_state','scenario_total_steps','scenario_done_steps','scenario_current_step_text',
 'scenario_wait_type','scenario_wait_until_ms','scenario_wait_started_at_ms',
-'scenario_wait_event_type','scenario_wait_source_id',
-'scenario_wait_events','scenario_wait_event_count',
-'scenario_wait_flags','scenario_wait_flag_count',
+'scenario_wait_summary',
+'scenario_wait_events',
+'scenario_wait_flags',
 'scenario_wait_operator_prompt','scenario_wait_operator_label',
 'scenario_wait_operator_skip_allowed','scenario_wait_operator_skip_label',
 'scenario_operator_message',
-'scenario_flags','scenario_flag_count',
-'scenario_branches','scenario_branch_count',
+'scenario_device_ids','scenario_device_count',
+'scenario_flags',
+'scenario_branches',
 'scenario_last_error',
 'asset_prepare_state','asset_audio_total','asset_audio_ready',
 'asset_audio_missing','asset_audio_bad','asset_audio_unsupported',
@@ -3767,6 +3986,45 @@ if(Object.prototype.hasOwnProperty.call(data,key))room[key]=data[key];
 });
 room._timer_synced_at_ms=performance.now();
 return true;
+}
+
+async function loadGMRoomsRuntimeOnly(roomIds,forceRender){
+const rooms=gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[];
+if(!gmState||!rooms.length){
+await loadGMFullSnapshot(true,true);
+return;
+}
+const ids=Array.from(new Set((Array.isArray(roomIds)&&roomIds.length?roomIds:rooms.map(room=>room&&room.room_id)).filter(roomId=>roomId&&roomById(roomId))));
+if(!ids.length){
+await loadGMSystemSummaryOnly(forceRender);
+return;
+}
+const results=await Promise.all(ids.map(async roomId=>{
+const requestSeq=(gmRuntimeRequestSeq[roomId]||0)+1;
+gmRuntimeRequestSeq[roomId]=requestSeq;
+const data=await api.room.runtimeJson(roomId,'summary');
+return {roomId,requestSeq,data};
+}));
+let merged=false;
+results.forEach(result=>{
+if(gmRuntimeRequestSeq[result.roomId]!==result.requestSeq)return;
+if(mergeRoomRuntimeState(result.roomId,result.data))merged=true;
+});
+if(!merged){
+await loadGMSystemSummaryOnly(forceRender);
+return;
+}
+syncGMSummaryStatus();
+if(forceRender){
+render();
+return;
+}
+if(shouldDeferAutoRender()){
+gmAutoRenderDeferred=true;
+renderRightSidebar(true);
+return;
+}
+render();
 }
 
 function updateVisibleRoomClocks(){
@@ -3805,8 +4063,16 @@ return true;
 }
 
 async function loadGMRuntimeOnly(roomId,forceFullRender){
-if(!roomId||!gmState){
-await loadGM(true,true);
+if(!roomId){
+await loadGMSystemSummaryOnly(false);
+return;
+}
+if(!gmState){
+await loadGMFullSnapshot(true,true);
+return;
+}
+if(!Array.isArray(gmState.rooms)){
+await loadGMFullSnapshot(true,true);
 return;
 }
 const requestSeq=(gmRuntimeRequestSeq[roomId]||0)+1;
@@ -3814,7 +4080,7 @@ gmRuntimeRequestSeq[roomId]=requestSeq;
 const data=await api.room.runtimeJson(roomId);
 if(gmRuntimeRequestSeq[roomId]!==requestSeq)return;
 if(!mergeRoomRuntimeState(roomId,data)){
-await loadGM(true,true);
+await loadGMSystemSummaryOnly(false);
 return;
 }
 if(!forceFullRender&&renderRoomRuntimePanel(roomId))return;
@@ -3861,15 +4127,18 @@ return;
 if(gmVersionsKey(versions)===gmVersionsKey(prev))return;
 gmLastVersions=versions;
 if(gmVersionChanged(prev,versions,['rooms'])){
-await loadGM(true,true,{forceStatic:true});
+await loadGMFullSnapshot(true,true,{forceStatic:true});
 return;
 }
 let shouldRender=false;
 let shouldPatchSidebar=false;
 if(gmVersionChanged(prev,versions,['devices','ingest'])){
-await Promise.all([loadObserved(true),loadQuestDevices(true)]);
+const deviceRefreshes=[loadObserved(true),loadQuestDevices(true)];
+if(currentView==='scenarios'&&isAdmin())deviceRefreshes.push(loadScenarioEditorCatalogs(true));
+await Promise.all(deviceRefreshes);
 shouldPatchSidebar=true;
 shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
+if(currentView==='scenarios'&&isAdmin())shouldRender=true;
 }
 if(gmVersionChanged(prev,versions,['scenarios'])){
 await loadRoomScenarios(true);
@@ -3883,10 +4152,104 @@ if(gmVersionChanged(prev,versions,['session','runtime'])){
 if(currentView==='room'&&roomTab==='control'&&currentRoomId){
 await loadGMRuntimeOnly(currentRoomId,false);
 }
-else if(!shouldRender){
-await loadGM(true,false,{runtimeOnly:true});
+else if(currentView==='dashboard'||currentView==='rooms'){
+await loadGMRoomsRuntimeOnly([],false);
 return;
 }
+else if(!shouldRender){
+await loadGMSystemSummaryOnly(false);
+return;
+}
+}
+if(shouldRender){
+if(shouldDeferAutoRender()){
+gmAutoRenderDeferred=true;
+renderRightSidebar(shouldPatchSidebar);
+}
+else{
+render();
+}
+}
+else if(shouldPatchSidebar){
+renderRightSidebar(true);
+}
+}
+
+async function refreshGMByInvalidationSlices(items){
+const values=Array.isArray(items)?items.filter(Boolean):[];
+const slices=values.map(item=>typeof item==='string'?item:String(item.slice||'')).filter(Boolean);
+const roomScenarioTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.scenarios'?(item.target_id||''):'').filter(Boolean)));
+const roomProfileTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.profiles'?(item.target_id||''):'').filter(Boolean)));
+const roomRuntimeTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.runtime'?(item.target_id||''):'').filter(Boolean)));
+if(!slices.length)return;
+if(slices.includes('full.snapshot')||slices.includes('room.catalog')){
+await loadGMFullSnapshot(true,true,{forceStatic:true});
+return;
+}
+const needsDeviceCatalog=slices.includes('devices.catalog');
+const needsDeviceRuntime=slices.includes('devices.runtime');
+const needsScenarioCatalog=slices.includes('room.scenarios');
+const needsProfileCatalog=slices.includes('room.profiles');
+const needsRoomRuntime=slices.includes('room.runtime');
+const needsSystemSummary=slices.includes('system.summary');
+let shouldRender=false;
+let shouldPatchSidebar=false;
+const localRuntimeRefreshUntil=(currentRoomId&&gmLocalRuntimeRefreshUntil[currentRoomId])||0;
+const localRuntimeRefreshActive=
+currentView==='room'&&roomTab==='control'&&currentRoomId&&Date.now()<localRuntimeRefreshUntil;
+
+if(needsDeviceCatalog){
+if(isAdmin()){
+await Promise.all([loadQuestDevices(true),loadScenarioEditorCatalogs(true)]);
+}
+else{
+await loadQuestDevices(true);
+}
+shouldPatchSidebar=true;
+shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
+}
+if(needsDeviceRuntime){
+await loadObserved(true);
+shouldPatchSidebar=true;
+shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
+}
+if(needsScenarioCatalog){
+if(roomScenarioTargets.length){
+await Promise.all(roomScenarioTargets.map(roomId=>loadRoomScenariosForRoom(roomId,true)));
+}
+else{
+await loadRoomScenarios(true);
+}
+shouldRender=shouldRender||gmCurrentViewUsesScenarioStatic();
+}
+if(needsProfileCatalog){
+if(roomProfileTargets.length){
+await Promise.all(roomProfileTargets.map(roomId=>loadRoomProfilesForRoom(roomId,true)));
+}
+else{
+await loadRoomProfiles(true);
+}
+shouldRender=shouldRender||gmCurrentViewUsesProfileStatic();
+}
+if(needsRoomRuntime||needsSystemSummary){
+const localRuntimeTargetMatches=!roomRuntimeTargets.length||
+(roomRuntimeTargets.length===1&&roomRuntimeTargets[0]===currentRoomId);
+if(localRuntimeRefreshActive&&localRuntimeTargetMatches){
+return;
+}
+if(roomRuntimeTargets.length===1&&roomRuntimeTargets[0]&&roomById(roomRuntimeTargets[0])){
+await loadGMRuntimeOnly(roomRuntimeTargets[0],false);
+}
+else if(currentView==='room'&&roomTab==='control'&&currentRoomId){
+await loadGMRuntimeOnly(currentRoomId,false);
+}
+else if(needsRoomRuntime&&(currentView==='dashboard'||currentView==='rooms')){
+await loadGMRoomsRuntimeOnly(roomRuntimeTargets,false);
+}
+else{
+await loadGMSystemSummaryOnly(false);
+}
+return;
 }
 if(shouldRender){
 if(shouldDeferAutoRender()){
@@ -3905,6 +4268,7 @@ renderRightSidebar(true);
 async function refreshAfterRuntimeAction(roomId,forceFullRender){
 clearTransientFieldDirty();
 await loadGMRuntimeOnly(roomId,forceFullRender);
+if(roomId)gmLocalRuntimeRefreshUntil[roomId]=Date.now()+400;
 }
 
 async function runManualDeviceCommand(deviceId,commandId){
@@ -3929,7 +4293,7 @@ setGMStatus('Saving room...');
 const res=await api.room.save({room_id:roomId,name});
 await gmExpectOk(res);
 clearTransientFieldDirty();
-await loadGM(true,true);
+await loadGMFullSnapshot(true,true);
 if(typeof window.__gmRefreshManualSidebar==='function'){
 await window.__gmRefreshManualSidebar();
 }
@@ -3950,7 +4314,7 @@ delete currentRoomProfileId[roomId];
 delete currentRoomScenarioId[roomId];
 roomTab='control';
 clearTransientFieldDirty();
-await loadGM(true,true);
+await loadGMFullSnapshot(true,true);
 currentView='rooms';
 render();
 setGMStatus('Room deleted','gm-ok');
@@ -4246,8 +4610,7 @@ await gmExpectOk(res);
 questDeviceEditor.device_id=device.id;
 questDeviceEditor.open=true;
 clearQuestDeviceDirty();
-await loadGM(true,true);
-if(typeof window.__gmRefreshManualSidebar==='function')await window.__gmRefreshManualSidebar();
+await refreshQuestDevicesAfterMutation();
 setGMStatus('Device saved','gm-ok');
 }
 
@@ -4263,8 +4626,7 @@ questDeviceEditor.device_id='';
 questDeviceEditor.open=false;
 }
 clearQuestDeviceDirty();
-await loadGM(true,true);
-if(typeof window.__gmRefreshManualSidebar==='function')await window.__gmRefreshManualSidebar();
+await refreshQuestDevicesAfterMutation();
 setGMStatus('Device deleted','gm-ok');
 }
 
@@ -4282,13 +4644,14 @@ if(!name||!scenarioId||!Number.isFinite(minutes)||minutes<=0)throw new Error('Fi
 const profile={
 id,name,room_id:profileEditor.room_id,scenario_id:scenarioId,duration_ms:Math.round(minutes*60000),hint_pack_id:hintPack,audio_pack_id:audioPack,enabled}
 ;
+const roomId=profile.room_id;
 setGMStatus('Saving game mode...');
 const res=await api.room.profileSave({profile});
 await gmExpectOk(res);
 profileEditor.profile_id=id;
 profileEditor.open=true;
 clearProfileDirty();
-await loadGM(true,true);
+await refreshRoomProfilesAfterMutation(roomId);
 setGMStatus('Game mode saved','gm-ok');
 }
 
@@ -4296,6 +4659,7 @@ async function deleteProfileEditor(profileId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!profileId)return;
 if(!confirmHandled&&!confirm(`Delete game mode ${profileId}?`))return;
+const roomId=profileEditor.room_id||roomIdForProfile(profileId);
 setGMStatus('Deleting game mode...');
 const res=await api.room.profileDelete(profileId);
 await gmExpectOk(res);
@@ -4304,7 +4668,7 @@ profileEditor.profile_id='';
 profileEditor.open=false;
 }
 clearProfileDirty();
-await loadGM(true,true);
+await refreshRoomProfilesAfterMutation(roomId);
 setGMStatus('Game mode deleted','gm-ok');
 }
 
@@ -4394,7 +4758,7 @@ await gmExpectOk(res);
 scenarioEditor.scenario_id=scenario.id;
 scenarioEditor.open=true;
 clearScenarioDirty();
-await loadGM(true,true);
+await refreshRoomScenariosAfterMutation(scenario.room_id);
 setGMStatus('Scenario saved','gm-ok');
 }
 
@@ -4402,6 +4766,7 @@ async function deleteScenarioEditor(scenarioId,confirmHandled){
 if(!isAdmin())throw new Error('Admin role required');
 if(!scenarioId)return;
 if(!confirmHandled&&!confirm(`Delete scenario ${scenarioId}?`))return;
+const roomId=scenarioEditor.room_id||roomIdForScenario(scenarioId);
 setGMStatus('Deleting scenario...');
 const res=await api.room.scenarioDelete(scenarioId);
 await gmExpectOk(res);
@@ -4410,7 +4775,7 @@ scenarioEditor.scenario_id='';
 scenarioEditor.open=false;
 }
 clearScenarioDirty();
-await loadGM(true,true);
+await refreshRoomScenariosAfterMutation(roomId);
 setGMStatus('Scenario deleted','gm-ok');
 }
 
@@ -4425,7 +4790,21 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+if(url==='/api/gm/devices/import'){
+await refreshQuestDevicesAfterMutation();
+}
+else if(url==='/api/gm/room/scenarios/import'){
+await loadRoomScenarios(true);
+if(isAdmin())await loadScenarioEditorCatalogs(true);
+render();
+}
+else if(url==='/api/gm/profiles/import'){
+await loadRoomProfiles(true);
+render();
+}
+else{
+await loadGMFullSnapshot(true,true);
+}
 setGMStatus(`${label} imported`,'gm-ok');
 }
 
@@ -4436,7 +4815,27 @@ if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
 clearTransientFieldDirty();
-await loadGM(true,true);
+if(url===api.storage.commandUrl('device','save')||
+   url===api.storage.commandUrl('scenario','save')||
+   url===api.storage.commandUrl('profile','save')){
+setGMStatus(`${label} done`,'gm-ok');
+return;
+}
+if(url===api.storage.commandUrl('device','load')){
+await refreshQuestDevicesAfterMutation();
+}
+else if(url===api.storage.commandUrl('scenario','load')){
+await loadRoomScenarios(true);
+if(isAdmin())await loadScenarioEditorCatalogs(true);
+render();
+}
+else if(url===api.storage.commandUrl('profile','load')){
+await loadRoomProfiles(true);
+render();
+}
+else{
+await loadGMFullSnapshot(true,true);
+}
 setGMStatus(`${label} done`,'gm-ok');
 }
 
@@ -4764,6 +5163,123 @@ content.oninput=gmMarkEditorDirtyFromEvent;
 content.onchange=gmHandleEditorChange;
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
+const GM_WS_RECONNECT_MS=3000;
+let gmWsSocket=null;
+let gmWsReconnectTimer=0;
+let gmWsFlushTimer=0;
+let gmWsVersionsIgnoreUntilMs=0;
+const gmWsPendingSlices=new Map();
+
+function gmWsUrl(){
+const proto=window.location.protocol==='https:'?'wss:':'ws:';
+return `${proto}//${window.location.host}/api/ws`;
+}
+
+function gmWsScheduleReconnect(){
+if(gmWsReconnectTimer)return;
+gmWsReconnectTimer=window.setTimeout(()=>{
+gmWsReconnectTimer=0;
+gmInitWebSocket();
+}
+,GM_WS_RECONNECT_MS);
+}
+
+function gmWsQueueInvalidation(slice){
+if(!slice||typeof slice!=='object')return;
+const key=`${slice.slice||''}:${slice.target_id||''}`;
+if(!key||key===':')return;
+gmWsPendingSlices.set(key,{slice:slice.slice||'',target_id:slice.target_id||'',scope:slice.scope||'',generation:Number(slice.generation)||0,reason:slice.reason||''});
+if(gmWsFlushTimer)return;
+gmWsFlushTimer=window.setTimeout(async()=>{
+const slices=Array.from(gmWsPendingSlices.values());
+gmWsPendingSlices.clear();
+gmWsFlushTimer=0;
+try{
+await refreshGMByInvalidationSlices(slices);
+}
+catch(err){
+setGMStatus('WS refresh failed','gm-bad');
+}
+}
+,50);
+}
+
+async function gmWsHandleVersionsChanged(payload){
+if(!payload||Date.now()<gmWsVersionsIgnoreUntilMs)return;
+await refreshGMByVersions({
+rooms:Number(payload.rooms)||0,
+devices:Number(payload.devices)||0,
+scenarios:Number(payload.scenarios)||0,
+profiles:Number(payload.profiles)||0,
+ingest:Number(payload.ingest)||0,
+session:Number(payload.session)||0,
+static_generation:Number(payload.static)||0,
+runtime_generation:Number(payload.runtime)||0
+});
+}
+
+function gmWsHandleEnvelope(message){
+if(!message||typeof message!=='object')return;
+const type=String(message.type||'');
+const payload=message.payload&&typeof message.payload==='object'?message.payload:null;
+if(type==='gm.invalidate'&&payload){
+gmWsVersionsIgnoreUntilMs=Date.now()+500;
+gmWsQueueInvalidation({
+slice:String(payload.slice||''),
+target_id:String(payload.target_id||''),
+scope:String(payload.scope||''),
+generation:Number(payload.generation)||0,
+reason:String(payload.reason||'')
+});
+return;
+}
+if(type==='gm.resync.required'&&payload){
+gmWsVersionsIgnoreUntilMs=Date.now()+500;
+refreshGMByInvalidationSlices([{slice:'full.snapshot',target_id:String(payload.target_id||''),scope:'recovery',generation:Number(payload.generation)||0,reason:String(payload.reason||'resync_required')}]).catch(()=>{
+setGMStatus('WS resync failed','gm-bad');
+});
+return;
+}
+if(type==='gm.versions.changed'&&payload){
+gmWsHandleVersionsChanged(payload).catch(()=>{});
+}
+}
+
+function gmInitWebSocket(){
+if(gmWsSocket&&(
+gmWsSocket.readyState===WebSocket.OPEN||
+gmWsSocket.readyState===WebSocket.CONNECTING
+))return;
+if(typeof WebSocket!=='function')return;
+try{
+const socket=new WebSocket(gmWsUrl());
+gmWsSocket=socket;
+socket.onopen=()=>{
+socket.send(JSON.stringify({type:'subscribe'}));
+};
+socket.onmessage=event=>{
+let message=null;
+try{
+message=JSON.parse(event&&event.data||'');
+}
+catch(err){
+return;
+}
+gmWsHandleEnvelope(message);
+};
+socket.onclose=()=>{
+if(gmWsSocket===socket)gmWsSocket=null;
+gmWsScheduleReconnect();
+};
+socket.onerror=()=>{
+try{socket.close();}catch(err){}
+};
+}
+catch(err){
+gmWsScheduleReconnect();
+}
+}
+
 function setGMStatus(text,cls){
 setStatus(text,cls==='gm-bad'?'state-fault':(cls==='gm-ok'?'state-ok':'state-unknown'));
 }
@@ -4806,7 +5322,7 @@ clearProfileDirty();
 clearScenarioDirty();
 clearQuestDeviceDirty();
 clearTransientFieldDirty();
-loadGM();
+loadGMFullSnapshot();
 }
 ;
 
@@ -4834,12 +5350,27 @@ clearTransientFieldDirty();
 }
 
 window.addEventListener('beforeunload',e=>{
+if(gmWsReconnectTimer){
+clearTimeout(gmWsReconnectTimer);
+gmWsReconnectTimer=0;
+}
+if(gmWsFlushTimer){
+clearTimeout(gmWsFlushTimer);
+gmWsFlushTimer=0;
+}
 if(!hasUnsavedEditorChanges())return;e.preventDefault();e.returnValue='';}
 );
 
 window.__sessionRolePromise=loadGMSession();
 
-window.__sessionRolePromise.then(()=>loadGM());
+window.__sessionRolePromise.then(async()=>{
+try{
+await loadGMFullSnapshot();
+}
+finally{
+gmInitWebSocket();
+}
+});
 
 function gmPollActiveRoomRuntimeVisible(){
 if(document.hidden)return;

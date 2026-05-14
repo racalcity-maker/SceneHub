@@ -28,6 +28,13 @@ typedef struct {
     bool enabled;
     bool on;
     esp_timer_handle_t pulse_timer;
+    esp_timer_handle_t effect_timer;
+    bool effect_active;
+    bool effect_on_phase;
+    uint32_t effect_on_ms;
+    uint32_t effect_off_ms;
+    uint32_t effect_remaining;
+    bool effect_final_on;
 } hardware_io_relay_t;
 
 static hardware_io_relay_t s_relays[HARDWARE_IO_RELAY_CHANNEL_COUNT] = {
@@ -68,6 +75,18 @@ static void hardware_io_relay_stop_pulse_locked(hardware_io_relay_t *relay)
     }
 }
 
+static void hardware_io_relay_stop_effect_locked(hardware_io_relay_t *relay)
+{
+    if (relay && relay->effect_timer) {
+        (void)esp_timer_stop(relay->effect_timer);
+    }
+    if (relay) {
+        relay->effect_active = false;
+        relay->effect_on_phase = false;
+        relay->effect_remaining = 0;
+    }
+}
+
 static void hardware_io_relay_pulse_timer(void *arg)
 {
     uint32_t channel = (uint32_t)(uintptr_t)arg;
@@ -75,6 +94,39 @@ static void hardware_io_relay_pulse_timer(void *arg)
         return;
     }
     (void)hardware_io_relay_write_locked((uint8_t)channel, false);
+    hardware_io_unlock();
+}
+
+static void hardware_io_relay_effect_timer(void *arg)
+{
+    uint8_t channel = (uint8_t)(uintptr_t)arg;
+    if (!hardware_io_relay_channel_valid(channel) || hardware_io_lock() != ESP_OK) {
+        return;
+    }
+    hardware_io_relay_t *relay = &s_relays[channel - 1];
+    if (!relay->effect_active) {
+        hardware_io_unlock();
+        return;
+    }
+    if (relay->effect_on_phase) {
+        (void)hardware_io_relay_write_locked(channel, false);
+        relay->effect_on_phase = false;
+        (void)esp_timer_start_once(relay->effect_timer, (uint64_t)relay->effect_off_ms * 1000ULL);
+        hardware_io_unlock();
+        return;
+    }
+    if (relay->effect_remaining > 0 && relay->effect_remaining != UINT32_MAX) {
+        relay->effect_remaining--;
+    }
+    if (relay->effect_remaining == 0) {
+        relay->effect_active = false;
+        (void)hardware_io_relay_write_locked(channel, relay->effect_final_on);
+        hardware_io_unlock();
+        return;
+    }
+    (void)hardware_io_relay_write_locked(channel, true);
+    relay->effect_on_phase = true;
+    (void)esp_timer_start_once(relay->effect_timer, (uint64_t)relay->effect_on_ms * 1000ULL);
     hardware_io_unlock();
 }
 
@@ -122,6 +174,15 @@ esp_err_t hardware_io_relay_init_locked(void)
         if (err != ESP_OK) {
             return err;
         }
+        esp_timer_create_args_t effect_args = {
+            .callback = hardware_io_relay_effect_timer,
+            .arg = (void *)(uintptr_t)(i + 1),
+            .name = "relay_blink",
+        };
+        err = esp_timer_create(&effect_args, &relay->effect_timer);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
     return ESP_OK;
 }
@@ -134,6 +195,7 @@ esp_err_t hardware_io_relay_set(uint8_t channel, bool on)
     }
     if (hardware_io_relay_channel_valid(channel)) {
         hardware_io_relay_stop_pulse_locked(&s_relays[channel - 1]);
+        hardware_io_relay_stop_effect_locked(&s_relays[channel - 1]);
     }
     err = hardware_io_relay_write_locked(channel, on);
     hardware_io_unlock();
@@ -151,6 +213,7 @@ esp_err_t hardware_io_relay_toggle(uint8_t channel)
         return ESP_ERR_TIMEOUT;
     }
     hardware_io_relay_stop_pulse_locked(&s_relays[channel - 1]);
+    hardware_io_relay_stop_effect_locked(&s_relays[channel - 1]);
     next = !s_relays[channel - 1].on;
     err = hardware_io_relay_write_locked(channel, next);
     hardware_io_unlock();
@@ -173,12 +236,52 @@ esp_err_t hardware_io_relay_pulse(uint8_t channel, uint32_t duration_ms)
         return ESP_ERR_INVALID_STATE;
     }
     hardware_io_relay_stop_pulse_locked(relay);
+    hardware_io_relay_stop_effect_locked(relay);
     err = hardware_io_relay_write_locked(channel, true);
     if (err == ESP_OK) {
         err = esp_timer_start_once(relay->pulse_timer, (uint64_t)duration_ms * 1000ULL);
         if (err != ESP_OK) {
             (void)hardware_io_relay_write_locked(channel, false);
         }
+    }
+    hardware_io_unlock();
+    return err;
+}
+
+esp_err_t hardware_io_relay_blink(uint8_t channel,
+                                  uint32_t on_ms,
+                                  uint32_t off_ms,
+                                  uint32_t count,
+                                  bool final_on)
+{
+    hardware_io_relay_t *relay = NULL;
+    esp_err_t err = ESP_OK;
+    if (!hardware_io_relay_channel_valid(channel) || on_ms == 0 || off_ms == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (hardware_io_lock() != ESP_OK) {
+        return ESP_ERR_TIMEOUT;
+    }
+    relay = &s_relays[channel - 1];
+    if (!relay->enabled || !relay->effect_timer) {
+        hardware_io_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    hardware_io_relay_stop_pulse_locked(relay);
+    hardware_io_relay_stop_effect_locked(relay);
+    relay->effect_active = true;
+    relay->effect_on_phase = true;
+    relay->effect_on_ms = on_ms;
+    relay->effect_off_ms = off_ms;
+    relay->effect_remaining = count == 0 ? UINT32_MAX : count;
+    relay->effect_final_on = final_on;
+    err = hardware_io_relay_write_locked(channel, true);
+    if (err == ESP_OK) {
+        err = esp_timer_start_once(relay->effect_timer, (uint64_t)on_ms * 1000ULL);
+    }
+    if (err != ESP_OK) {
+        relay->effect_active = false;
+        (void)hardware_io_relay_write_locked(channel, final_on);
     }
     hardware_io_unlock();
     return err;
@@ -210,6 +313,7 @@ esp_err_t hardware_io_relay_safe_off_all_locked(void)
             continue;
         }
         hardware_io_relay_stop_pulse_locked(relay);
+        hardware_io_relay_stop_effect_locked(relay);
         esp_err_t err = hardware_io_relay_write_locked((uint8_t)(i + 1), false);
         if (err != ESP_OK && first_err == ESP_OK) {
             first_err = err;
@@ -237,6 +341,7 @@ esp_err_t hardware_io_relay_get_status(hardware_io_relay_status_t *out,
             .enabled = relay->enabled,
             .active_low = relay->active_low,
             .on = relay->on,
+            .effect_active = relay->effect_active,
         };
     }
     hardware_io_unlock();

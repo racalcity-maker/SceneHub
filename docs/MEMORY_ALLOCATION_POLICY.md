@@ -51,10 +51,14 @@ Already improved:
   bridge job pool instead of allocating per incoming PUBLISH or outgoing event.
 - `mqtt_core` owns broker session tables, retained table, client RX/TX buffers,
   accept/client task stacks and the broker lock as fixed static storage.
+- `orchestrator_timeline` and `error_monitor` keep event-bus handlers
+  adapter-only and defer follow-up work through bounded fixed job staging
+  instead of dedicated per-service queues and task stacks.
 - Core runtime/service locks in GM session, command executor, hardware IO,
   service status and orchestrator registry/audit/timeline use static semaphore
   storage instead of heap-backed mutex allocation.
-- `gm_room_session_scenario_tick()` uses static PSRAM timeout event scratch.
+- `gm_room_session_runtime_process_pending_work()` uses static PSRAM timeout
+  event scratch.
 - Runtime wait setup and Reactive V2 trigger matching use static PSRAM
   `quest_device_t` scratch instead of alloc/free.
 - GM game-control paths use static PSRAM session/scenario/validation scratch
@@ -64,6 +68,15 @@ Already improved:
   session/scenario/report objects.
 - GM API room-state paths use static PSRAM session scratch protected by a
   mutex instead of per-call heap allocations.
+- `scenehub_state` invalidation coalescing and `ws_runtime` websocket envelope
+  broadcast paths are allocation-free and use bounded fixed-size payload
+  buffers.
+- `device_control_ingest` no longer allocates a transient full device snapshot
+  per MQTT message just to publish event-bus updates; it now captures a small
+  local event DTO and uses static mutex storage.
+- `device_control_ingest` handles `heartbeat/status/diag` with a bounded JSON
+  scanner, and `result/event` now use the same bounded parse path while still
+  preserving raw `data/args` JSON slices for downstream consumers.
 - Profile selection is reference-only in HTTP: it checks room/scenario linkage
   and copies the scenario name without loading or validating the full scenario.
   Audio path warmup is allowed, but it must run as a coalesced background job
@@ -159,6 +172,11 @@ Notes:
 - `orchestrator_core/registry` uses a shared static PSRAM scratch pool for
   snapshot device lists, ingest lookups, one room session, one room scenario
   and validation reports.
+- Orchestrator room-runtime asset summary uses a bounded `"file"` JSON field
+  scanner for `audio.play` command args instead of `cJSON_Parse()` per command
+  while building `/api/gm/room/runtime`.
+- GM audio-prepare warmup scans `audio.play` args with the same bounded
+  no-allocation approach instead of parsing transient cJSON documents.
 - Orchestrator room-scenario views iterate scenario storage one scenario at a
   time; they do not reserve a second full `room_scenario_t[]` catalog.
 - `ROOM_SCENARIO_MAX_SCENARIOS` is limited to 12 for the current product
@@ -225,8 +243,8 @@ Current allocation points:
 - `components/web_ui/web_ui_ota.c`
   - OTA upload chunk allocated per upload handler.
 - `components/web_ui/web_ui_gm_scenario.c`
-  - runtime JSON response still uses cJSON; acceptable short term, but it is
-    frequent.
+  - runtime response is now streamed through a bounded chunked writer backed by
+    static scratch instead of building a transient cJSON tree.
 
 Tasks:
 
@@ -241,15 +259,27 @@ Notes:
 
 - `web_ui_send_json()` still uses cJSON for most admin responses, but cJSON
   hooks are PSRAM-first and responses are sent in chunks.
+- `/api/gm/state` is intentionally still a broad/admin snapshot endpoint. It
+  reuses static registry snapshot storage, but its JSON response tree remains
+  cJSON-based because it is not the active room-control hot path.
+- Full `/api/gm/state` refresh is allowed only for bootstrap, structural
+  resync, or explicit recovery. Runtime refresh must prefer narrow endpoints
+  such as `/api/gm/room/runtime`, rooms-runtime refresh, and
+  `/api/gm/system/summary`.
 - `/api/gm/room/runtime` no longer allocates its `gm_room_session_t` snapshot
   per poll and no longer loads selected-scenario asset scratch before scenario
   start.
-- `/api/gm/room/runtime` still uses cJSON for the response contract, but the
-  response is bounded by fixed runtime limits and sent through the PSRAM-first
-  chunked JSON path.
-- The frequent runtime endpoint should be the next Web UI target: either a
-  bounded writer or a smaller stable runtime DTO that avoids large transient
-  cJSON trees.
+- `/api/gm/room/runtime` now streams its JSON contract directly from the
+  static runtime-view scratch through a bounded chunked writer, avoiding a
+  transient cJSON tree for a frequent endpoint.
+- `/api/gm/room/runtime?detail=summary` omits heavy arrays and asset-detail
+  fields for dashboard/rooms refresh, so the common multi-room polling path
+  no longer ships full branch-step runtime payloads for every room.
+- `/api/gm/room/runtime` no longer parses transient cJSON documents while
+  scanning `audio.play` file args for asset readiness.
+- The remaining frequent runtime endpoint improvement, if needed later, is a
+  smaller stable runtime DTO that further cuts payload width and lock-held send
+  time.
 
 ## P1 - Storage And Import/Export
 
@@ -306,6 +336,9 @@ Notes:
 - Snapshot build and room scenario detail views share one registry scratch pool.
   Public detail reads take the scratch lock directly because they do not go
   through the snapshot cache lock.
+- Runtime room views and websocket invalidation now avoid transient JSON parse
+  churn in their common helper paths. The remaining broad JSON work is in
+  admin/full-snapshot response building, not active room-runtime refresh.
 - The registry scratch pool intentionally keeps only one `room_scenario_t`
   scratch object. A full duplicate `room_scenario_t[ROOM_SCENARIO_MAX_SCENARIOS]`
   would reserve multiple megabytes of PSRAM before the heap is available.

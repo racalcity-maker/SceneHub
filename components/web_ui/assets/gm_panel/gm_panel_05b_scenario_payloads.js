@@ -52,6 +52,10 @@ if(command&&command.id==='play'&&key==='repeat'){
 return audioChannelValue(values)==='background'?`<label class='row-meta'><input data-step-param='${esc(key)}' type='checkbox' ${value?'checked':''} style='min-width:auto'> Repeat background track</label>`:'';
 }
 if(param.type==='checkbox')return `<label class='row-meta'><input data-step-param='${esc(key)}' type='checkbox' ${value?'checked':''} style='min-width:auto'> ${esc(label)}</label>`;
+if(key==='channel'&&command&&Array.isArray(command.channel_options)&&command.channel_options.length){
+const selected=value===undefined?command.channel_options[0].id:String(value);
+return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'>${optionList(command.channel_options,selected,'Select channel')}</select></div>`;
+}
 if(command&&command.id==='play'&&key==='channel')return renderAudioChannelParam(key,label,value);
 if(param.type==='audio_file_select')return renderAudioFileParam(key,label,value,audioChannelValue(values));
 const inputType=param.type==='number'?'number':'text';

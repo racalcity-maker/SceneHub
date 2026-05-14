@@ -19,19 +19,19 @@
 static QueueHandle_t s_evt_queue;
 static bool s_handler_registered;
 
-static void test_event_handler(const event_bus_message_t *msg)
+static void test_event_handler(const scenehub_event_t *msg)
 {
     if (!s_evt_queue || !msg) {
         return;
     }
-    event_bus_message_t copy = *msg;
+    scenehub_event_t copy = *msg;
     xQueueSend(s_evt_queue, &copy, 0);
 }
 
 esp_err_t mqtt_core_test_init_helpers(void)
 {
     if (!s_evt_queue) {
-        s_evt_queue = xQueueCreate(TEST_QUEUE_DEPTH, sizeof(event_bus_message_t));
+        s_evt_queue = xQueueCreate(TEST_QUEUE_DEPTH, sizeof(scenehub_event_t));
         if (!s_evt_queue) {
             return ESP_ERR_NO_MEM;
         }
@@ -51,7 +51,7 @@ static void flush_queue(void)
     if (!s_evt_queue) {
         return;
     }
-    event_bus_message_t msg;
+    scenehub_event_t msg;
     while (xQueueReceive(s_evt_queue, &msg, 0) == pdTRUE) {
         // drain pending messages
     }
@@ -96,10 +96,10 @@ void tearDown(void)
 
 static void test_mqtt_topic_map(void)
 {
-    const char *topic = mqtt_core_topic_for_event(EVENT_AUDIO_PLAY);
+    const char *topic = mqtt_core_topic_for_event(SCENEHUB_EVENT_AUDIO_PLAY);
     TEST_ASSERT_NOT_NULL(topic);
     TEST_ASSERT_EQUAL_STRING("audio/play", topic);
-    TEST_ASSERT_NULL(mqtt_core_topic_for_event(EVENT_FLAG_CHANGED));
+    TEST_ASSERT_NULL(mqtt_core_topic_for_event(SCENEHUB_EVENT_FLAG_CHANGED));
 }
 
 static void test_mqtt_client_stats_initial(void)
@@ -109,13 +109,13 @@ static void test_mqtt_client_stats_initial(void)
     TEST_ASSERT_EQUAL_UINT8(0, stats.total);
 }
 
-static void expect_event(event_bus_type_t type,
+static void expect_event(scenehub_event_type_t type,
                          const char *topic,
                          const char *payload)
 {
     TEST_ASSERT_NOT_NULL(topic);
     TEST_ASSERT_NOT_NULL(payload);
-    event_bus_message_t msg;
+    scenehub_event_t msg;
     TEST_ASSERT_EQUAL(pdTRUE,
                       xQueueReceive(s_evt_queue, &msg, pdMS_TO_TICKS(TEST_EVENT_WAIT_MS)));
     TEST_ASSERT_EQUAL(type, msg.type);
@@ -128,8 +128,8 @@ static void test_mqtt_inject_dispatch(void)
     const char *topic = "audio/play";
     const char *payload = "/sdcard/test.mp3";
     TEST_ASSERT_EQUAL(ESP_OK, mqtt_core_inject_message(topic, payload));
-    expect_event(EVENT_AUDIO_PLAY, topic, payload);
-    expect_event(EVENT_MQTT_MESSAGE, topic, payload);
+    expect_event(SCENEHUB_EVENT_AUDIO_PLAY, topic, payload);
+    expect_event(SCENEHUB_EVENT_MQTT_MESSAGE, topic, payload);
 }
 
 static void test_mqtt_inject_preserves_long_topic(void)
@@ -137,10 +137,10 @@ static void test_mqtt_inject_preserves_long_topic(void)
     const char *topic = "quest/room_alpha/altar_controller/events/slot_01/uid_sequence/success";
     const char *payload = "ok";
     TEST_ASSERT_TRUE(strlen(topic) > 63);
-    TEST_ASSERT_TRUE(strlen(topic) < sizeof(((event_bus_message_t *)0)->topic));
+    TEST_ASSERT_TRUE(strlen(topic) < sizeof(((scenehub_event_t *)0)->topic));
 
     TEST_ASSERT_EQUAL(ESP_OK, mqtt_core_inject_message(topic, payload));
-    expect_event(EVENT_MQTT_MESSAGE, topic, payload);
+    expect_event(SCENEHUB_EVENT_MQTT_MESSAGE, topic, payload);
 }
 
 static void test_mqtt_inject_stress(void)
@@ -154,11 +154,11 @@ static void test_mqtt_inject_stress(void)
         const char *topic = expect_typed ? typed_topic : generic_topic;
         TEST_ASSERT_EQUAL(ESP_OK, mqtt_core_inject_message(topic, payload));
         if (expect_typed) {
-            expect_event(EVENT_AUDIO_PLAY, topic, payload);
+            expect_event(SCENEHUB_EVENT_AUDIO_PLAY, topic, payload);
         }
-        expect_event(EVENT_MQTT_MESSAGE, topic, payload);
+        expect_event(SCENEHUB_EVENT_MQTT_MESSAGE, topic, payload);
     }
-    event_bus_message_t leftover;
+    scenehub_event_t leftover;
     TEST_ASSERT_EQUAL(pdFALSE,
                       xQueueReceive(s_evt_queue, &leftover, pdMS_TO_TICKS(TEST_EVENT_WAIT_MS)));
 }
@@ -201,17 +201,17 @@ static void drain_parallel_events(uint32_t total_messages, uint32_t typed_expect
     uint32_t generic_seen = 0;
     uint32_t typed_seen = 0;
     while (generic_seen < total_messages || typed_seen < typed_expected) {
-        event_bus_message_t msg;
+        scenehub_event_t msg;
         TEST_ASSERT_EQUAL(pdTRUE,
                           xQueueReceive(s_evt_queue, &msg, pdMS_TO_TICKS(TEST_EVENT_WAIT_MS)));
-        if (msg.type == EVENT_AUDIO_PLAY) {
+        if (msg.type == SCENEHUB_EVENT_AUDIO_PLAY) {
             typed_seen++;
         } else {
-            TEST_ASSERT_EQUAL(EVENT_MQTT_MESSAGE, msg.type);
+            TEST_ASSERT_EQUAL(SCENEHUB_EVENT_MQTT_MESSAGE, msg.type);
             generic_seen++;
         }
     }
-    event_bus_message_t leftover;
+    scenehub_event_t leftover;
     TEST_ASSERT_EQUAL(pdFALSE,
                       xQueueReceive(s_evt_queue, &leftover, pdMS_TO_TICKS(TEST_EVENT_WAIT_MS)));
 }

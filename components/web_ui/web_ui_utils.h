@@ -1,10 +1,13 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "esp_http_server.h"
 #include "cJSON.h"
+#include "room_scenario.h"
+#include "scenehub_control.h"
 
 typedef struct {
     esp_err_t (*resp_send)(httpd_req_t *req, const char *body, ssize_t body_len);
@@ -36,6 +39,61 @@ void web_ui_http_reset_adapter_for_test(void);
 
 esp_err_t web_ui_send_ok(httpd_req_t *req, const char *mime, const char *body);
 esp_err_t web_ui_send_json(httpd_req_t *req, cJSON *root);
+bool web_ui_scenehub_control_is_done(esp_err_t call_err, const scenehub_control_result_t *result);
+esp_err_t web_ui_send_scenehub_control_ack(httpd_req_t *req);
+esp_err_t web_ui_send_scenehub_control_error(httpd_req_t *req,
+                                             esp_err_t call_err,
+                                             const scenehub_control_result_t *result,
+                                             const char *fallback_message);
+esp_err_t web_ui_send_scenehub_control_error_json(httpd_req_t *req,
+                                                  esp_err_t call_err,
+                                                  const scenehub_control_result_t *result,
+                                                  const char *fallback_error_code,
+                                                  const char *room_id,
+                                                  const char *action_id);
+esp_err_t web_ui_send_store_operation_json(httpd_req_t *req,
+                                           const char *operation,
+                                           const char *path,
+                                           uint32_t generation);
+esp_err_t web_ui_send_import_result_json(httpd_req_t *req,
+                                         const char *operation,
+                                         const char *count_key,
+                                         int count,
+                                         uint32_t generation);
+esp_err_t web_ui_send_selection_result_json(httpd_req_t *req,
+                                            const char *scope_key,
+                                            const char *scope_value,
+                                            const char *selected_key,
+                                            const char *selected_value);
+esp_err_t web_ui_send_deleted_result_json(httpd_req_t *req,
+                                          const char *deleted_key,
+                                          const char *deleted_value,
+                                          uint32_t generation);
+esp_err_t web_ui_send_room_saved_json(httpd_req_t *req,
+                                      const char *room_id,
+                                      const char *name);
+esp_err_t web_ui_send_room_deleted_json(httpd_req_t *req,
+                                        const char *room_id,
+                                        size_t removed_rooms,
+                                        size_t removed_profiles,
+                                        size_t removed_scenarios);
+esp_err_t web_ui_send_room_action_result_json(httpd_req_t *req,
+                                              const char *room_id,
+                                              const char *action_id);
+esp_err_t web_ui_send_generation_item_json(httpd_req_t *req,
+                                           uint32_t generation,
+                                           const char *item_key,
+                                           cJSON *item);
+esp_err_t web_ui_send_device_command_result_json(httpd_req_t *req,
+                                                 const char *device_id,
+                                                 const char *device_name,
+                                                 const char *command_id,
+                                                 const char *command_label);
+esp_err_t web_ui_send_scenario_validation_result_json(httpd_req_t *req,
+                                                      const char *scenario_id,
+                                                      const room_scenario_validation_report_t *report);
+esp_err_t web_ui_add_scenario_validation_report_json(cJSON *root,
+                                                     const room_scenario_validation_report_t *report);
 void *web_ui_malloc(size_t size);
 void *web_ui_calloc(size_t count, size_t size);
 void web_ui_free(void *ptr);

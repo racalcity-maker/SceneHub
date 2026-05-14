@@ -14,7 +14,7 @@ typedef struct {
     bool in_use;
     uint64_t deadline_ms;
     char request_id[COMMAND_EXECUTOR_REQUEST_ID_MAX_LEN];
-    char source_id[ROOM_SCENARIO_EVENT_SOURCE_ID_MAX_LEN];
+    char source_id[QUEST_EVENT_SOURCE_ID_MAX_LEN];
     char command[COMMAND_EXECUTOR_COMMAND_MAX_LEN];
 } command_executor_pending_t;
 
@@ -101,12 +101,9 @@ void command_executor_cancel_request(const char *request_id)
     command_executor_clear_pending(request_id);
 }
 
-void command_executor_on_event(const event_bus_message_t *message)
+void command_executor_on_event(const scenehub_event_t *message)
 {
-    if (!message ||
-        message->type != EVENT_DEVICE_CONTROL ||
-        message->payload_type != EVENT_BUS_PAYLOAD_DEVICE_CONTROL ||
-        strcmp(message->data.device_control.source, "result") != 0) {
+    if (!scenehub_event_is_device_control_result(message)) {
         return;
     }
     if (!scenehub_command_result_is_terminal(message->payload)) {
@@ -115,7 +112,7 @@ void command_executor_on_event(const event_bus_message_t *message)
     command_executor_clear_pending(message->data.device_control.action_id);
 }
 
-size_t command_executor_poll_timeouts(event_bus_message_t *out_events, size_t max_events)
+size_t command_executor_poll_timeouts(scenehub_event_t *out_events, size_t max_events)
 {
     size_t expired_count = 0;
     uint64_t now_ms = command_executor_now_ms();
@@ -130,25 +127,40 @@ size_t command_executor_poll_timeouts(event_bus_message_t *out_events, size_t ma
         if (!s_pending[i].in_use || !ce_time_reached(now_ms, s_pending[i].deadline_ms)) {
             continue;
         }
-        event_bus_message_t *msg = &out_events[expired_count++];
-        memset(msg, 0, sizeof(*msg));
-        msg->type = EVENT_DEVICE_CONTROL;
-        msg->payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL;
-        quest_str_copy(msg->payload, sizeof(msg->payload), SCENEHUB_COMMAND_RESULT_TIMEOUT);
-        quest_str_copy(msg->data.device_control.device_id,
-                       sizeof(msg->data.device_control.device_id),
-                       s_pending[i].source_id);
-        quest_str_copy(msg->data.device_control.action_id,
-                       sizeof(msg->data.device_control.action_id),
-                       s_pending[i].request_id);
-        quest_str_copy(msg->data.device_control.source,
-                       sizeof(msg->data.device_control.source),
-                       "result");
-        msg->data.device_control.timestamp_ms = now_ms;
+        scenehub_event_t *msg = &out_events[expired_count++];
+        if (scenehub_event_make_device_control_result(msg,
+                                                      s_pending[i].source_id,
+                                                      s_pending[i].request_id,
+                                                      SCENEHUB_COMMAND_RESULT_TIMEOUT,
+                                                      now_ms) != ESP_OK) {
+            memset(msg, 0, sizeof(*msg));
+        }
         memset(&s_pending[i], 0, sizeof(s_pending[i]));
     }
     xSemaphoreGive(s_pending_lock);
     return expired_count;
+}
+
+uint64_t command_executor_next_timeout_deadline_ms(void)
+{
+    uint64_t next_deadline_ms = 0;
+
+    if (ce_pending_lock_init() != ESP_OK) {
+        return 0;
+    }
+    if (xSemaphoreTake(s_pending_lock, portMAX_DELAY) != pdTRUE) {
+        return 0;
+    }
+    for (size_t i = 0; i < COMMAND_EXECUTOR_MAX_PENDING; ++i) {
+        if (!s_pending[i].in_use || s_pending[i].deadline_ms == 0) {
+            continue;
+        }
+        if (next_deadline_ms == 0 || s_pending[i].deadline_ms < next_deadline_ms) {
+            next_deadline_ms = s_pending[i].deadline_ms;
+        }
+    }
+    xSemaphoreGive(s_pending_lock);
+    return next_deadline_ms;
 }
 
 void command_executor_reset_pending(void)

@@ -71,6 +71,11 @@ typedef struct {
     char result_error_code[DEVICE_CONTROL_INGEST_ERROR_CODE_MAX_LEN];
     char result_message[DEVICE_CONTROL_INGEST_MESSAGE_MAX_LEN];
     char result_data_json[DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN];
+    bool has_event;
+    uint64_t event_ts_ms;
+    uint64_t event_rx_ms;
+    char event_name[DEVICE_CONTROL_INGEST_COMMAND_MAX_LEN];
+    char event_args_json[DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN];
     uint32_t heartbeat_count;
     uint32_t status_count;
     uint32_t diag_count;
@@ -83,6 +88,7 @@ esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *paylo
 esp_err_t device_control_ingest_get_device(const char *device_id, device_control_ingest_device_t *out);
 size_t device_control_ingest_count(void);
 uint32_t device_control_ingest_generation(void);
+esp_err_t device_control_ingest_get_last_changed_device_id(char *out_device_id, size_t out_device_id_size);
 esp_err_t device_control_ingest_list_devices(device_control_ingest_device_t *out,
                                              size_t max_count,
                                              size_t *out_count);

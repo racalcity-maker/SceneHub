@@ -1,29 +1,12 @@
 idf_component_register(
     SRCS
-        "registry/orchestrator_registry.c"
-        "registry/orch_common.c"
-        "registry/orch_snapshot_builder.c"
-        "registry/orch_device_view.c"
-        "registry/orch_room_view.c"
-        "registry/orch_room_scenario_view.c"
-        "registry/orch_issue_builder.c"
         "audit/orchestrator_audit.c"
         "timeline/orchestrator_timeline.c"
     INCLUDE_DIRS
-        "registry/include"
         "audit/include"
         "timeline/include"
-    PRIV_INCLUDE_DIRS
-        "registry"
     REQUIRES
-        device_control_ingest
         event_bus
         esp_timer
         freertos
-        gm_core
-        quest_common
-        quest_device
-        room_scenario
-        room_catalog
-        service_status
 )

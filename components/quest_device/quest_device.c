@@ -90,8 +90,7 @@ static bool qd_device_valid(const quest_device_t *device)
         strcmp(device->id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0 ||
         strcmp(device->id, QUEST_DEVICE_SYSTEM_RELAY_ID) == 0 ||
         strcmp(device->id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0 ||
-        strcmp(device->id, QUEST_DEVICE_SYSTEM_INPUT_ID) == 0 ||
-        strcmp(device->id, QUEST_DEVICE_SYSTEM_GPIO_ID) == 0) {
+        strcmp(device->id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
         return false;
     }
     if (device->command_count > QUEST_DEVICE_MAX_COMMANDS ||
@@ -215,8 +214,7 @@ esp_err_t quest_device_delete(const char *device_id)
         strcmp(device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0 ||
         strcmp(device_id, QUEST_DEVICE_SYSTEM_RELAY_ID) == 0 ||
         strcmp(device_id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0 ||
-        strcmp(device_id, QUEST_DEVICE_SYSTEM_INPUT_ID) == 0 ||
-        strcmp(device_id, QUEST_DEVICE_SYSTEM_GPIO_ID) == 0) {
+        strcmp(device_id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
         return ESP_ERR_INVALID_ARG;
     }
     err = qd_lock();
@@ -253,12 +251,8 @@ esp_err_t quest_device_get(const char *device_id, quest_device_t *out)
         quest_device_fill_system_mosfet(out);
         return ESP_OK;
     }
-    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_INPUT_ID) == 0) {
-        quest_device_fill_system_input(out);
-        return ESP_OK;
-    }
-    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_GPIO_ID) == 0) {
-        quest_device_fill_system_gpio(out);
+    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
+        quest_device_fill_system_io(out);
         return ESP_OK;
     }
     err = qd_lock();
@@ -296,11 +290,8 @@ esp_err_t quest_device_get_command(const char *device_id,
     if (strcmp(device_id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0) {
         return quest_device_system_mosfet_command(command_id, out);
     }
-    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_INPUT_ID) == 0) {
-        return quest_device_system_input_command(command_id, out);
-    }
-    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_GPIO_ID) == 0) {
-        return quest_device_system_gpio_command(command_id, out);
+    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
+        return quest_device_system_io_command(command_id, out);
     }
     err = qd_lock();
     if (err != ESP_OK) {
@@ -343,11 +334,8 @@ esp_err_t quest_device_get_event(const char *device_id,
     if (strcmp(device_id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0) {
         return ESP_ERR_NOT_FOUND;
     }
-    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_INPUT_ID) == 0) {
-        return quest_device_system_input_event(event_id, out);
-    }
-    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_GPIO_ID) == 0) {
-        return quest_device_system_gpio_event(event_id, out);
+    if (strcmp(device_id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
+        return quest_device_system_io_event(event_id, out);
     }
     err = qd_lock();
     if (err != ESP_OK) {
@@ -407,11 +395,7 @@ esp_err_t quest_device_list(quest_device_t *out,
         }
         count++;
         if (count < max_count) {
-            quest_device_fill_system_input(&out[count]);
-        }
-        count++;
-        if (count < max_count) {
-            quest_device_fill_system_gpio(&out[count]);
+            quest_device_fill_system_io(&out[count]);
         }
         count++;
     }

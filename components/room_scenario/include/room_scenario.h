@@ -6,15 +6,16 @@
 
 #include "cJSON.h"
 #include "esp_err.h"
+#include "quest_common_limits.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define ROOM_SCENARIO_ID_MAX_LEN 32
+#define ROOM_SCENARIO_ID_MAX_LEN QUEST_SCENARIO_ID_MAX_LEN
 #define ROOM_SCENARIO_NAME_MAX_LEN 64
 #define ROOM_SCENARIO_ROOM_ID_MAX_LEN 32
-#define ROOM_SCENARIO_STEP_ID_MAX_LEN 32
+#define ROOM_SCENARIO_STEP_ID_MAX_LEN QUEST_STEP_ID_MAX_LEN
 #define ROOM_SCENARIO_STEP_LABEL_MAX_LEN 64
 #define ROOM_SCENARIO_DEVICE_ID_MAX_LEN 32
 #define ROOM_SCENARIO_DEVICE_COMMAND_ID_MAX_LEN 32
@@ -23,13 +24,13 @@ extern "C" {
 #define ROOM_SCENARIO_COMMAND_GROUP_MAX_COMMANDS 4
 #define ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS 4
 #define ROOM_SCENARIO_EVENT_TYPE_MAX_LEN 32
-#define ROOM_SCENARIO_EVENT_SOURCE_ID_MAX_LEN 32
+#define ROOM_SCENARIO_EVENT_SOURCE_ID_MAX_LEN QUEST_EVENT_SOURCE_ID_MAX_LEN
 #define ROOM_SCENARIO_OPERATOR_PROMPT_MAX_LEN 96
 #define ROOM_SCENARIO_OPERATOR_LABEL_MAX_LEN 32
 #define ROOM_SCENARIO_OPERATOR_MESSAGE_MAX_LEN 160
 #define ROOM_SCENARIO_FLAG_NAME_MAX_LEN 32
 #define ROOM_SCENARIO_WAIT_FLAGS_MAX_FLAGS 8
-#define ROOM_SCENARIO_BRANCH_ID_MAX_LEN 32
+#define ROOM_SCENARIO_BRANCH_ID_MAX_LEN QUEST_BRANCH_ID_MAX_LEN
 #define ROOM_SCENARIO_BRANCH_NAME_MAX_LEN 64
 #define ROOM_SCENARIO_MAX_BRANCHES 8
 #define ROOM_SCENARIO_MAX_STEPS 48
@@ -289,6 +290,10 @@ esp_err_t room_scenario_get_by_room_index(const char *room_id,
                                           size_t index,
                                           room_scenario_t *out,
                                           size_t *out_count);
+esp_err_t room_scenario_validate_static(const room_scenario_t *scenario,
+                                        room_scenario_validation_report_t *out);
+esp_err_t room_scenario_validate_runtime(const room_scenario_t *scenario,
+                                         room_scenario_validation_report_t *out);
 esp_err_t room_scenario_validate(const room_scenario_t *scenario,
                                  room_scenario_validation_report_t *out);
 esp_err_t room_scenario_validate_by_id(const char *scenario_id,
@@ -313,6 +318,9 @@ esp_err_t room_scenario_store_save_to_path(const char *path);
 esp_err_t room_scenario_store_load_from_path(const char *path);
 esp_err_t room_scenario_export_json(cJSON **out_root);
 esp_err_t room_scenario_import_json(const cJSON *root);
+esp_err_t room_scenario_acquire_scratch(room_scenario_t **out_scenario,
+                                        room_scenario_validation_report_t **out_report);
+void room_scenario_release_scratch(void);
 esp_err_t room_scenario_clear(void);
 uint32_t room_scenario_generation(void);
 void room_scenario_reset(void);

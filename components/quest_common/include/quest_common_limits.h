@@ -3,6 +3,10 @@
 #define QUEST_ID_MAX_LEN               32
 #define QUEST_ROOM_ID_MAX_LEN          32
 #define QUEST_NAME_MAX_LEN             48
+#define QUEST_SCENARIO_ID_MAX_LEN      32
+#define QUEST_STEP_ID_MAX_LEN          32
+#define QUEST_BRANCH_ID_MAX_LEN        32
+#define QUEST_EVENT_SOURCE_ID_MAX_LEN  32
 #define QUEST_TOPIC_MAX_LEN            96
 #define QUEST_PAYLOAD_MAX_LEN         160
 #define QUEST_FLAG_NAME_MAX_LEN        32

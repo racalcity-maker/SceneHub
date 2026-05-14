@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "esp_attr.h"
 #include "esp_timer.h"
 #include "mqtt_core.h"
 #include "quest_common_utils.h"
@@ -22,8 +21,6 @@ typedef struct {
     const char *key;
     size_t key_len;
 } mqtt_json_pair_t;
-
-static EXT_RAM_BSS_ATTR char s_mqtt_payload[COMMAND_EXECUTOR_MQTT_PAYLOAD_MAX_LEN];
 
 static const char *json_skip_ws(const char *p)
 {
@@ -320,7 +317,7 @@ static esp_err_t build_command_payload(char *out,
     return err;
 }
 
-esp_err_t command_executor_execute_mqtt(const quest_device_t *device,
+esp_err_t command_executor_execute_mqtt(const char *client_id,
                                         const quest_device_command_t *command,
                                         const command_executor_request_t *request,
                                         command_executor_dispatch_t *out_dispatch,
@@ -329,13 +326,14 @@ esp_err_t command_executor_execute_mqtt(const quest_device_t *device,
 {
     char topic[96] = {0};
     char request_id[COMMAND_EXECUTOR_REQUEST_ID_MAX_LEN] = {0};
+    char mqtt_payload[COMMAND_EXECUTOR_MQTT_PAYLOAD_MAX_LEN] = {0};
     esp_err_t err = ESP_OK;
     int64_t now_ms = esp_timer_get_time() / 1000;
 
-    if (!device || !command || !request || !device->client_id[0] || !command->command[0]) {
+    if (!client_id || !client_id[0] || !command || !request || !command->command[0]) {
         return command_executor_fail(error, error_size, ESP_ERR_INVALID_ARG, "device_command_invalid");
     }
-    if (snprintf(topic, sizeof(topic), "cp/v1/dev/%s/control/command", device->client_id) >= (int)sizeof(topic)) {
+    if (snprintf(topic, sizeof(topic), "cp/v1/dev/%s/control/command", client_id) >= (int)sizeof(topic)) {
         return command_executor_fail(error,
                                      error_size,
                                      ESP_ERR_INVALID_SIZE,
@@ -343,9 +341,8 @@ esp_err_t command_executor_execute_mqtt(const quest_device_t *device,
     }
     snprintf(request_id, sizeof(request_id), "req-%08llx", (unsigned long long)now_ms);
 
-    memset(s_mqtt_payload, 0, sizeof(s_mqtt_payload));
-    err = build_command_payload(s_mqtt_payload,
-                                sizeof(s_mqtt_payload),
+    err = build_command_payload(mqtt_payload,
+                                sizeof(mqtt_payload),
                                 request_id,
                                 command->command,
                                 command->default_args_json,
@@ -354,13 +351,13 @@ esp_err_t command_executor_execute_mqtt(const quest_device_t *device,
     if (err != ESP_OK) {
         return command_executor_fail(error, error_size, err, "device_command_args_invalid");
     }
-    err = mqtt_core_publish(topic, s_mqtt_payload);
+    err = mqtt_core_publish(topic, mqtt_payload);
     if (err != ESP_OK) {
         return command_executor_fail(error, error_size, err, "device_command_publish_failed");
     }
     if (command->result_required) {
         err = command_executor_track_pending(request_id,
-                                             device->client_id,
+                                             client_id,
                                              command->command,
                                              command->timeout_ms ? command->timeout_ms
                                                                  : QUEST_DEVICE_COMMAND_TIMEOUT_DEFAULT_MS);
@@ -374,7 +371,7 @@ esp_err_t command_executor_execute_mqtt(const quest_device_t *device,
         out_dispatch->timeout_ms = command->timeout_ms ? command->timeout_ms
                                                        : QUEST_DEVICE_COMMAND_TIMEOUT_DEFAULT_MS;
         quest_str_copy(out_dispatch->request_id, sizeof(out_dispatch->request_id), request_id);
-        quest_str_copy(out_dispatch->source_id, sizeof(out_dispatch->source_id), device->client_id);
+        quest_str_copy(out_dispatch->source_id, sizeof(out_dispatch->source_id), client_id);
         quest_str_copy(out_dispatch->command, sizeof(out_dispatch->command), command->command);
     }
     return ESP_OK;

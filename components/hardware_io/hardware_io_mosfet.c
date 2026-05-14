@@ -201,6 +201,7 @@ esp_err_t hardware_io_mosfet_set(uint8_t channel, uint8_t value)
     if (mosfet->fade_timer) {
         (void)esp_timer_stop(mosfet->fade_timer);
     }
+    hardware_io_mosfet_effect_cancel_locked(channel);
     err = hardware_io_mosfet_write_locked(channel, value);
     hardware_io_unlock();
     return err;
@@ -227,6 +228,7 @@ esp_err_t hardware_io_mosfet_fade(uint8_t channel, uint8_t target, uint32_t dura
     if (mosfet->pulse_timer) {
         (void)esp_timer_stop(mosfet->pulse_timer);
     }
+    hardware_io_mosfet_effect_cancel_locked(channel);
     (void)esp_timer_stop(mosfet->fade_timer);
     mosfet->fade_from = mosfet->value;
     mosfet->fade_target = target;
@@ -259,6 +261,7 @@ esp_err_t hardware_io_mosfet_pulse(uint8_t channel, uint8_t value, uint32_t dura
     if (mosfet->fade_timer) {
         (void)esp_timer_stop(mosfet->fade_timer);
     }
+    hardware_io_mosfet_effect_cancel_locked(channel);
     (void)esp_timer_stop(mosfet->pulse_timer);
     mosfet->pulse_restore_value = mosfet->value;
     err = hardware_io_mosfet_write_locked(channel, value);
@@ -270,6 +273,32 @@ esp_err_t hardware_io_mosfet_pulse(uint8_t channel, uint8_t value, uint32_t dura
     }
     hardware_io_unlock();
     return err;
+}
+
+esp_err_t hardware_io_mosfet_effect_write_locked(uint8_t channel, uint8_t value)
+{
+    if (!hardware_io_mosfet_channel_valid(channel)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return hardware_io_mosfet_write_locked(channel, value);
+}
+
+esp_err_t hardware_io_mosfet_stop_base_timers_locked(uint8_t channel)
+{
+    if (!hardware_io_mosfet_channel_valid(channel)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    hardware_io_mosfet_t *mosfet = &s_mosfets[channel - 1];
+    if (!mosfet->enabled) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (mosfet->pulse_timer) {
+        (void)esp_timer_stop(mosfet->pulse_timer);
+    }
+    if (mosfet->fade_timer) {
+        (void)esp_timer_stop(mosfet->fade_timer);
+    }
+    return ESP_OK;
 }
 
 esp_err_t hardware_io_mosfet_get(uint8_t channel, uint8_t *out_value)
@@ -303,6 +332,7 @@ esp_err_t hardware_io_mosfet_safe_off_all_locked(void)
         if (mosfet->fade_timer) {
             (void)esp_timer_stop(mosfet->fade_timer);
         }
+        hardware_io_mosfet_effect_cancel_locked((uint8_t)(i + 1));
         esp_err_t err = hardware_io_mosfet_write_locked((uint8_t)(i + 1), 0);
         if (err != ESP_OK && first_err == ESP_OK) {
             first_err = err;
@@ -343,6 +373,7 @@ esp_err_t hardware_io_mosfet_get_status(hardware_io_mosfet_status_t *out,
             .pwm_freq_hz = CONFIG_SCENEHUB_MOSFET_PWM_FREQ_HZ,
             .pulse_active = mosfet->pulse_timer && esp_timer_is_active(mosfet->pulse_timer),
             .fade_active = mosfet->fade_timer && esp_timer_is_active(mosfet->fade_timer),
+            .effect_active = hardware_io_mosfet_effect_active_locked((uint8_t)(i + 1)),
         };
     }
     hardware_io_unlock();

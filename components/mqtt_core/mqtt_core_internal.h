@@ -46,6 +46,8 @@ typedef struct {
 typedef struct {
     int sock;
     TaskHandle_t task;
+    SemaphoreHandle_t tx_lock;
+    StaticSemaphore_t tx_lock_buf;
     bool active;
     bool closing;
     bool suppress_will;
@@ -85,6 +87,11 @@ uint8_t *ensure_session_tx_buffer(size_t idx);
 bool ensure_accept_task_storage(void);
 int64_t now_ms(void);
 void request_session_close(mqtt_session_t *sess, const char *reason, int err);
+void request_session_close_if_current(size_t slot,
+                                      int sock,
+                                      const char *client_id,
+                                      const char *reason,
+                                      int err);
 void send_will_if_needed(mqtt_session_t *sess);
 esp_err_t mqtt_core_start_server(int port);
 
@@ -92,9 +99,9 @@ bool acl_can_publish(const char *client_id, const char *topic);
 bool acl_can_subscribe(const char *client_id, const char *topic);
 bool topic_matches_filter(const char *filter, const char *topic);
 
-const char *find_topic_by_type(event_bus_type_t type);
-event_bus_type_t find_type_by_topic(const char *topic);
-void on_event_bus_message(const event_bus_message_t *msg);
+const char *find_topic_by_type(scenehub_event_type_t type);
+scenehub_event_type_t find_type_by_topic(const char *topic);
+void on_event_bus_message(const scenehub_event_t *msg);
 
 void retain_store(const char *topic, const char *payload, uint8_t qos);
 void deliver_retain(mqtt_session_t *sess, const char *filter);
@@ -109,9 +116,23 @@ int send_all(int sock, const uint8_t *buf, size_t len);
 int read_remaining_length(int sock, int *out_rem);
 int send_connack(int sock, uint8_t rc);
 int send_suback(mqtt_session_t *sess, uint16_t pid, uint8_t *qos, size_t count);
-int send_unsuback(int sock, uint16_t pid);
-int send_puback(int sock, uint16_t pid);
-int send_pingresp(int sock);
+int send_unsuback(mqtt_session_t *sess, uint16_t pid);
+int send_puback(mqtt_session_t *sess, uint16_t pid);
+int send_pingresp(mqtt_session_t *sess);
+int send_publish_packet_to_sock(int sock,
+                                const char *topic,
+                                const char *payload,
+                                uint8_t qos,
+                                bool retain,
+                                uint16_t pid);
+int send_publish_packet_to_session_slot(size_t slot,
+                                        int sock,
+                                        const char *client_id,
+                                        const char *topic,
+                                        const char *payload,
+                                        uint8_t qos,
+                                        bool retain,
+                                        uint16_t pid);
 int send_publish_packet(mqtt_session_t *sess,
                         const char *topic,
                         const char *payload,

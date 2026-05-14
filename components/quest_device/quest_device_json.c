@@ -189,8 +189,7 @@ static bool qd_json_device_valid(const quest_device_t *device)
         strcmp(device->id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0 ||
         strcmp(device->id, QUEST_DEVICE_SYSTEM_RELAY_ID) == 0 ||
         strcmp(device->id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0 ||
-        strcmp(device->id, QUEST_DEVICE_SYSTEM_INPUT_ID) == 0 ||
-        strcmp(device->id, QUEST_DEVICE_SYSTEM_GPIO_ID) == 0) {
+        strcmp(device->id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
         return false;
     }
     if (device->command_count > QUEST_DEVICE_MAX_COMMANDS ||

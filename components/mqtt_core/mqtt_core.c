@@ -171,6 +171,38 @@ void request_session_close(mqtt_session_t *sess, const char *reason, int err)
     }
 }
 
+void request_session_close_if_current(size_t slot,
+                                      int sock,
+                                      const char *client_id,
+                                      const char *reason,
+                                      int err)
+{
+    int close_sock = -1;
+    if (!s_sessions || slot >= MQTT_MAX_CLIENTS) {
+        return;
+    }
+    lock();
+    mqtt_session_t *sess = &s_sessions[slot];
+    if (sess->active && sess->sock == sock) {
+        const char *cid = sess->client_id[0] ? sess->client_id : "<unknown>";
+        ESP_LOGW(TAG, "%s for %s (err=%d)", reason ? reason : "session closing", cid, err);
+        sess->closing = true;
+        close_sock = sess->sock;
+        sess->sock = -1;
+    } else {
+        ESP_LOGW(TAG,
+                 "%s for stale session %s (err=%d)",
+                 reason ? reason : "session close skipped",
+                 client_id && client_id[0] ? client_id : "<unknown>",
+                 err);
+    }
+    unlock();
+    if (close_sock >= 0) {
+        shutdown(close_sock, SHUT_RDWR);
+        closesocket(close_sock);
+    }
+}
+
 esp_err_t mqtt_core_init(void)
 {
     mqtt_core_bind_static_storage();
@@ -224,23 +256,20 @@ esp_err_t mqtt_core_inject_message(const char *topic, const char *payload)
         ESP_LOGW(TAG, "control ingest failed for %s: %s", topic, esp_err_to_name(ingest_err));
     }
 
-    event_bus_type_t type = find_type_by_topic(topic);
-    if (type != EVENT_NONE) {
-        event_bus_message_t typed = {
-            .type = type,
-        };
-        strncpy(typed.topic, topic, sizeof(typed.topic) - 1);
-        strncpy(typed.payload, payload, sizeof(typed.payload) - 1);
+    scenehub_event_type_t type = find_type_by_topic(topic);
+    if (type != SCENEHUB_EVENT_NONE) {
+        scenehub_event_t typed = {0};
+        if (scenehub_event_make_text(&typed, type, topic, payload) == ESP_OK) {
 #if MQTT_CORE_DEBUG
-        ESP_LOGI(TAG, "[MQTT IN] %s -> event %d", topic, type);
+            ESP_LOGI(TAG, "[MQTT IN] %s -> event %d", topic, type);
 #endif
-        event_bus_post(&typed, pdMS_TO_TICKS(100));
+            event_bus_post(&typed, pdMS_TO_TICKS(100));
+        }
     }
 
-    event_bus_message_t generic = {
-        .type = EVENT_MQTT_MESSAGE,
-    };
-    strncpy(generic.topic, topic, sizeof(generic.topic) - 1);
-    strncpy(generic.payload, payload, sizeof(generic.payload) - 1);
+    scenehub_event_t generic = {0};
+    if (scenehub_event_make_text(&generic, SCENEHUB_EVENT_MQTT_MESSAGE, topic, payload) != ESP_OK) {
+        return ESP_ERR_INVALID_ARG;
+    }
     return event_bus_post(&generic, pdMS_TO_TICKS(100));
 }

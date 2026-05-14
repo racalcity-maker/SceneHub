@@ -6,7 +6,9 @@
 #include "cJSON.h"
 #include "esp_attr.h"
 #include "orchestrator_registry.h"
+#include "quest_device.h"
 #include "room_scenario.h"
+#include "scenehub_scenario_validation.h"
 
 EXT_RAM_BSS_ATTR static orch_room_scenario_detail_t s_room_scenario_details[2];
 EXT_RAM_BSS_ATTR static room_scenario_t s_room_scenario_items[4];
@@ -567,6 +569,47 @@ static void test_room_scenario_rejects_reactive_wait_flags_without_guard(void)
     TEST_ASSERT_FALSE(report.valid);
     TEST_ASSERT_TRUE(report.issue_count >= 1);
     TEST_ASSERT_EQUAL_STRING("REACTIVE_FLAGS_NEEDS_GUARD", report.issues[0].code);
+}
+
+static void test_room_scenario_splits_static_and_runtime_validation(void)
+{
+    room_scenario_t *scenario = &s_room_scenario_work[0];
+    room_scenario_validation_report_t static_report = {0};
+    room_scenario_validation_report_t runtime_report = {0};
+    room_scenario_validation_report_t combined_report = {0};
+    room_scenario_validation_report_t environment_report = {0};
+    room_scenario_validation_report_t scenehub_report = {0};
+
+    room_scenario_test_bootstrap();
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_init());
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_clear());
+    memset(s_room_scenario_work, 0, sizeof(s_room_scenario_work));
+
+    init_scenario(scenario, "runtime_only", "room_a", "Runtime only");
+    fill_device_command_step(&scenario->steps[0], "run", "Run", "missing_device", "open");
+    scenario->step_count = 1;
+
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_validate_static(scenario, &static_report));
+    TEST_ASSERT_TRUE(static_report.valid);
+    TEST_ASSERT_EQUAL_UINT32(0, static_report.issue_count);
+
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_validate_runtime(scenario, &runtime_report));
+    TEST_ASSERT_TRUE(runtime_report.valid);
+    TEST_ASSERT_EQUAL_UINT32(0, runtime_report.issue_count);
+
+    TEST_ASSERT_EQUAL(ESP_OK, room_scenario_validate(scenario, &combined_report));
+    TEST_ASSERT_TRUE(combined_report.valid);
+    TEST_ASSERT_EQUAL_UINT32(0, combined_report.issue_count);
+
+    TEST_ASSERT_EQUAL(ESP_OK, scenehub_scenario_validate_environment(scenario, &environment_report));
+    TEST_ASSERT_FALSE(environment_report.valid);
+    TEST_ASSERT_TRUE(environment_report.issue_count >= 1);
+    TEST_ASSERT_EQUAL_STRING("QUEST_DEVICE_NOT_FOUND", environment_report.issues[0].code);
+
+    TEST_ASSERT_EQUAL(ESP_OK, scenehub_scenario_validate(scenario, &scenehub_report));
+    TEST_ASSERT_FALSE(scenehub_report.valid);
+    TEST_ASSERT_TRUE(scenehub_report.issue_count >= 1);
+    TEST_ASSERT_EQUAL_STRING("QUEST_DEVICE_NOT_FOUND", scenehub_report.issues[0].code);
 }
 
 static void test_room_scenario_validation_code_buffer_fits_long_codes(void)
@@ -1213,6 +1256,7 @@ void register_room_scenario_tests(void)
     RUN_TEST(test_room_scenario_rejects_reactive_branch_without_trigger_step);
     RUN_TEST(test_room_scenario_rejects_reactive_branch_disabled_first_non_trigger_step);
     RUN_TEST(test_room_scenario_rejects_reactive_wait_flags_without_guard);
+    RUN_TEST(test_room_scenario_splits_static_and_runtime_validation);
     RUN_TEST(test_room_scenario_validation_code_buffer_fits_long_codes);
     RUN_TEST(test_room_scenario_removed_raw_wait_event_type_is_rejected);
     RUN_TEST(test_room_scenario_single_json_round_trip);

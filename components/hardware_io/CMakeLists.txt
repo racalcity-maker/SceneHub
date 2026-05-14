@@ -3,8 +3,11 @@ idf_component_register(
         "hardware_io.c"
         "hardware_io_relay.c"
         "hardware_io_mosfet.c"
-        "hardware_io_input.c"
-        "hardware_io_gpio.c"
+        "hardware_io_mosfet_effects.c"
+        "hardware_io_io.c"
+        "hardware_io_io_runtime.c"
     INCLUDE_DIRS "include"
+    PRIV_INCLUDE_DIRS "."
     REQUIRES driver esp_timer event_bus freertos
+    PRIV_REQUIRES quest_device
 )

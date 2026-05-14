@@ -1,41 +1,58 @@
-#include "device_control_ingest.h"
+#include "device_control_ingest_internal.h"
 
 #include <string.h>
 
-#include "cJSON.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 
 #include "quest_common_utils.h"
-#include "scenehub_command_result.h"
-#include "event_bus.h"
-
-typedef struct {
-    bool in_use;
-    device_control_ingest_device_t state;
-} dci_slot_t;
 
 static const char *TAG = "control_ingest";
-static dci_slot_t *s_slots = NULL;
-static SemaphoreHandle_t s_lock = NULL;
-static uint32_t s_generation = 0;
+dci_slot_t **dci_s_slots = NULL;
+SemaphoreHandle_t dci_s_lock = NULL;
+StaticSemaphore_t dci_s_lock_storage;
+portMUX_TYPE dci_s_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
+uint32_t dci_s_generation = 0;
+char dci_s_last_changed_device_id[QUEST_ID_MAX_LEN] = {0};
 
-static uint64_t dci_now_ms(void)
+static dci_slot_t *dci_alloc_slot_storage(void)
 {
-    return (uint64_t)(esp_timer_get_time() / 1000);
+    dci_slot_t *slot = heap_caps_calloc(1, sizeof(*slot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!slot) {
+        slot = heap_caps_calloc(1, sizeof(*slot), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    return slot;
 }
 
-static device_control_ingest_device_t *dci_alloc_snapshot(void)
+static void dci_free_all_slot_storage(void)
 {
-    device_control_ingest_device_t *snapshot =
-        heap_caps_calloc(1, sizeof(*snapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!snapshot) {
-        snapshot = heap_caps_calloc(1, sizeof(*snapshot), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!dci_s_slots) {
+        return;
     }
-    return snapshot;
+    for (size_t i = 0; i < DEVICE_CONTROL_INGEST_MAX_DEVICES; ++i) {
+        if (dci_s_slots[i]) {
+            heap_caps_free(dci_s_slots[i]);
+            dci_s_slots[i] = NULL;
+        }
+    }
+}
+
+static esp_err_t dci_alloc_all_slot_storage(void)
+{
+    for (size_t i = 0; i < DEVICE_CONTROL_INGEST_MAX_DEVICES; ++i) {
+        dci_s_slots[i] = dci_alloc_slot_storage();
+        if (!dci_s_slots[i]) {
+            dci_free_all_slot_storage();
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return ESP_OK;
+}
+
+uint64_t dci_now_ms(void)
+{
+    return (uint64_t)(esp_timer_get_time() / 1000);
 }
 
 static bool dci_streq(const char *lhs, const char *rhs)
@@ -107,168 +124,14 @@ static bool dci_parse_topic(const char *topic,
     return false;
 }
 
-static void dci_post_status_event(const device_control_ingest_device_t *state)
+dci_slot_t *dci_find_slot_locked(const char *device_id)
 {
-    if (!state || !state->device_id[0]) {
-        return;
-    }
-
-    event_bus_message_t msg = {
-        .type = EVENT_DEVICE_STATUS,
-        .payload_type = EVENT_BUS_PAYLOAD_DEVICE_STATUS,
-    };
-    quest_str_copy(msg.payload, sizeof(msg.payload), state->status_state);
-    quest_str_copy(msg.data.device_status.device_id,
-                sizeof(msg.data.device_status.device_id),
-                state->device_id);
-    quest_str_copy(msg.data.device_status.connectivity,
-                sizeof(msg.data.device_status.connectivity),
-                "online");
-    quest_str_copy(msg.data.device_status.health,
-                sizeof(msg.data.device_status.health),
-                state->status_health[0] ? state->status_health : "unknown");
-    quest_str_copy(msg.data.device_status.state,
-                sizeof(msg.data.device_status.state),
-                state->status_state[0] ? state->status_state : "unknown");
-    msg.data.device_status.timestamp_ms = state->last_seen_ms;
-    (void)event_bus_post_priority(&msg, EVENT_BUS_PRIORITY_HIGH, 0);
-}
-
-static void dci_post_runtime_event(const device_control_ingest_device_t *state)
-{
-    if (!state || !state->device_id[0] || !state->has_status) {
-        return;
-    }
-
-    event_bus_message_t msg = {
-        .type = EVENT_DEVICE_RUNTIME,
-        .payload_type = EVENT_BUS_PAYLOAD_DEVICE_RUNTIME,
-    };
-    quest_str_copy(msg.payload, sizeof(msg.payload), state->status_state);
-    quest_str_copy(msg.data.device_runtime.device_id,
-                sizeof(msg.data.device_runtime.device_id),
-                state->device_id);
-    quest_str_copy(msg.data.device_runtime.runtime_type,
-                sizeof(msg.data.device_runtime.runtime_type),
-                "control_status");
-    quest_str_copy(msg.data.device_runtime.state,
-                sizeof(msg.data.device_runtime.state),
-                state->status_state[0] ? state->status_state : "unknown");
-    msg.data.device_runtime.active = state->status_runtime_active;
-    msg.data.device_runtime.timestamp_ms = state->last_seen_ms;
-    (void)event_bus_post(&msg, 0);
-}
-
-static void dci_post_control_event(const device_control_ingest_device_t *state)
-{
-    if (!state || !state->device_id[0] || !state->has_result) {
-        return;
-    }
-
-    event_bus_message_t msg = {
-        .type = EVENT_DEVICE_CONTROL,
-        .payload_type = EVENT_BUS_PAYLOAD_DEVICE_CONTROL,
-    };
-    quest_str_copy(msg.payload, sizeof(msg.payload), state->result_status);
-    quest_str_copy(msg.data.device_control.device_id,
-                sizeof(msg.data.device_control.device_id),
-                state->device_id);
-    quest_str_copy(msg.data.device_control.action_id,
-                sizeof(msg.data.device_control.action_id),
-                state->result_request_id[0] ? state->result_request_id : state->result_command);
-    quest_str_copy(msg.data.device_control.source,
-                sizeof(msg.data.device_control.source),
-                strcmp(state->result_status, "event") == 0 ? "event" : "result");
-    msg.data.device_control.timestamp_ms = state->last_seen_ms;
-    (void)event_bus_post_priority(&msg, EVENT_BUS_PRIORITY_HIGH, 0);
-}
-
-static uint64_t dci_json_u64(const cJSON *obj, const char *key, uint64_t fallback)
-{
-    const cJSON *item = NULL;
-    if (!obj || !key) {
-        return fallback;
-    }
-    item = cJSON_GetObjectItemCaseSensitive(obj, key);
-    if (!item || !cJSON_IsNumber(item) || item->valuedouble < 0.0) {
-        return fallback;
-    }
-    return (uint64_t)item->valuedouble;
-}
-
-static uint32_t dci_json_u32(const cJSON *obj, const char *key, uint32_t fallback)
-{
-    uint64_t value = dci_json_u64(obj, key, fallback);
-    if (value > UINT32_MAX) {
-        return fallback;
-    }
-    return (uint32_t)value;
-}
-
-static bool dci_json_bool(const cJSON *obj, const char *key, bool fallback)
-{
-    const cJSON *item = NULL;
-    if (!obj || !key) {
-        return fallback;
-    }
-    item = cJSON_GetObjectItemCaseSensitive(obj, key);
-    if (!item || (!cJSON_IsBool(item) && !cJSON_IsNumber(item))) {
-        return fallback;
-    }
-    if (cJSON_IsBool(item)) {
-        return cJSON_IsTrue(item);
-    }
-    return item->valueint != 0;
-}
-
-static void dci_json_copy(const cJSON *obj, const char *key, char *dst, size_t dst_size)
-{
-    const cJSON *item = NULL;
-    if (!obj || !key || !dst || dst_size == 0) {
-        return;
-    }
-    item = cJSON_GetObjectItemCaseSensitive(obj, key);
-    if (!item || !cJSON_IsString(item) || !item->valuestring) {
-        return;
-    }
-    quest_str_copy(dst, dst_size, item->valuestring);
-}
-
-static void dci_json_copy_result_error(const cJSON *root,
-                                       char *code,
-                                       size_t code_size,
-                                       char *message,
-                                       size_t message_size)
-{
-    const cJSON *error = NULL;
-    if (!root) {
-        return;
-    }
-    dci_json_copy(root, "error_code", code, code_size);
-    dci_json_copy(root, "message", message, message_size);
-    if (code && code[0] && message && message[0]) {
-        return;
-    }
-    error = cJSON_GetObjectItemCaseSensitive(root, "error");
-    if (!cJSON_IsObject(error)) {
-        return;
-    }
-    if (code && !code[0]) {
-        dci_json_copy(error, "code", code, code_size);
-    }
-    if (message && !message[0]) {
-        dci_json_copy(error, "message", message, message_size);
-    }
-}
-
-static dci_slot_t *dci_find_slot_locked(const char *device_id)
-{
-    if (!s_slots || !device_id || !device_id[0]) {
+    if (!dci_s_slots || !device_id || !device_id[0]) {
         return NULL;
     }
     for (size_t i = 0; i < DEVICE_CONTROL_INGEST_MAX_DEVICES; ++i) {
-        dci_slot_t *slot = &s_slots[i];
-        if (!slot->in_use) {
+        dci_slot_t *slot = dci_s_slots[i];
+        if (!slot || !slot->in_use) {
             continue;
         }
         if (strcmp(slot->state.device_id, device_id) == 0) {
@@ -278,16 +141,19 @@ static dci_slot_t *dci_find_slot_locked(const char *device_id)
     return NULL;
 }
 
-static dci_slot_t *dci_alloc_slot_locked(const char *device_id)
+dci_slot_t *dci_alloc_slot_locked(const char *device_id)
 {
     dci_slot_t *free_slot = NULL;
     dci_slot_t *oldest_slot = NULL;
-    if (!s_slots || !device_id || !device_id[0]) {
+    if (!dci_s_slots || !device_id || !device_id[0]) {
         return NULL;
     }
 
     for (size_t i = 0; i < DEVICE_CONTROL_INGEST_MAX_DEVICES; ++i) {
-        dci_slot_t *slot = &s_slots[i];
+        dci_slot_t *slot = dci_s_slots[i];
+        if (!slot) {
+            return NULL;
+        }
         if (!slot->in_use) {
             if (!free_slot) {
                 free_slot = slot;
@@ -317,159 +183,35 @@ static dci_slot_t *dci_alloc_slot_locked(const char *device_id)
     return free_slot;
 }
 
-static esp_err_t dci_apply_heartbeat_locked(dci_slot_t *slot, const cJSON *root, uint64_t rx_ms)
-{
-    if (!slot || !root) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    slot->state.has_heartbeat = true;
-    slot->state.heartbeat_ts_ms = dci_json_u64(root, "ts_ms", slot->state.heartbeat_ts_ms);
-    slot->state.heartbeat_rx_ms = rx_ms;
-    slot->state.heartbeat_uptime_ms = dci_json_u64(root, "uptime_ms", slot->state.heartbeat_uptime_ms);
-    slot->state.heartbeat_status_seq = dci_json_u32(root, "status_seq", slot->state.heartbeat_status_seq);
-    dci_json_copy(root, "boot_id", slot->state.heartbeat_boot_id, sizeof(slot->state.heartbeat_boot_id));
-    slot->state.heartbeat_count++;
-    return ESP_OK;
-}
-
-static esp_err_t dci_apply_status_locked(dci_slot_t *slot, const cJSON *root, uint64_t rx_ms)
-{
-    const cJSON *runtime = NULL;
-    if (!slot || !root) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    slot->state.has_status = true;
-    slot->state.status_ts_ms = dci_json_u64(root, "ts_ms", slot->state.status_ts_ms);
-    slot->state.status_rx_ms = rx_ms;
-    dci_json_copy(root, "boot_id", slot->state.status_boot_id, sizeof(slot->state.status_boot_id));
-    dci_json_copy(root, "fw_version", slot->state.status_fw_version, sizeof(slot->state.status_fw_version));
-    dci_json_copy(root, "mode", slot->state.status_mode, sizeof(slot->state.status_mode));
-    dci_json_copy(root, "state", slot->state.status_state, sizeof(slot->state.status_state));
-    dci_json_copy(root, "health", slot->state.status_health, sizeof(slot->state.status_health));
-
-    runtime = cJSON_GetObjectItemCaseSensitive(root, "runtime");
-    if (runtime && cJSON_IsObject(runtime)) {
-        slot->state.status_runtime_active = dci_json_bool(runtime,
-                                                          "active",
-                                                          slot->state.status_runtime_active);
-    } else {
-        slot->state.status_runtime_active = dci_json_bool(root,
-                                                          "runtime_active",
-                                                          slot->state.status_runtime_active);
-    }
-    slot->state.status_count++;
-    return ESP_OK;
-}
-
-static esp_err_t dci_apply_diag_locked(dci_slot_t *slot, const cJSON *root, uint64_t rx_ms)
-{
-    if (!slot || !root) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    slot->state.has_diag = true;
-    slot->state.diag_ts_ms = dci_json_u64(root, "ts_ms", slot->state.diag_ts_ms);
-    slot->state.diag_rx_ms = rx_ms;
-    dci_json_copy(root, "level", slot->state.diag_level, sizeof(slot->state.diag_level));
-    dci_json_copy(root, "code", slot->state.diag_code, sizeof(slot->state.diag_code));
-    dci_json_copy(root, "message", slot->state.diag_message, sizeof(slot->state.diag_message));
-    slot->state.diag_count++;
-    return ESP_OK;
-}
-
-static esp_err_t dci_apply_result_locked(dci_slot_t *slot, const cJSON *root, uint64_t rx_ms)
-{
-    char status[DEVICE_CONTROL_INGEST_RESULT_STATUS_MAX_LEN] = {0};
-    if (!slot || !root) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    slot->state.has_result = true;
-    slot->state.result_ts_ms = dci_json_u64(root, "ts_ms", slot->state.result_ts_ms);
-    slot->state.result_rx_ms = rx_ms;
-    dci_json_copy(root,
-                  "request_id",
-                  slot->state.result_request_id,
-                  sizeof(slot->state.result_request_id));
-    dci_json_copy(root,
-                  "command",
-                  slot->state.result_command,
-                  sizeof(slot->state.result_command));
-    dci_json_copy(root, "status", status, sizeof(status));
-    quest_str_copy(slot->state.result_status,
-                   sizeof(slot->state.result_status),
-                   scenehub_command_result_normalize(status));
-    dci_json_copy_result_error(root,
-                               slot->state.result_error_code,
-                               sizeof(slot->state.result_error_code),
-                               slot->state.result_message,
-                               sizeof(slot->state.result_message));
-    slot->state.result_data_json[0] = '\0';
-    const cJSON *data = cJSON_GetObjectItem(root, "data");
-    if (data) {
-        char *printed = cJSON_PrintUnformatted(data);
-        if (printed) {
-            quest_str_copy(slot->state.result_data_json,
-                        sizeof(slot->state.result_data_json),
-                        printed);
-            cJSON_free(printed);
-        }
-    }
-    slot->state.result_count++;
-    return ESP_OK;
-}
-
-static esp_err_t dci_apply_event_locked(dci_slot_t *slot, const cJSON *root, uint64_t rx_ms)
-{
-    if (!slot || !root) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    slot->state.has_result = true;
-    slot->state.result_ts_ms = dci_json_u64(root, "ts_ms", slot->state.result_ts_ms);
-    slot->state.result_rx_ms = rx_ms;
-    dci_json_copy(root,
-                  "event",
-                  slot->state.result_command,
-                  sizeof(slot->state.result_command));
-    if (!slot->state.result_command[0]) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    slot->state.result_request_id[0] = '\0';
-    quest_str_copy(slot->state.result_status, sizeof(slot->state.result_status), "event");
-    slot->state.result_error_code[0] = '\0';
-    slot->state.result_message[0] = '\0';
-    slot->state.result_data_json[0] = '\0';
-    const cJSON *args = cJSON_GetObjectItem(root, "args");
-    if (args) {
-        char *printed = cJSON_PrintUnformatted(args);
-        if (printed) {
-            quest_str_copy(slot->state.result_data_json,
-                        sizeof(slot->state.result_data_json),
-                        printed);
-            cJSON_free(printed);
-        }
-    }
-    slot->state.result_count++;
-    return ESP_OK;
-}
-
 esp_err_t device_control_ingest_init(void)
 {
-    if (!s_lock) {
-        s_lock = xSemaphoreCreateMutex();
-        if (!s_lock) {
+    if (!dci_s_lock) {
+        portENTER_CRITICAL(&dci_s_lock_init_lock);
+        if (!dci_s_lock) {
+            dci_s_lock = xSemaphoreCreateMutexStatic(&dci_s_lock_storage);
+        }
+        portEXIT_CRITICAL(&dci_s_lock_init_lock);
+        if (!dci_s_lock) {
             return ESP_ERR_NO_MEM;
         }
     }
-    if (!s_slots) {
-        s_slots = heap_caps_calloc(DEVICE_CONTROL_INGEST_MAX_DEVICES,
-                                   sizeof(dci_slot_t),
-                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_slots) {
-            s_slots = heap_caps_calloc(DEVICE_CONTROL_INGEST_MAX_DEVICES,
-                                       sizeof(dci_slot_t),
-                                       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!dci_s_slots) {
+        dci_s_slots = heap_caps_calloc(DEVICE_CONTROL_INGEST_MAX_DEVICES,
+                                       sizeof(*dci_s_slots),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!dci_s_slots) {
+            dci_s_slots = heap_caps_calloc(DEVICE_CONTROL_INGEST_MAX_DEVICES,
+                                           sizeof(*dci_s_slots),
+                                           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         }
-        if (!s_slots) {
+        if (!dci_s_slots) {
             return ESP_ERR_NO_MEM;
+        }
+        esp_err_t slots_err = dci_alloc_all_slot_storage();
+        if (slots_err != ESP_OK) {
+            heap_caps_free(dci_s_slots);
+            dci_s_slots = NULL;
+            return slots_err;
         }
     }
     return ESP_OK;
@@ -477,15 +219,21 @@ esp_err_t device_control_ingest_init(void)
 
 esp_err_t device_control_ingest_reset(void)
 {
-    if (!s_lock || !s_slots) {
+    if (!dci_s_lock || !dci_s_slots) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
-    memset(s_slots, 0, DEVICE_CONTROL_INGEST_MAX_DEVICES * sizeof(dci_slot_t));
-    s_generation++;
-    xSemaphoreGive(s_lock);
+    for (size_t i = 0; i < DEVICE_CONTROL_INGEST_MAX_DEVICES; ++i) {
+        if (!dci_s_slots[i]) {
+            continue;
+        }
+        memset(dci_s_slots[i], 0, sizeof(*dci_s_slots[i]));
+    }
+    dci_s_last_changed_device_id[0] = '\0';
+    dci_s_generation++;
+    xSemaphoreGive(dci_s_lock);
     return ESP_OK;
 }
 
@@ -493,47 +241,28 @@ esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *paylo
 {
     char device_id[QUEST_ID_MAX_LEN] = {0};
     device_control_topic_t kind = DEVICE_CONTROL_TOPIC_UNKNOWN;
-    cJSON *root = NULL;
     dci_slot_t *slot = NULL;
-    device_control_ingest_device_t *snapshot = NULL;
+    dci_event_snapshot_t snapshot = {0};
     uint64_t now_ms = dci_now_ms();
     esp_err_t err = ESP_OK;
 
     if (!topic || !payload) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!s_lock || !s_slots) {
+    if (!dci_s_lock || !dci_s_slots) {
         return ESP_ERR_INVALID_STATE;
     }
     if (!dci_parse_topic(topic, device_id, sizeof(device_id), &kind) ||
         kind == DEVICE_CONTROL_TOPIC_UNKNOWN) {
         return ESP_ERR_NOT_FOUND;
     }
-    snapshot = dci_alloc_snapshot();
-    if (!snapshot) {
-        return ESP_ERR_NO_MEM;
-    }
 
-    root = cJSON_Parse(payload);
-    if (!root || !cJSON_IsObject(root)) {
-        if (root) {
-            cJSON_Delete(root);
-        }
-        ESP_LOGW(TAG, "invalid JSON for topic %s", topic);
-        heap_caps_free(snapshot);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
-        cJSON_Delete(root);
-        heap_caps_free(snapshot);
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     slot = dci_alloc_slot_locked(device_id);
     if (!slot) {
-        xSemaphoreGive(s_lock);
-        cJSON_Delete(root);
-        heap_caps_free(snapshot);
+        xSemaphoreGive(dci_s_lock);
         return ESP_ERR_NO_MEM;
     }
 
@@ -541,19 +270,19 @@ esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *paylo
     slot->state.last_contract_rx_ms = now_ms;
     switch (kind) {
     case DEVICE_CONTROL_TOPIC_HEARTBEAT:
-        err = dci_apply_heartbeat_locked(slot, root, now_ms);
+        err = dci_apply_heartbeat_text_locked(slot, payload, now_ms);
         break;
     case DEVICE_CONTROL_TOPIC_STATUS:
-        err = dci_apply_status_locked(slot, root, now_ms);
+        err = dci_apply_status_text_locked(slot, payload, now_ms);
         break;
     case DEVICE_CONTROL_TOPIC_DIAG:
-        err = dci_apply_diag_locked(slot, root, now_ms);
+        err = dci_apply_diag_text_locked(slot, payload, now_ms);
         break;
     case DEVICE_CONTROL_TOPIC_RESULT:
-        err = dci_apply_result_locked(slot, root, now_ms);
+        err = dci_apply_result_text_locked(slot, payload, now_ms);
         break;
     case DEVICE_CONTROL_TOPIC_EVENT:
-        err = dci_apply_event_locked(slot, root, now_ms);
+        err = dci_apply_event_text_locked(slot, payload, now_ms);
         break;
     case DEVICE_CONTROL_TOPIC_UNKNOWN:
     default:
@@ -561,24 +290,28 @@ esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *paylo
         break;
     }
     if (err == ESP_OK) {
-        *snapshot = slot->state;
+        dci_capture_event_snapshot(&slot->state, &snapshot);
+        quest_str_copy(dci_s_last_changed_device_id,
+                       sizeof(dci_s_last_changed_device_id),
+                       device_id);
     }
-    xSemaphoreGive(s_lock);
-    cJSON_Delete(root);
+    xSemaphoreGive(dci_s_lock);
+    if (err == ESP_ERR_INVALID_ARG) {
+        ESP_LOGW(TAG, "invalid payload for topic %s", topic);
+    }
     if (err == ESP_OK) {
-        s_generation++;
+        dci_s_generation++;
         if (kind == DEVICE_CONTROL_TOPIC_HEARTBEAT || kind == DEVICE_CONTROL_TOPIC_STATUS ||
             kind == DEVICE_CONTROL_TOPIC_DIAG) {
-            dci_post_status_event(snapshot);
+            dci_post_status_event(&snapshot);
         }
         if (kind == DEVICE_CONTROL_TOPIC_STATUS) {
-            dci_post_runtime_event(snapshot);
+            dci_post_runtime_event(&snapshot);
         }
         if (kind == DEVICE_CONTROL_TOPIC_RESULT || kind == DEVICE_CONTROL_TOPIC_EVENT) {
-            dci_post_control_event(snapshot);
+            dci_post_control_event(&snapshot);
         }
     }
-    heap_caps_free(snapshot);
     return err;
 }
 
@@ -588,52 +321,69 @@ esp_err_t device_control_ingest_get_device(const char *device_id, device_control
     if (!device_id || !device_id[0] || !out) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!s_lock || !s_slots) {
+    if (!dci_s_lock || !dci_s_slots) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     slot = dci_find_slot_locked(device_id);
     if (!slot) {
-        xSemaphoreGive(s_lock);
+        xSemaphoreGive(dci_s_lock);
         return ESP_ERR_NOT_FOUND;
     }
     *out = slot->state;
-    xSemaphoreGive(s_lock);
+    xSemaphoreGive(dci_s_lock);
     return ESP_OK;
 }
 
 size_t device_control_ingest_count(void)
 {
     size_t count = 0;
-    if (!s_lock || !s_slots) {
+    if (!dci_s_lock || !dci_s_slots) {
         return 0;
     }
-    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
         return 0;
     }
     for (size_t i = 0; i < DEVICE_CONTROL_INGEST_MAX_DEVICES; ++i) {
-        if (s_slots[i].in_use) {
+        if (dci_s_slots[i] && dci_s_slots[i]->in_use) {
             count++;
         }
     }
-    xSemaphoreGive(s_lock);
+    xSemaphoreGive(dci_s_lock);
     return count;
 }
 
 uint32_t device_control_ingest_generation(void)
 {
     uint32_t generation = 0;
-    if (!s_lock || !s_slots) {
+    if (!dci_s_lock || !dci_s_slots) {
         return 0;
     }
-    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
         return 0;
     }
-    generation = s_generation;
-    xSemaphoreGive(s_lock);
+    generation = dci_s_generation;
+    xSemaphoreGive(dci_s_lock);
     return generation;
+}
+
+esp_err_t device_control_ingest_get_last_changed_device_id(char *out_device_id, size_t out_device_id_size)
+{
+    if (!out_device_id || out_device_id_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    out_device_id[0] = '\0';
+    if (!dci_s_lock || !dci_s_slots) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    quest_str_copy(out_device_id, out_device_id_size, dci_s_last_changed_device_id);
+    xSemaphoreGive(dci_s_lock);
+    return out_device_id[0] ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t device_control_ingest_list_devices(device_control_ingest_device_t *out,
@@ -648,22 +398,23 @@ esp_err_t device_control_ingest_list_devices(device_control_ingest_device_t *out
     if (max_count > 0 && !out) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!s_lock || !s_slots) {
+    if (!dci_s_lock || !dci_s_slots) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     for (size_t i = 0; i < DEVICE_CONTROL_INGEST_MAX_DEVICES; ++i) {
-        if (!s_slots[i].in_use) {
+        dci_slot_t *slot = dci_s_slots[i];
+        if (!slot || !slot->in_use) {
             continue;
         }
         if (count < max_count) {
-            out[count] = s_slots[i].state;
+            out[count] = slot->state;
         }
         count++;
     }
-    xSemaphoreGive(s_lock);
+    xSemaphoreGive(dci_s_lock);
     *out_count = count;
     return (count > max_count) ? ESP_ERR_INVALID_SIZE : ESP_OK;
 }

@@ -17,6 +17,7 @@
 #include "web_ui_devices.h"
 #include "orchestrator_registry.h"
 #include "orchestrator_timeline.h"
+#include "ws_runtime.h"
 
 static const char *TAG = "web_ui";
 static httpd_handle_t s_server = NULL;
@@ -177,6 +178,7 @@ static esp_err_t register_httpd_routes(void)
         {.uri = "/api/auth/login", .method = HTTP_POST, .guarded = false, .fn = auth_login_handler},
         {.uri = "/api/auth/logout", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = auth_logout_handler},
         {.uri = "/api/auth/password", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = auth_password_handler},
+        {.uri = "/api/meta", .method = HTTP_GET, .guarded = false, .fn = meta_handler},
         {.uri = "/api/session/info", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = session_info_handler},
         {.uri = "/", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = true, .fn = root_get_handler},
         {.uri = "/gm", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = true, .fn = gm_page_handler},
@@ -215,12 +217,14 @@ static esp_err_t register_httpd_routes(void)
         {.uri = "/api/gm/device/delete", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_device_delete_handler},
         {.uri = "/api/gm/device/command/run", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_quest_device_command_run_handler},
         {.uri = "/api/hardware-io/status", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = hardware_io_status_handler},
+        {.uri = "/api/hardware-io/io-mode", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = hardware_io_io_mode_handler},
         {.uri = "/api/gm/device/describe-interface", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = orchestrator_describe_interface_handler},
         {.uri = "/api/gm/devices/export", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_export_handler},
         {.uri = "/api/gm/devices/import", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_import_handler},
         {.uri = "/api/gm/devices/save", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_save_handler},
         {.uri = "/api/gm/devices/load", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_load_handler},
         {.uri = "/api/gm/state", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_state_handler},
+        {.uri = "/api/gm/system/summary", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_system_summary_handler},
         {.uri = "/api/gm/versions", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_versions_handler},
         {.uri = "/api/orchestrator/audit/recent", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = orchestrator_audit_recent_handler},
         {.uri = "/api/orchestrator/timeline/recent", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = orchestrator_timeline_recent_handler},
@@ -324,6 +328,13 @@ static esp_err_t start_httpd(void)
         return err;
     }
 
+    err = ws_runtime_register_httpd(s_server);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "runtime websocket registration failed: %s", esp_err_to_name(err));
+        (void)stop_httpd();
+        return err;
+    }
+
     return ESP_OK;
 }
 
@@ -333,12 +344,15 @@ esp_err_t web_ui_init(void)
         .malloc_fn = web_ui_json_malloc,
         .free_fn = web_ui_json_free,
     };
+
     cJSON_InitHooks(&hooks);
+
     ESP_RETURN_ON_ERROR(web_ui_restart_state_init(), TAG, "restart state init failed");
     ESP_RETURN_ON_ERROR(orchestrator_registry_init(), TAG, "orchestrator registry init failed");
     ESP_RETURN_ON_ERROR(orchestrator_timeline_init(), TAG, "orchestrator timeline init failed");
     ESP_RETURN_ON_ERROR(web_ui_system_init(), TAG, "system handlers init failed");
     ESP_RETURN_ON_ERROR(web_sessions_init(), TAG, "sessions init failed");
+
     web_auth_start_reset_monitor();
     return ESP_OK;
 }
@@ -423,6 +437,4 @@ esp_err_t web_ui_send_ok(httpd_req_t *req, const char *mime, const char *body)
     httpd_resp_set_type(req, mime);
     return WEB_HTTP_CHECK_CTX(httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN), "web_ui_send_ok");
 }
-
-
 

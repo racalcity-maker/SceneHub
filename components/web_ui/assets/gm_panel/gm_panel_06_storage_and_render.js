@@ -88,15 +88,17 @@ function initDeviceSetupWizard(){
 return;
 }
 
+function syncGMSummaryStatus(){
+const summary=gmState&&gmState.summary?gmState.summary:{};
+setStatus(summary.has_fault?'fault':(summary.has_degraded?'degraded':'ok'),summary.has_fault?'state-fault':(summary.has_degraded?'state-degraded':'state-ok'));
+}
+
 function renderMainContent(){
 const root=document.getElementById('gm_content');
 if(!root)return;
 if(gmSkipScenarioDomSync)gmSkipScenarioDomSync=false;
 applyGMRoleLayout();
-const summary=gmState&&gmState.summary?gmState.summary:{
-}
-;
-setStatus(summary.has_fault?'fault':(summary.has_degraded?'degraded':'ok'),summary.has_fault?'state-fault':(summary.has_degraded?'state-degraded':'state-ok'));
+syncGMSummaryStatus();
 let html='';
 if(currentView==='dashboard')html=renderDashboard();
 else if(currentView==='rooms')html=renderRoomsView();

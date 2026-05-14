@@ -5,11 +5,11 @@ const profileId=roomSelectedProfileId(room.room_id)||room.selected_profile_id||'
 const profile=roomProfiles(room.room_id).find(p=>p.id===profileId)||null;
 const gameName=profile&&(profile.name||profile.id)||room.selected_profile_name||room.profile_name||'none';
 const scenarioNameText=scenario&&(scenario.name||scenario.id)||room.running_scenario_name||room.selected_profile_scenario_id||room.selected_scenario_id||'none';
-const current=roomCurrentScenarioStep(room);
-const issues=roomQuestDeviceIssues(room).length+(Number(room.issue_count)||0);
-const devices=roomScenarioDeviceIds(room).length||room.device_count||0;
+const currentText=roomCurrentScenarioText(room);
+const issues=Number(room&&room.issue_count)||0;
+const devices=Number(room&&room.scenario_device_count)||Number(room&&room.device_count)||0;
 const runtime=room.scenario_runtime_state||room.session_state||'idle';
-return `<tr class='clickable-row' data-action='room.open' data-room-id='${esc(room.room_id)}'><td><strong>${esc(room.title||room.name||room.room_id)}</strong><span>${esc(room.room_id||'')}</span></td><td>${status(roomDerivedHealth(room))}</td><td><strong>${esc(gameName)}</strong><span>${esc(scenarioNameText)}</span></td><td>${roomClockHtml(room,'span','')}</td><td>${esc(runtime)}</td><td>${esc(current?scenarioStepText(current):'none')}</td><td>${esc(scenarioWaitText(room))}</td><td>${esc(devices)}</td><td>${esc(issues)}</td><td class='observed-actions'>${uiButton({label:'Open',kind:'small-btn',action:'room.open',dataset:{'room-id':room.room_id}})}</td></tr>`;
+return `<tr class='clickable-row' data-action='room.open' data-room-id='${esc(room.room_id)}'><td><strong>${esc(room.title||room.name||room.room_id)}</strong><span>${esc(room.room_id||'')}</span></td><td>${status(roomDerivedHealth(room))}</td><td><strong>${esc(gameName)}</strong><span>${esc(scenarioNameText)}</span></td><td>${roomClockHtml(room,'span','')}</td><td>${esc(runtime)}</td><td>${esc(currentText||'none')}</td><td>${esc(scenarioWaitText(room))}</td><td>${esc(devices)}</td><td>${esc(issues)}</td><td class='observed-actions'>${uiButton({label:'Open',kind:'small-btn',action:'room.open',dataset:{'room-id':room.room_id}})}</td></tr>`;
 }
 
 function dashboardIssueRow(issue){
@@ -26,7 +26,8 @@ summary:{
 setPage('Dashboard','What is happening now');
 const rooms=Array.isArray(s.rooms)?s.rooms:[];
 const baseIssues=Array.isArray(s.issues)?s.issues:[];
-const questIssues=rooms.reduce((out,room)=>out.concat(roomQuestDeviceIssues(room).map(issue=>Object.assign({room_id:room.room_id},issue))),[]);
+const baseIssueIds=new Set(baseIssues.map(issue=>String(issue&&issue.issue_id||'')).filter(Boolean));
+const questIssues=rooms.reduce((out,room)=>out.concat(roomRelatedIssues(room).filter(issue=>!baseIssueIds.has(String(issue&&issue.issue_id||''))).map(issue=>Object.assign({room_id:room.room_id},issue))),[]);
 const allIssues=baseIssues.concat(questIssues);
 const runningRooms=rooms.filter(r=>['running','waiting'].includes(String(r.scenario_runtime_state||r.session_state||''))).length;
 const savedQuestDevices=questDevices().filter(d=>d&&!d.system_device);
@@ -53,13 +54,13 @@ const adminActions=isAdmin()?`<div class='actions' style='margin-bottom:14px'>${
 const devs=roomDevices(room.room_id);
 const questIds=roomScenarioDeviceIds(room);
 const questDevs=questIds.map(id=>questDeviceById(id)).filter(Boolean);
-const issues=roomIssues(room.room_id).concat(roomQuestDeviceIssues(room));
+const issues=roomRelatedIssues(room);
 const canReset=room.session_present;
 const canFinish=room.session_present&&room.session_state!=='finished';
 const canScenarioNext=(room.selected_scenario_id||room.running_scenario_id)&&(room.scenario_runtime_state==='running'||room.scenario_runtime_state==='waiting');
 let body='';
 if(roomTab==='overview'){
-body=`<div class='grid cols-2'><div class='card'><div class='card-head'><div><div class='card-title'>Room state</div><div class='card-sub'>${esc(room.title||room.name||'Room')}</div></div>${status(roomDerivedHealth(room))}</div><div class='kvs'><div class='kv'><span class='k'>Timer</span>${roomClockHtml(room,'span','v')}</div><div class='kv'><span class='k'>Session</span><span class='v'>${esc(room.session_state||'idle')}</span></div><div class='kv'><span class='k'>Scenario devices</span><span class='v'>${esc(questDevs.length)}</span></div><div class='kv'><span class='k'>Hints</span><span class='v'>${esc(room.hint_sent_count||0)}</span></div></div></div><div class='card'><h2 class='section-title'>Problems</h2><div class='list'>${issues.length?issues.slice(0,4).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>`;
+body=`<div class='grid cols-2'><div class='card'><div class='card-head'><div><div class='card-title'>Room state</div><div class='card-sub'>${esc(room.title||room.name||'Room')}</div></div>${status(roomDerivedHealth(room))}</div><div class='kvs'><div class='kv'><span class='k'>Timer</span>${roomClockHtml(room,'span','v')}</div><div class='kv'><span class='k'>Session</span><span class='v'>${esc(room.session_state||'idle')}</span></div><div class='kv'><span class='k'>Scenario devices</span><span class='v'>${esc(Number(room&&room.scenario_device_count)||0)}</span></div><div class='kv'><span class='k'>Hints</span><span class='v'>${esc(room.hint_sent_count||0)}</span></div></div></div><div class='card'><h2 class='section-title'>Problems</h2><div class='list'>${issues.length?issues.slice(0,4).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>`;
 }
 else if(roomTab==='devices'){
 const questRows=questDevs.length?questDevs.map(questDeviceMonitorRow).join(''):`<div class='card empty'>No quest devices referenced by selected scenario</div>`;

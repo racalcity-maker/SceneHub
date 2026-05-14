@@ -20,6 +20,7 @@
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
+#include "scenehub_state.h"
 #include "service_status.h"
 #include "esp_task_wdt.h"
 #include <inttypes.h>
@@ -373,6 +374,12 @@ void app_main(void)
         }
     } else {
         ESP_LOGW(TAG, "gm_game_profile init failed: %s", esp_err_to_name(err));
+    }
+
+    ESP_LOGI(TAG, "init scenehub_state");
+    err = scenehub_state_init();
+    if (err != ESP_OK) {
+        app_abort_startup("scenehub_state_init", err);
     }
 
 #if (configUSE_TRACE_FACILITY == 1)
