@@ -4,14 +4,13 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "esp_random.h"
-#include "esp_system.h"
 
 static const char *TAG = "mqtt_core";
 
 typedef struct {
     size_t slot;
     int sock;
+    uint8_t qos;
     uint16_t pid;
     char client_id[CONFIG_STORE_CLIENT_ID_MAX];
 } publish_target_t;
@@ -57,6 +56,41 @@ static bool mqtt_authenticate_client(const char *client_id, const char *username
     return false;
 }
 
+bool mqtt_upsert_subscription(mqtt_session_t *sess,
+                              const char *topic,
+                              uint8_t requested_qos,
+                              uint8_t *out_granted_qos)
+{
+    uint8_t granted_qos = requested_qos > 1 ? 1 : requested_qos;
+
+    if (!sess || !topic || !topic[0]) {
+        return false;
+    }
+
+    for (size_t i = 0; i < sess->sub_count; ++i) {
+        if (strcmp(sess->subs[i].topic, topic) == 0) {
+            sess->subs[i].qos = granted_qos;
+            if (out_granted_qos) {
+                *out_granted_qos = granted_qos;
+            }
+            return true;
+        }
+    }
+
+    if (sess->sub_count >= MQTT_MAX_SUBS) {
+        return false;
+    }
+
+    strncpy(sess->subs[sess->sub_count].topic, topic, sizeof(sess->subs[sess->sub_count].topic) - 1);
+    sess->subs[sess->sub_count].topic[sizeof(sess->subs[sess->sub_count].topic) - 1] = '\0';
+    sess->subs[sess->sub_count].qos = granted_qos;
+    sess->sub_count++;
+    if (out_granted_qos) {
+        *out_granted_qos = granted_qos;
+    }
+    return true;
+}
+
 void publish_to_subscribers(const char *topic, const char *payload, uint8_t qos, bool retain_flag, mqtt_session_t *exclude)
 {
     publish_target_t targets[MQTT_MAX_CLIENTS] = {0};
@@ -76,10 +110,12 @@ void publish_to_subscribers(const char *topic, const char *payload, uint8_t qos,
         }
         for (size_t j = 0; j < s->sub_count; ++j) {
             if (topic_matches_filter(s->subs[j].topic, topic)) {
+                uint8_t out_qos = mqtt_effective_delivery_qos(qos, s->subs[j].qos);
                 publish_target_t *target = &targets[target_count++];
                 target->slot = i;
                 target->sock = s->sock;
-                target->pid = (qos ? (uint16_t)(esp_random() & 0xFFFF) : 0);
+                target->qos = out_qos;
+                target->pid = out_qos ? mqtt_next_packet_id() : 0;
                 strncpy(target->client_id, s->client_id, sizeof(target->client_id) - 1);
                 break;
             }
@@ -94,7 +130,7 @@ void publish_to_subscribers(const char *topic, const char *payload, uint8_t qos,
                                                   target->client_id,
                                                   topic,
                                                   payload,
-                                                  qos,
+                                                  target->qos,
                                                   retain_flag,
                                                   target->pid);
     }
@@ -128,17 +164,19 @@ int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
         return -1;
     }
 
+    int old_sock = -1;
     lock();
     mqtt_session_t *old = find_session_by_client_id(client_id);
     if (old && old != sess) {
-        ESP_LOGW(TAG, "Replacing session for client_id=%s", client_id);
         old->suppress_will = true;
-        request_session_close(old, "duplicate client_id", 0);
+        old_sock = request_session_prepare_close_locked(old, "duplicate client_id", 0);
     }
+    strncpy(sess->client_id, client_id, sizeof(sess->client_id) - 1);  // ← сюда
     unlock();
+    request_session_close_socket(old_sock);
 
     sess->keepalive = keepalive;
-    strncpy(sess->client_id, client_id, sizeof(sess->client_id) - 1);
+    // strncpy убрали отсюда
     sess->last_rx_ms = now_ms();
 
     bool will_flag = flags & 0x04;
@@ -198,11 +236,8 @@ int handle_subscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len)
             granted[granted_count++] = 0x80;
             continue;
         }
-        if (sess->sub_count < MQTT_MAX_SUBS) {
-            strncpy(sess->subs[sess->sub_count].topic, topic, sizeof(sess->subs[sess->sub_count].topic) - 1);
-            sess->subs[sess->sub_count].qos = rqos > 1 ? 1 : rqos;
-            sess->sub_count++;
-            granted[granted_count++] = rqos > 1 ? 1 : rqos;
+        if (mqtt_upsert_subscription(sess, topic, rqos, &granted[granted_count])) {
+            granted_count++;
             deliver_retain(sess, topic);
         } else {
             granted[granted_count++] = 0x80;
@@ -271,8 +306,19 @@ int handle_publish(mqtt_session_t *sess, uint8_t header, uint8_t *buf, size_t le
         pid = (buf[off] << 8) | buf[off + 1];
         off += 2;
     }
+    if (qos > 1) {
+        ESP_LOGW(TAG, "unsupported publish qos=%u topic=%s", qos, topic);
+        return -1;
+    }
+    if (qos == 1 && pid == 0) {
+        ESP_LOGW(TAG, "invalid qos1 publish packet id=0 topic=%s", topic);
+        return -1;
+    }
     if (!acl_can_publish(sess->client_id, topic)) {
         ESP_LOGW(TAG, "ACL deny pub %s -> %s", sess->client_id, topic);
+        if (qos == 1) {
+            (void)send_puback(sess, pid);
+        }
         return 0;
     }
     size_t payload_len = len - off;

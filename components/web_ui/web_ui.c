@@ -15,7 +15,7 @@
 #include "web_ui_handlers.h"
 #include "web_ui_auth.h"
 #include "web_ui_devices.h"
-#include "orchestrator_registry.h"
+#include "orch_registry_snapshot.h"
 #include "orchestrator_timeline.h"
 #include "ws_runtime.h"
 
@@ -196,6 +196,7 @@ static esp_err_t register_httpd_routes(void)
         {.uri = "/api/gm/room/scenario/save", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_room_scenario_save_handler},
         {.uri = "/api/gm/room/scenario/delete", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_room_scenario_delete_handler},
         {.uri = "/api/gm/room/runtime", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_room_runtime_state_handler},
+        {.uri = "/api/gm/rooms/runtime", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_rooms_runtime_summary_handler},
         {.uri = "/api/gm/room/scenario/start", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_room_scenario_start_handler},
         {.uri = "/api/gm/room/scenario/stop", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_room_scenario_stop_handler},
         {.uri = "/api/gm/room/scenario/next", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_room_scenario_next_handler},
@@ -223,6 +224,11 @@ static esp_err_t register_httpd_routes(void)
         {.uri = "/api/gm/devices/import", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_import_handler},
         {.uri = "/api/gm/devices/save", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_save_handler},
         {.uri = "/api/gm/devices/load", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_devices_load_handler},
+        {.uri = "/api/gm/sidebar-presets", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_sidebar_presets_handler},
+        {.uri = "/api/gm/sidebar-presets/save", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_sidebar_presets_save_handler},
+        {.uri = "/api/gm/sidebar-presets/load", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_sidebar_presets_load_handler},
+        {.uri = "/api/gm/sidebar-presets/export", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_sidebar_presets_export_handler},
+        {.uri = "/api/gm/sidebar-presets/import", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_sidebar_presets_import_handler},
         {.uri = "/api/gm/state", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_state_handler},
         {.uri = "/api/gm/system/summary", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_system_summary_handler},
         {.uri = "/api/gm/versions", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_versions_handler},
@@ -437,4 +443,3 @@ esp_err_t web_ui_send_ok(httpd_req_t *req, const char *mime, const char *body)
     httpd_resp_set_type(req, mime);
     return WEB_HTTP_CHECK_CTX(httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN), "web_ui_send_ok");
 }
-

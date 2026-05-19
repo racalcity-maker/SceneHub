@@ -80,12 +80,18 @@ typedef struct {
     uint32_t status_count;
     uint32_t diag_count;
     uint32_t result_count;
+    uint32_t event_count;
 } device_control_ingest_device_t;
 
 esp_err_t device_control_ingest_init(void);
 esp_err_t device_control_ingest_reset(void);
 esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *payload);
 esp_err_t device_control_ingest_get_device(const char *device_id, device_control_ingest_device_t *out);
+esp_err_t device_control_ingest_get_presence(const char *device_id,
+                                             uint64_t now_ms,
+                                             uint32_t timeout_ms,
+                                             uint64_t *out_last_seen_ms,
+                                             bool *out_online);
 size_t device_control_ingest_count(void);
 uint32_t device_control_ingest_generation(void);
 esp_err_t device_control_ingest_get_last_changed_device_id(char *out_device_id, size_t out_device_id_size);

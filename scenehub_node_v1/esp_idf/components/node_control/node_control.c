@@ -1,0 +1,189 @@
+#include "node_control.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#include "esp_log.h"
+#include "node_capability.h"
+#include "node_hardware_io.h"
+
+static const char *TAG = "node_control";
+static node_config_t s_config;
+
+static void copy_text(char *dst, size_t dst_size, const char *src)
+{
+    if (!dst || dst_size == 0) {
+        return;
+    }
+    snprintf(dst, dst_size, "%s", src ? src : "");
+}
+
+static void result_done(node_control_result_t *result)
+{
+    copy_text(result->status, sizeof(result->status), "done");
+    result->error_code[0] = '\0';
+}
+
+static esp_err_t result_rejected(node_control_result_t *result, const char *code)
+{
+    copy_text(result->status, sizeof(result->status), "rejected");
+    copy_text(result->error_code, sizeof(result->error_code), code);
+    return ESP_ERR_INVALID_ARG;
+}
+
+static bool read_int_arg(const char *json, const char *key, int *out)
+{
+    if (!json || !key || !out) {
+        return false;
+    }
+    char pattern[40];
+    int pn = snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    if (pn <= 0 || pn >= (int)sizeof(pattern)) {
+        return false;
+    }
+    const char *p = strstr(json, pattern);
+    if (!p || !(p = strchr(p + pn, ':'))) {
+        return false;
+    }
+    return sscanf(p + 1, "%d", out) == 1;
+}
+
+static bool read_bool_arg(const char *json, const char *key, bool *out)
+{
+    if (!json || !key || !out) {
+        return false;
+    }
+    char pattern[40];
+    int pn = snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    if (pn <= 0 || pn >= (int)sizeof(pattern)) {
+        return false;
+    }
+    const char *p = strstr(json, pattern);
+    if (!p || !(p = strchr(p + pn, ':'))) {
+        return false;
+    }
+    ++p;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        ++p;
+    }
+    if (strncmp(p, "true", 4) == 0) {
+        *out = true;
+        return true;
+    }
+    if (strncmp(p, "false", 5) == 0) {
+        *out = false;
+        return true;
+    }
+    int value = 0;
+    if (sscanf(p, "%d", &value) == 1) {
+        *out = value != 0;
+        return true;
+    }
+    return false;
+}
+
+static esp_err_t execute_output_set(node_hw_output_kind_t kind,
+                                    const char *args_json,
+                                    node_control_result_t *result)
+{
+    int channel = 0;
+    bool on = false;
+    if (!read_int_arg(args_json, "channel", &channel)) {
+        return result_rejected(result, "missing_channel");
+    }
+    if (!read_bool_arg(args_json, "on", &on)) {
+        return result_rejected(result, "missing_on");
+    }
+    esp_err_t err = node_hardware_io_set_output(kind, (uint8_t)channel, on);
+    if (err != ESP_OK) {
+        return result_rejected(result, err == ESP_ERR_NOT_FOUND ? "not_configured" : "invalid_channel");
+    }
+    result_done(result);
+    return ESP_OK;
+}
+
+static esp_err_t execute_get_status(node_control_result_t *result)
+{
+    node_hardware_io_status_t status = node_hardware_io_get_status();
+    int n = snprintf(result->data_json,
+                     sizeof(result->data_json),
+                     "{\"hardware\":{\"relays\":%u,\"mosfets\":%u,\"universal_inputs\":%u,"
+                     "\"universal_outputs\":%u,\"led_strips\":%u}}",
+                     (unsigned)status.configured_relays,
+                     (unsigned)status.configured_mosfets,
+                     (unsigned)status.configured_universal_inputs,
+                     (unsigned)status.configured_universal_outputs,
+                     (unsigned)status.configured_led_strips);
+    if (n < 0 || n >= (int)sizeof(result->data_json)) {
+        return result_rejected(result, "internal_error");
+    }
+    result_done(result);
+    return ESP_OK;
+}
+
+static esp_err_t execute_describe_interface(node_control_result_t *result)
+{
+    size_t written = 0;
+    static const char prefix[] = "{\"device_description\":";
+    static const char suffix[] = "}";
+    const size_t prefix_len = sizeof(prefix) - 1;
+    const size_t suffix_len = sizeof(suffix) - 1;
+
+    if (sizeof(result->data_json) <= prefix_len + suffix_len) {
+        return result_rejected(result, "internal_error");
+    }
+
+    memcpy(result->data_json, prefix, prefix_len);
+    esp_err_t err = node_capability_write_device_description(&s_config,
+                                                             result->data_json + prefix_len,
+                                                             sizeof(result->data_json) - prefix_len - suffix_len,
+                                                             &written);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "device_description does not fit result buffer cap=%u err=%s",
+                 (unsigned)sizeof(result->data_json),
+                 esp_err_to_name(err));
+        return result_rejected(result, "internal_error");
+    }
+    memcpy(result->data_json + prefix_len + written, suffix, suffix_len + 1);
+    result_done(result);
+    return ESP_OK;
+}
+
+esp_err_t node_control_init(const node_config_t *config)
+{
+    if (!config) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_config = *config;
+    return ESP_OK;
+}
+
+esp_err_t node_control_execute(const node_control_command_t *command, node_control_result_t *out_result)
+{
+    if (!command || !command->command || !out_result) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out_result, 0, sizeof(*out_result));
+
+    if (strcmp(command->command, "node.get_status") == 0) {
+        return execute_get_status(out_result);
+    }
+    if (strcmp(command->command, "node.identify") == 0) {
+        result_done(out_result);
+        return ESP_OK;
+    }
+    if (strcmp(command->command, "describe_interface") == 0) {
+        return execute_describe_interface(out_result);
+    }
+    if (strcmp(command->command, "relay.set") == 0) {
+        return execute_output_set(NODE_HW_OUTPUT_RELAY, command->args_json, out_result);
+    }
+    if (strcmp(command->command, "mosfet.set") == 0) {
+        return execute_output_set(NODE_HW_OUTPUT_MOSFET, command->args_json, out_result);
+    }
+    if (strcmp(command->command, "io.set") == 0) {
+        return execute_output_set(NODE_HW_OUTPUT_UNIVERSAL_IO, command->args_json, out_result);
+    }
+    return result_rejected(out_result, "not_supported");
+}

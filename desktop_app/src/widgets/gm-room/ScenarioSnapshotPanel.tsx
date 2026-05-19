@@ -144,8 +144,9 @@ type ScenarioStepVisualState = "done" | "current" | "waiting" | "error" | "futur
 function getBranchStepVisualState(
   branchRuntime: RuntimeBranch | undefined,
   index: number,
+  globalIndex: number,
 ): ScenarioStepVisualState {
-  if (!branchRuntime || !branchRuntime.active) {
+  if (!branchRuntime) {
     return "future";
   }
 
@@ -166,6 +167,36 @@ function getBranchStepVisualState(
   if (explicitState === "error") {
     return "error";
   }
+
+  const failedStepIndex = Number(branchRuntime.failed_step_index);
+  if (Number.isFinite(failedStepIndex) && (failedStepIndex === index || failedStepIndex === globalIndex)) {
+    return "error";
+  }
+
+  const doneSteps = Math.max(0, Number(branchRuntime.done_steps ?? branchRuntime.completed_step_count) || 0);
+  if (String(branchRuntime.state || "").toLowerCase() === "done" || index < doneSteps) {
+    return "done";
+  }
+
+  const currentLocalIndex = Number(branchRuntime.current_step_local_index);
+  const currentGlobalIndex = Number(branchRuntime.current_step_index);
+  const isCurrent =
+    (Number.isFinite(currentLocalIndex) && currentLocalIndex === index) ||
+    (Number.isFinite(currentGlobalIndex) && currentGlobalIndex === globalIndex);
+
+  if (isCurrent) {
+    const branchState = String(branchRuntime.state || "").toLowerCase();
+    if (branchState === "error") {
+      return "error";
+    }
+    if (branchState === "waiting") {
+      return "waiting";
+    }
+    if (branchState === "running") {
+      return "current";
+    }
+  }
+
   return "future";
 }
 
@@ -190,7 +221,7 @@ function getScenarioStepStatusLabel(state: ScenarioStepVisualState): string {
 }
 
 function canNextRuntimeBranch(branchRuntime: GmRoomRuntime["scenario_branches"][number] | undefined): boolean {
-  if (!branchRuntime || !branchRuntime.active) {
+  if (!branchRuntime) {
     return false;
   }
 
@@ -216,6 +247,7 @@ function renderCompactStepList(
   keyPrefix: string,
   branchRuntime?: RuntimeBranch,
   liveRuntimeNowMs = 0,
+  globalStartIndex = 0,
 ) {
   if (steps.length === 0) {
     return <div className="runtime-empty-line">No steps in this branch</div>;
@@ -224,11 +256,11 @@ function renderCompactStepList(
   return (
     <div className="scenario-step-compact-list">
       {steps.map((step, index) => {
-        const state = getBranchStepVisualState(branchRuntime, index);
+        const state = getBranchStepVisualState(branchRuntime, index, globalStartIndex + index);
 
         const isCurrent = state === "current" || state === "waiting" || state === "error";
         const statusLabel = getScenarioStepStatusLabel(state);
-        const branchWaitRemainingMs = state === "current"
+        const branchWaitRemainingMs = state === "current" || state === "waiting"
           ? getBranchWaitRemainingMs(branchRuntime, liveRuntimeNowMs)
           : null;
 
@@ -422,6 +454,7 @@ export function ScenarioSnapshotPanel({
                           `${selectedScenario?.id || "scenario"}-branch-${runtimeIndex}-step`,
                           branchRuntime,
                           liveRuntimeNowMs,
+                          Number(branchRuntime?.step_start_index) || 0,
                         )}
                       </div>
                     );
@@ -511,6 +544,7 @@ export function ScenarioSnapshotPanel({
               selectedScenario?.id || "scenario",
               primaryRuntimeBranch,
               liveRuntimeNowMs,
+              Number(primaryRuntimeBranch?.step_start_index) || 0,
             )
           ) : (
             <div className="runtime-empty-line">No scenario steps exposed by controller</div>

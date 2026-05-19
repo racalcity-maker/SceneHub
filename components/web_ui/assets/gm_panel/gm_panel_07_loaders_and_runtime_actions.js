@@ -1,9 +1,12 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 const GM_STATIC_TTL_MS=30000;
-const gmLoadTimes={observed:0,audit:0,timeline:0,questDevices:0,roomScenarios:0,roomProfiles:0,scenarioCatalogs:0};
+const gmLoadTimes={observed:0,audit:0,timeline:0,questDevices:0,sidebarPresets:0,roomScenarios:0,roomProfiles:0,scenarioCatalogs:0};
 const gmRuntimeRenderKeys={};
 const gmRuntimeRequestSeq={};
+const gmRoomScenarioDetailRequestSeq={};
+let gmRoomsRuntimeRequestSeq=0;
 const gmLocalRuntimeRefreshUntil={};
+const gmRuntimeLastRefreshAt={};
 let gmLastVersions=null;
 let gmSnapshotRequestSeq=0;
 
@@ -35,7 +38,7 @@ return fields.some(field=>(prev[field]||0)!==(next[field]||0));
 }
 
 function gmCurrentViewUsesQuestDeviceStatic(){
-return ['dashboard','room','devices','observed','device_setup','scenarios','hardware_io'].includes(currentView);
+return ['room','devices','observed','device_setup','scenarios','hardware_io'].includes(currentView);
 }
 
 function gmCurrentViewUsesScenarioStatic(){
@@ -98,6 +101,18 @@ gmQuestDevices=null;
 }
 }
 
+async function loadSidebarPresets(force){
+if(!force&&gmStaticFresh('sidebarPresets')&&gmQuickPresets!==null)return;
+try{
+const data=await api.sidebarPresets.listJson();
+applySidebarPresetPayload(data);
+}
+catch(err){
+gmQuickPresets=[];
+gmMarkStaticLoaded('sidebarPresets');
+}
+}
+
 function gmAudioFileItems(){
 return gmAudioFiles&&Array.isArray(gmAudioFiles.items)?gmAudioFiles.items:[];
 }
@@ -113,11 +128,8 @@ const dirs=[];
 (Array.isArray(list)?list:[]).forEach(item=>{
 if(!item||!item.path)return;
 if(item.dir)dirs.push(item.path);
-else files.push({
-path:item.path,size:item.size||0,dur:item.dur||0}
-);
-}
-);
+else files.push({path:item.path,size:item.size||0,dur:item.dur||0});
+});
 if(depth>0){
 for(const dir of dirs.slice(0,24)){
 files.push(...await gmFetchAudioDir(dir,depth-1,seen));
@@ -132,7 +144,7 @@ if(gmAudioFiles.loading)return;
 if(gmAudioFiles.loaded&&!force)return;
 gmAudioFiles.loading=true;
 gmAudioFiles.error='';
-if(force)render();
+if(force&&!shouldDeferAutoRender())render();
 try{
 const items=await gmFetchAudioDir('/sdcard',3,new Set());
 const dedup=new Map();
@@ -146,7 +158,15 @@ gmAudioFiles.loaded=false;
 }
 finally{
 gmAudioFiles.loading=false;
-if(currentView==='scenarios')render();
+if(currentView==='scenarios'){
+const canRefreshAudioControls=!hasFocusedEditableControl();
+if(shouldDeferAutoRender()&&!canRefreshAudioControls){
+gmAutoRenderDeferred=true;
+}
+else{
+render();
+}
+}
 }
 }
 
@@ -156,8 +176,7 @@ gmAudioFiles.scheduled=true;
 setTimeout(()=>{
 gmAudioFiles.scheduled=false;
 loadGMAudioFiles(false);
-}
-,0);
+},0);
 }
 
 window.__gmRefreshManualSidebar=async function(){
@@ -166,9 +185,7 @@ renderRightSidebar(true);
 
 async function loadRoomScenarios(force){
 if(!force&&gmStaticFresh('roomScenarios'))return;
-gmRoomScenarios={
-}
-;
+gmRoomScenarios={};
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
 await Promise.all(rooms.map(async r=>loadRoomScenariosForRoom(r.room_id,true)));
 gmMarkStaticLoaded('roomScenarios');
@@ -176,24 +193,100 @@ gmMarkStaticLoaded('roomScenarios');
 
 function normalizeRoomScenarioSelection(roomId){
 if(!roomId)return;
-const scenarios=roomScenarios(roomId);
+const scenarios=scenarioSummariesByRoom(roomId);
 const override=currentRoomScenarioId[roomId]||'';
 if(override&&scenarios.some(scenario=>(scenario&&scenario.id||'')===override))return;
 delete currentRoomScenarioId[roomId];
 }
 
+function roomScenarioHasDetail(scenario){
+return !!(scenario&&(Array.isArray(scenario.branches)||Array.isArray(scenario.steps)));
+}
+
+function setRoomScenarioDetail(roomId,scenario){
+if(!roomId||!scenario||!scenario.id)return;
+const key=roomScenarioDetailKey(roomId,scenario.id);
+gmRoomScenarioDetails[key]=scenario;
+}
+
+function invalidateRoomScenarioDetail(roomId,scenarioId){
+if(!roomId||!scenarioId||!gmRoomScenarioDetails)return;
+delete gmRoomScenarioDetails[roomScenarioDetailKey(roomId,scenarioId)];
+}
+
+function pruneRoomScenarioDetails(roomId,summaries){
+if(!roomId||!gmRoomScenarioDetails)return;
+const allowed=new Set((Array.isArray(summaries)?summaries:[]).map(item=>String(item&&item.id||'')).filter(Boolean));
+Object.keys(gmRoomScenarioDetails).forEach(key=>{
+if(key.indexOf(`${String(roomId)}::`)!==0)return;
+const scenarioId=key.slice(String(roomId).length+2);
+if(!allowed.has(scenarioId))delete gmRoomScenarioDetails[key];
+});
+}
+
 async function loadRoomScenariosForRoom(roomId,force){
 if(!roomId)return;
-if(!force&&gmStaticFresh('roomScenarios')&&gmRoomScenarios[roomId])return;
+const wantsFullDetails=false;
+const cached=gmRoomScenarios[roomId];
+const cacheHasEnough=Array.isArray(cached)&&(!wantsFullDetails||cached.every(roomScenarioHasDetail));
+if(!force&&gmStaticFresh('roomScenarios')&&cacheHasEnough)return;
 try{
-const res=await api.room.scenarios(roomId);
+const res=await api.room.scenarios(roomId,wantsFullDetails?null:{detail:'summary'});
 const data=res.ok?await res.json():null;
 gmRoomScenarios[roomId]=(data&&Array.isArray(data.scenarios))?data.scenarios:[];
+pruneRoomScenarioDetails(roomId,gmRoomScenarios[roomId]);
 }
 catch(err){
 gmRoomScenarios[roomId]=[];
+pruneRoomScenarioDetails(roomId,[]);
 }
 normalizeRoomScenarioSelection(roomId);
+if(currentView==='room'&&currentRoomId===roomId){
+await ensureRoomActiveScenarioDetail(roomId);
+}
+}
+
+async function ensureRoomScenarioDetail(roomId,scenarioId,force){
+if(!roomId||!scenarioId)return null;
+if(force)invalidateRoomScenarioDetail(roomId,scenarioId);
+const cached=roomScenarioDetailById(roomId,scenarioId);
+if(cached&&roomScenarioHasDetail(cached))return cached;
+const requestSeq=(gmRoomScenarioDetailRequestSeq[roomId]||0)+1;
+gmRoomScenarioDetailRequestSeq[roomId]=requestSeq;
+try{
+const detailRes=await api.room.scenarios(roomId,{scenario_id:scenarioId,detail:'layout'});
+if(gmRoomScenarioDetailRequestSeq[roomId]!==requestSeq)return null;
+const detailData=detailRes.ok?await detailRes.json():null;
+const detail=(detailData&&Array.isArray(detailData.scenarios)&&detailData.scenarios[0])||null;
+if(detail&&detail.id){
+setRoomScenarioDetail(roomId,detail);
+const list=Array.isArray(gmRoomScenarios[roomId])?gmRoomScenarios[roomId].slice():[];
+const idx=list.findIndex(item=>(item&&item.id||'')===detail.id);
+if(idx>=0)list[idx]={...list[idx],...detail,branches:undefined,steps:undefined,variants:undefined};
+else list.push({id:detail.id,name:detail.name||detail.id,room_id:detail.room_id||roomId,step_count:scenarioTotalStepCount(Array.isArray(detail.branches)?detail.branches:[]),branch_count:Array.isArray(detail.branches)?detail.branches.length:1,valid:detail.valid,validation_issue_count:detail.validation_issue_count});
+gmRoomScenarios[roomId]=list;
+return detail;
+}
+}
+catch(err){
+}
+return null;
+}
+
+async function ensureRoomActiveScenarioDetail(roomId){
+if(!roomId)return;
+const activeScenarioId=roomActiveScenarioId(roomId);
+if(!activeScenarioId)return;
+await ensureRoomScenarioDetail(roomId,activeScenarioId);
+}
+
+async function ensureOpenScenarioEditorDetail(){
+if(currentView!=='scenarios'||!scenarioEditor.open||!scenarioEditor.room_id||!scenarioEditor.scenario_id)return null;
+const detail=await ensureRoomScenarioDetail(scenarioEditor.room_id,scenarioEditor.scenario_id);
+if(detail&&!scenarioEditor.dirty){
+scenarioSetLoadedDraft(detail,scenarioEditor.room_id);
+}
+return detail;
 }
 
 function roomIdForScenario(scenarioId){
@@ -201,7 +294,7 @@ const target=String(scenarioId||'');
 if(!target)return '';
 const roomIds=Object.keys(gmRoomScenarios||{});
 for(const roomId of roomIds){
-if(roomScenarios(roomId).some(scenario=>(scenario&&scenario.id||'')===target)){
+if(scenarioSummariesByRoom(roomId).some(scenario=>(scenario&&scenario.id||'')===target)){
 return roomId;
 }
 }
@@ -212,10 +305,16 @@ async function refreshRoomScenariosAfterMutation(roomId){
 if(!roomId){
 await loadRoomScenarios(true);
 if(isAdmin())await loadScenarioEditorCatalogs(true);
+await ensureOpenScenarioEditorDetail();
 render();
 return;
 }
 await loadRoomScenariosForRoom(roomId,true);
+if(currentView==='scenarios'){
+await ensureOpenScenarioEditorDetail();
+render();
+return;
+}
 if(roomById(roomId)){
 await loadGMRuntimeOnly(roomId,false);
 return;
@@ -225,9 +324,7 @@ render();
 
 async function loadRoomProfiles(force){
 if(!force&&gmStaticFresh('roomProfiles'))return;
-gmRoomProfiles={
-}
-;
+gmRoomProfiles={};
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
 await Promise.all(rooms.map(async r=>loadRoomProfilesForRoom(r.room_id,true)));
 gmMarkStaticLoaded('roomProfiles');
@@ -253,14 +350,10 @@ if(!force&&gmStaticFresh('roomProfiles')&&gmRoomProfiles[roomId])return;
 try{
 const res=await api.room.profiles(roomId);
 const data=res.ok?await res.json():null;
-gmRoomProfiles[roomId]=data&&Array.isArray(data.profiles)?data:{
-profiles:[],selected_profile_id:''}
-;
+gmRoomProfiles[roomId]=data&&Array.isArray(data.profiles)?data:{profiles:[],selected_profile_id:''};
 }
 catch(err){
-gmRoomProfiles[roomId]={
-profiles:[],selected_profile_id:''}
-;
+gmRoomProfiles[roomId]={profiles:[],selected_profile_id:''};
 }
 normalizeRoomProfilesSelection(roomId);
 }
@@ -293,9 +386,7 @@ render();
 
 async function loadScenarioEditorCatalogs(force){
 if(!force&&gmStaticFresh('scenarioCatalogs'))return;
-gmScenarioEditorCatalogs={
-}
-;
+gmScenarioEditorCatalogs={};
 if(!isAdmin()){
 gmMarkStaticLoaded('scenarioCatalogs');
 return;
@@ -303,15 +394,14 @@ return;
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
 await Promise.all(rooms.map(async r=>{
 try{
-const res=await api.room.scenarioEditorCatalog(r.room_id);const data=res.ok?await res.json():null;gmScenarioEditorCatalogs[r.room_id]=data&&Array.isArray(data.quest_devices)?data:{
-quest_devices:[],step_schemas:[]}
-;}
-catch(err){
-gmScenarioEditorCatalogs[r.room_id]={
-quest_devices:[],step_schemas:[]}
-;}
+const res=await api.room.scenarioEditorCatalog(r.room_id);
+const data=res.ok?await res.json():null;
+gmScenarioEditorCatalogs[r.room_id]=data&&Array.isArray(data.quest_devices)?data:{quest_devices:[],step_schemas:[]};
 }
-));
+catch(err){
+gmScenarioEditorCatalogs[r.room_id]={quest_devices:[],step_schemas:[]};
+}
+}));
 gmMarkStaticLoaded('scenarioCatalogs');
 }
 
@@ -330,569 +420,24 @@ render();
 }
 
 async function loadGMLightStaticData(force){
-await Promise.all([loadObserved(force),loadQuestDevices(force)]);
+await Promise.all([loadObserved(force),loadQuestDevices(force),loadSidebarPresets(force)]);
 }
 
 async function loadGMViewData(force){
+await loadSidebarPresets(force);
 if(currentView==='audit')await loadAudit(force);
 else if(currentView==='timeline')await loadTimeline(force);
-else if(currentView==='scenarios')await Promise.all([loadRoomScenarios(force),loadQuestDevices(force),loadScenarioEditorCatalogs(force)]);
+else if(currentView==='scenarios'){
+await Promise.all([loadRoomScenarios(force),loadQuestDevices(force),loadScenarioEditorCatalogs(force)]);
+await ensureOpenScenarioEditorDetail();
+}
 else if(currentView==='profiles')await Promise.all([loadRoomProfiles(force),loadRoomScenarios(force)]);
-else if(currentView==='room')await Promise.all([loadRoomProfiles(force),loadRoomScenarios(force),loadQuestDevices(force)]);
-else if(currentView==='device_setup'||currentView==='devices'||currentView==='observed')await Promise.all([loadObserved(force),loadQuestDevices(force)]);
-else if(currentView==='dashboard')await Promise.all([loadObserved(force),loadQuestDevices(force)]);
+else if(currentView==='room')await Promise.all([loadRoomProfilesForRoom(currentRoomId,force),loadRoomScenariosForRoom(currentRoomId,force),loadQuestDevices(force)]);
+else if(currentView==='device_setup'||currentView==='observed')await Promise.all([loadObserved(force),loadQuestDevices(force)]);
+else if(currentView==='devices')await Promise.all([loadObserved(force),loadQuestDevices(force),loadHardwareIoStatus(false)]);
 }
 
 async function loadGMStaticData(force){
 await loadGMLightStaticData(force);
 await loadGMViewData(force);
-}
-
-function mergeGMSystemSummary(data){
-if(!data||!data.summary)return false;
-if(!gmState||typeof gmState!=='object'){
-gmState={ok:true,rooms:[],devices:[],issues:[]};
-}
-gmState.ok=data.ok!==false;
-if(Object.prototype.hasOwnProperty.call(data,'generation'))gmState.generation=data.generation;
-gmState.summary=data.summary;
-return true;
-}
-
-async function loadGMSystemSummaryOnly(forceRender){
-if(!gmState){
-await loadGMFullSnapshot(true,true);
-return;
-}
-const data=await api.gm.systemSummaryJson();
-if(!mergeGMSystemSummary(data)){
-syncGMSummaryStatus();
-if(forceRender)render();
-else renderRightSidebar(true);
-return;
-}
-syncGMSummaryStatus();
-if(forceRender){
-render();
-return;
-}
-if(shouldDeferAutoRender()){
-gmAutoRenderDeferred=true;
-renderRightSidebar(true);
-return;
-}
-renderRightSidebar(true);
-}
-
-async function loadGMFullSnapshot(silent,forceRender,opts){
-opts=opts||{};
-const requestSeq=++gmSnapshotRequestSeq;
-if(!silent){
-setStatus('loading','state-unknown');
-}
-try{
-const data=await api.gm.stateJson();
-if(requestSeq!==gmSnapshotRequestSeq)return;
-gmState=data;
-syncRoomTimerBaselines();
-loadGMVersions().then(v=>{gmLastVersions=v;}).catch(()=>{});
-applyInitialOperatorRoute();
-const shouldRenderBeforeStatic=currentView==='dashboard'||currentView==='rooms';
-const staticLoadPromise=loadGMStaticData(!silent||!!forceRender||!!opts.forceStatic);
-if(shouldRenderBeforeStatic){
-if(silent&&!forceRender&&shouldDeferAutoRender()){
-gmAutoRenderDeferred=true;
-renderRightSidebar(false);
-}
-else{
-gmAutoRenderDeferred=false;
-render();
-}
-}
-await staticLoadPromise;
-if(requestSeq!==gmSnapshotRequestSeq)return;
-if(silent&&!forceRender&&shouldDeferAutoRender()){
-gmAutoRenderDeferred=true;
-renderRightSidebar(false);
-return;
-}
-gmAutoRenderDeferred=false;
-render();
-}
-catch(err){
-setStatus('load failed','state-fault');
-
-document.getElementById('gm_content').innerHTML='<div class="card empty">Failed to load GM state</div>';
-renderRightSidebar(false);
-}
-}
-
-function syncRoomTimerBaselines(){
-const now=performance.now();
-(gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[]).forEach(room=>{
-room._timer_synced_at_ms=now;
-});
-}
-
-const ROOM_RUNTIME_FIELDS=[
-'runtime_schema_version',
-'session_present','session_state','timer_state','timer_duration_ms','timer_remaining_ms',
-'hint_active','hint_sent_count','hint_message',
-'selected_profile_id','selected_profile_name','selected_profile_scenario_id',
-'selected_scenario_id','selected_scenario_name',
-'running_scenario_id','running_scenario_name','running_scenario_generation',
-'scenario_runtime_state','scenario_total_steps','scenario_done_steps','scenario_current_step_text',
-'scenario_wait_type','scenario_wait_until_ms','scenario_wait_started_at_ms',
-'scenario_wait_summary',
-'scenario_wait_events',
-'scenario_wait_flags',
-'scenario_wait_operator_prompt','scenario_wait_operator_label',
-'scenario_wait_operator_skip_allowed','scenario_wait_operator_skip_label',
-'scenario_operator_message',
-'scenario_device_ids','scenario_device_count',
-'scenario_flags',
-'scenario_branches',
-'scenario_last_error',
-'asset_prepare_state','asset_audio_total','asset_audio_ready',
-'asset_audio_missing','asset_audio_bad','asset_audio_unsupported',
-'asset_audio_io_error','asset_audio_unknown'
-];
-
-const ROOM_RUNTIME_CLOCK_FIELDS=new Set([
-'timer_remaining_ms',
-'scenario_wait_until_ms',
-'scenario_wait_started_at_ms'
-]);
-
-function mergeRoomRuntimeState(roomId,data){
-if(!gmState||!Array.isArray(gmState.rooms)||!roomId||!data)return false;
-const room=gmState.rooms.find(r=>(r.room_id||'')===roomId);
-if(!room)return false;
-ROOM_RUNTIME_FIELDS.forEach(key=>{
-if(Object.prototype.hasOwnProperty.call(data,key))room[key]=data[key];
-});
-room._timer_synced_at_ms=performance.now();
-return true;
-}
-
-async function loadGMRoomsRuntimeOnly(roomIds,forceRender){
-const rooms=gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[];
-if(!gmState||!rooms.length){
-await loadGMFullSnapshot(true,true);
-return;
-}
-const ids=Array.from(new Set((Array.isArray(roomIds)&&roomIds.length?roomIds:rooms.map(room=>room&&room.room_id)).filter(roomId=>roomId&&roomById(roomId))));
-if(!ids.length){
-await loadGMSystemSummaryOnly(forceRender);
-return;
-}
-const results=await Promise.all(ids.map(async roomId=>{
-const requestSeq=(gmRuntimeRequestSeq[roomId]||0)+1;
-gmRuntimeRequestSeq[roomId]=requestSeq;
-const data=await api.room.runtimeJson(roomId,'summary');
-return {roomId,requestSeq,data};
-}));
-let merged=false;
-results.forEach(result=>{
-if(gmRuntimeRequestSeq[result.roomId]!==result.requestSeq)return;
-if(mergeRoomRuntimeState(result.roomId,result.data))merged=true;
-});
-if(!merged){
-await loadGMSystemSummaryOnly(forceRender);
-return;
-}
-syncGMSummaryStatus();
-if(forceRender){
-render();
-return;
-}
-if(shouldDeferAutoRender()){
-gmAutoRenderDeferred=true;
-renderRightSidebar(true);
-return;
-}
-render();
-}
-
-function updateVisibleRoomClocks(){
-const rooms=gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[];
-if(!rooms.length)return;
-document.querySelectorAll('[data-room-clock]').forEach(el=>{
-const roomId=el.dataset.roomClock||'';
-const room=rooms.find(item=>(item.room_id||'')===roomId);
-if(!room)return;
-const text=fmtClock(roomTimerDisplayMs(room));
-if(el.textContent!==text)el.textContent=text;
-});
-}
-
-function roomRuntimeRenderKey(room){
-const key={};
-ROOM_RUNTIME_FIELDS.forEach(field=>{
-if(ROOM_RUNTIME_CLOCK_FIELDS.has(field))return;
-key[field]=room[field]===undefined?null:room[field];
-});
-return JSON.stringify(key);
-}
-
-function renderRoomRuntimePanel(roomId){
-if(currentView!=='room'||currentRoomId!==roomId||roomTab!=='control')return false;
-const room=roomById(roomId);
-if(!room)return false;
-const panels=Array.from(document.querySelectorAll('[data-room-control-runtime]'));
-const panel=panels.find(el=>(el.dataset.roomControlRuntime||'')===roomId);
-if(!panel)return false;
-const key=roomRuntimeRenderKey(room);
-if(gmRuntimeRenderKeys[roomId]===key)return true;
-gmRuntimeRenderKeys[roomId]=key;
-panel.innerHTML=`${renderRoomOperatorConsole(room)}${isAdmin()?renderRoomScenarioControl(room):''}`;
-return true;
-}
-
-async function loadGMRuntimeOnly(roomId,forceFullRender){
-if(!roomId){
-await loadGMSystemSummaryOnly(false);
-return;
-}
-if(!gmState){
-await loadGMFullSnapshot(true,true);
-return;
-}
-if(!Array.isArray(gmState.rooms)){
-await loadGMFullSnapshot(true,true);
-return;
-}
-const requestSeq=(gmRuntimeRequestSeq[roomId]||0)+1;
-gmRuntimeRequestSeq[roomId]=requestSeq;
-const data=await api.room.runtimeJson(roomId);
-if(gmRuntimeRequestSeq[roomId]!==requestSeq)return;
-if(!mergeRoomRuntimeState(roomId,data)){
-await loadGMSystemSummaryOnly(false);
-return;
-}
-if(!forceFullRender&&renderRoomRuntimePanel(roomId))return;
-render();
-}
-
-let gmRuntimePollBusy=false;
-let gmStatePollBusy=false;
-
-async function pollActiveRoomRuntime(){
-if(gmRuntimePollBusy)return;
-if(currentView!=='room'||roomTab!=='control'||!currentRoomId||!gmState)return;
-gmRuntimePollBusy=true;
-try{
-await loadGMRuntimeOnly(currentRoomId,false);
-}
-catch(err){
-setGMStatus('Runtime refresh failed','gm-bad');
-}
-finally{
-gmRuntimePollBusy=false;
-}
-}
-
-async function pollGMStateSnapshot(){
-if(gmStatePollBusy)return;
-gmStatePollBusy=true;
-try{
-const versions=await loadGMVersions();
-await refreshGMByVersions(versions);
-}
-finally{
-gmStatePollBusy=false;
-}
-}
-
-async function refreshGMByVersions(versions){
-if(!versions)return;
-const prev=gmLastVersions;
-if(!prev){
-gmLastVersions=versions;
-return;
-}
-if(gmVersionsKey(versions)===gmVersionsKey(prev))return;
-gmLastVersions=versions;
-if(gmVersionChanged(prev,versions,['rooms'])){
-await loadGMFullSnapshot(true,true,{forceStatic:true});
-return;
-}
-let shouldRender=false;
-let shouldPatchSidebar=false;
-if(gmVersionChanged(prev,versions,['devices','ingest'])){
-const deviceRefreshes=[loadObserved(true),loadQuestDevices(true)];
-if(currentView==='scenarios'&&isAdmin())deviceRefreshes.push(loadScenarioEditorCatalogs(true));
-await Promise.all(deviceRefreshes);
-shouldPatchSidebar=true;
-shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
-if(currentView==='scenarios'&&isAdmin())shouldRender=true;
-}
-if(gmVersionChanged(prev,versions,['scenarios'])){
-await loadRoomScenarios(true);
-shouldRender=shouldRender||gmCurrentViewUsesScenarioStatic();
-}
-if(gmVersionChanged(prev,versions,['profiles'])){
-await loadRoomProfiles(true);
-shouldRender=shouldRender||gmCurrentViewUsesProfileStatic();
-}
-if(gmVersionChanged(prev,versions,['session','runtime'])){
-if(currentView==='room'&&roomTab==='control'&&currentRoomId){
-await loadGMRuntimeOnly(currentRoomId,false);
-}
-else if(currentView==='dashboard'||currentView==='rooms'){
-await loadGMRoomsRuntimeOnly([],false);
-return;
-}
-else if(!shouldRender){
-await loadGMSystemSummaryOnly(false);
-return;
-}
-}
-if(shouldRender){
-if(shouldDeferAutoRender()){
-gmAutoRenderDeferred=true;
-renderRightSidebar(shouldPatchSidebar);
-}
-else{
-render();
-}
-}
-else if(shouldPatchSidebar){
-renderRightSidebar(true);
-}
-}
-
-async function refreshGMByInvalidationSlices(items){
-const values=Array.isArray(items)?items.filter(Boolean):[];
-const slices=values.map(item=>typeof item==='string'?item:String(item.slice||'')).filter(Boolean);
-const roomScenarioTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.scenarios'?(item.target_id||''):'').filter(Boolean)));
-const roomProfileTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.profiles'?(item.target_id||''):'').filter(Boolean)));
-const roomRuntimeTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.runtime'?(item.target_id||''):'').filter(Boolean)));
-if(!slices.length)return;
-if(slices.includes('full.snapshot')||slices.includes('room.catalog')){
-await loadGMFullSnapshot(true,true,{forceStatic:true});
-return;
-}
-const needsDeviceCatalog=slices.includes('devices.catalog');
-const needsDeviceRuntime=slices.includes('devices.runtime');
-const needsScenarioCatalog=slices.includes('room.scenarios');
-const needsProfileCatalog=slices.includes('room.profiles');
-const needsRoomRuntime=slices.includes('room.runtime');
-const needsSystemSummary=slices.includes('system.summary');
-let shouldRender=false;
-let shouldPatchSidebar=false;
-const localRuntimeRefreshUntil=(currentRoomId&&gmLocalRuntimeRefreshUntil[currentRoomId])||0;
-const localRuntimeRefreshActive=
-currentView==='room'&&roomTab==='control'&&currentRoomId&&Date.now()<localRuntimeRefreshUntil;
-
-if(needsDeviceCatalog){
-if(isAdmin()){
-await Promise.all([loadQuestDevices(true),loadScenarioEditorCatalogs(true)]);
-}
-else{
-await loadQuestDevices(true);
-}
-shouldPatchSidebar=true;
-shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
-}
-if(needsDeviceRuntime){
-await loadObserved(true);
-shouldPatchSidebar=true;
-shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
-}
-if(needsScenarioCatalog){
-if(roomScenarioTargets.length){
-await Promise.all(roomScenarioTargets.map(roomId=>loadRoomScenariosForRoom(roomId,true)));
-}
-else{
-await loadRoomScenarios(true);
-}
-shouldRender=shouldRender||gmCurrentViewUsesScenarioStatic();
-}
-if(needsProfileCatalog){
-if(roomProfileTargets.length){
-await Promise.all(roomProfileTargets.map(roomId=>loadRoomProfilesForRoom(roomId,true)));
-}
-else{
-await loadRoomProfiles(true);
-}
-shouldRender=shouldRender||gmCurrentViewUsesProfileStatic();
-}
-if(needsRoomRuntime||needsSystemSummary){
-const localRuntimeTargetMatches=!roomRuntimeTargets.length||
-(roomRuntimeTargets.length===1&&roomRuntimeTargets[0]===currentRoomId);
-if(localRuntimeRefreshActive&&localRuntimeTargetMatches){
-return;
-}
-if(roomRuntimeTargets.length===1&&roomRuntimeTargets[0]&&roomById(roomRuntimeTargets[0])){
-await loadGMRuntimeOnly(roomRuntimeTargets[0],false);
-}
-else if(currentView==='room'&&roomTab==='control'&&currentRoomId){
-await loadGMRuntimeOnly(currentRoomId,false);
-}
-else if(needsRoomRuntime&&(currentView==='dashboard'||currentView==='rooms')){
-await loadGMRoomsRuntimeOnly(roomRuntimeTargets,false);
-}
-else{
-await loadGMSystemSummaryOnly(false);
-}
-return;
-}
-if(shouldRender){
-if(shouldDeferAutoRender()){
-gmAutoRenderDeferred=true;
-renderRightSidebar(shouldPatchSidebar);
-}
-else{
-render();
-}
-}
-else if(shouldPatchSidebar){
-renderRightSidebar(true);
-}
-}
-
-async function refreshAfterRuntimeAction(roomId,forceFullRender){
-clearTransientFieldDirty();
-await loadGMRuntimeOnly(roomId,forceFullRender);
-if(roomId)gmLocalRuntimeRefreshUntil[roomId]=Date.now()+400;
-}
-
-async function runManualDeviceCommand(deviceId,commandId){
-if(!deviceId||!commandId)throw new Error('Manual button is incomplete');
-setGMStatus('Triggering button...');
-const command=scenarioCommandById(deviceId,commandId);
-const body={device_id:deviceId,command_id:commandId};
-if(command&&command.default_args&&typeof command.default_args==='object'){
-body.params=command.default_args;
-}
-const res=await api.device.runCommand(body.device_id,body.command_id,body.params);
-await gmExpectOk(res);
-setGMStatus('Button sent','gm-ok');
-}
-
-async function createRoomFromPrompt(){
-if(!isAdmin())return;
-const name=(prompt('Room name')||'').trim();
-if(!name)return;
-const roomId=slugifyId(name,'room');
-setGMStatus('Saving room...');
-const res=await api.room.save({room_id:roomId,name});
-await gmExpectOk(res);
-clearTransientFieldDirty();
-await loadGMFullSnapshot(true,true);
-if(typeof window.__gmRefreshManualSidebar==='function'){
-await window.__gmRefreshManualSidebar();
-}
-setGMStatus('Room saved','gm-ok');
-}
-
-async function deleteRoom(roomId,confirmHandled){
-if(!isAdmin())return;
-if(!roomId)throw new Error('Room is not selected');
-const room=roomById(roomId);
-const name=room&&(room.title||room.name)||roomId;
-if(!confirmHandled&&!confirm(`Delete room ${name}? This also removes profiles and scenarios for this room. Quest devices stay untouched.`))return;
-setGMStatus('Deleting room...');
-const res=await api.room.delete({room_id:roomId,delete_content:true});
-await gmExpectOk(res);
-currentRoomId='';
-delete currentRoomProfileId[roomId];
-delete currentRoomScenarioId[roomId];
-roomTab='control';
-clearTransientFieldDirty();
-await loadGMFullSnapshot(true,true);
-currentView='rooms';
-render();
-setGMStatus('Room deleted','gm-ok');
-}
-
-async function runRoomTimer(action,roomId){
-let res=null;
-setGMStatus('Updating timer...');
-if(action==='start'){
-const input=document.getElementById('gm_timer_minutes');
-const minutes=Number(input&&input.value);
-if(!Number.isFinite(minutes)||minutes<=0)throw new Error('Duration must be greater than 0');
-const durationMs=Math.round(minutes*60000);
-res=await api.room.timerStart(roomId,durationMs);
-}
-else if(action==='pause'){
-res=await api.room.timer(roomId,'pause');
-}
-else if(action==='resume'){
-res=await api.room.timer(roomId,'resume');
-}
-else if(action==='reset'){
-res=await api.room.timer(roomId,'reset');
-}
-else if(action==='finish'){
-res=await api.room.sessionFinish(roomId);
-}
-else if(action==='plus1'){
-res=await api.room.timerAdd(roomId,60000);
-}
-else if(action==='minus1'){
-res=await api.room.timerAdd(roomId,-60000);
-}
-else{
-throw new Error('Unsupported timer action');
-}
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
-clearTransientFieldDirty();
-await refreshAfterRuntimeAction(roomId,false);
-setGMStatus('Timer updated','gm-ok');
-}
-
-async function runRoomHint(action,roomId){
-if(action==='send'){
-const input=document.getElementById('gm_hint_input');
-const message=(input&&input.value||'').trim();
-if(!message)throw new Error('Hint message is empty');
-setGMStatus('Sending hint...');
-const res=await api.room.hintSend({room_id:roomId,message});
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
-}
-else if(action==='clear'){
-setGMStatus('Clearing hint...');
-const res=await api.room.hintClear(roomId);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
-}
-else{
-throw new Error('Unsupported hint action');
-}
-clearTransientFieldDirty();
-await refreshAfterRuntimeAction(roomId,true);
-setGMStatus('Hint updated','gm-ok');
-}
-
-async function selectRoomProfile(roomId,profileId){
-if(!roomId||!profileId)throw new Error('Game mode selection is incomplete');
-setGMStatus('Selecting game mode...');
-const res=await api.room.profileSelect({room_id:roomId,profile_id:profileId});
-await gmExpectOk(res);
-currentRoomProfileId[roomId]=profileId;
-clearTransientFieldDirty();
-await refreshAfterRuntimeAction(roomId,false);
-setGMStatus('Game mode selected','gm-ok');
-}
-
-async function runRoomGame(action,roomId,confirmHandled){
-if(!roomId||!action)throw new Error('Game command is incomplete');
-if(!confirmHandled&&action==='stop'&&!confirm('Stop this game session?'))return;
-if(!confirmHandled&&action==='reset'&&!confirm('Reset this game session?'))return;
-setGMStatus('Updating game...');
-const res=await api.room.game(roomId,action);
-if(!res.ok){
-throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
-}
-clearTransientFieldDirty();
-await refreshAfterRuntimeAction(roomId,false);
-setGMStatus('Game updated','gm-ok');
 }

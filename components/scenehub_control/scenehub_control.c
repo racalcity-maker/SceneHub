@@ -5,8 +5,21 @@
 
 #include "gm_api.h"
 #include "gm_control.h"
+#include "orch_room_view.h"
 #include "orchestrator_timeline.h"
 #include "scenehub_state.h"
+
+static bool s_persistence_enabled = true;
+
+void scenehub_control_set_persistence_enabled_for_test(bool enabled)
+{
+    s_persistence_enabled = enabled;
+}
+
+bool scenehub_control_persistence_enabled(void)
+{
+    return s_persistence_enabled;
+}
 
 void scenehub_control_copy(char *dst, size_t dst_size, const char *src)
 {
@@ -196,6 +209,53 @@ const char *scenehub_control_status_str(scenehub_control_status_t status)
     }
 }
 
+static esp_err_t scenehub_control_preflight_room_action(const char *room_id,
+                                                        const char *action_id)
+{
+    orch_room_entry_t room = {0};
+    esp_err_t err = ESP_OK;
+
+    if (!room_id || !room_id[0] || !action_id || !action_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strcmp(action_id, "start_game") != 0) {
+        return ESP_OK;
+    }
+    err = orchestrator_registry_get_room(room_id, &room);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (room.health == ORCH_HEALTH_FAULT) {
+        return GM_CTRL_ERR_ROOM_UNHEALTHY;
+    }
+    return ESP_OK;
+}
+
+static bool scenehub_control_try_capture_start_game_validation_error(const char *room_id,
+                                                                     const char *action_id,
+                                                                     esp_err_t err,
+                                                                     scenehub_control_result_t *out_result)
+{
+    gm_room_state_view_t state = {0};
+    if (!out_result || err != ESP_ERR_INVALID_ARG || !room_id || !room_id[0] || !action_id ||
+        strcmp(action_id, "start_game") != 0) {
+        return false;
+    }
+    if (gm_api_get_room_state(room_id, &state) != ESP_OK) {
+        return false;
+    }
+    if (!state.scenario_last_error[0]) {
+        return false;
+    }
+    scenehub_control_set_result(out_result,
+                                SCENEHUB_CONTROL_STATUS_REJECTED,
+                                err,
+                                false,
+                                "scenario_invalid",
+                                state.scenario_last_error);
+    return true;
+}
+
 esp_err_t scenehub_control_execute_room_action(const char *source,
                                                const char *room_id,
                                                const char *action_id,
@@ -206,13 +266,25 @@ esp_err_t scenehub_control_execute_room_action(const char *source,
         return err;
     }
 
-    err = gm_control_execute_room_action_with_source(source, room_id, action_id);
+    err = scenehub_control_preflight_room_action(room_id, action_id);
+    if (err == ESP_OK) {
+        err = gm_control_execute_room_action_with_source(source, room_id, action_id);
+    }
     switch (err) {
     case ESP_OK:
         scenehub_control_finish_success_with_invalidation(out_result,
                                                           SCENEHUB_STATE_SLICE_ROOM_RUNTIME,
                                                           room_id,
                                                           "room_action");
+        return ESP_OK;
+    case ESP_ERR_INVALID_ARG:
+        if (scenehub_control_try_capture_start_game_validation_error(room_id,
+                                                                     action_id,
+                                                                     err,
+                                                                     out_result)) {
+            return ESP_OK;
+        }
+        scenehub_control_fill_common_error(out_result, err);
         return ESP_OK;
     case GM_CTRL_ERR_ROOM_NOT_FOUND:
         scenehub_control_set_result(out_result,
@@ -246,8 +318,13 @@ esp_err_t scenehub_control_execute_room_action(const char *source,
                                     "not_supported",
                                     "Action not supported");
         return ESP_OK;
-    case ESP_ERR_INVALID_ARG:
-        scenehub_control_fill_common_error(out_result, err);
+    case GM_CTRL_ERR_ROOM_UNHEALTHY:
+        scenehub_control_set_result(out_result,
+                                    SCENEHUB_CONTROL_STATUS_REJECTED,
+                                    err,
+                                    false,
+                                    "room_unhealthy",
+                                    "Room has active device or system issues");
         return ESP_OK;
     default:
         scenehub_control_set_result(out_result,

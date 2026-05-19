@@ -195,7 +195,7 @@ Current device capacity:
 - MQTT broker: `20` simultaneous clients.
 - saved Quest Devices: `20`, excluding built-in system devices when APIs request `include_system=false`.
 - observed physical clients: `20`, tied to `QUEST_DEVICE_MAX_DEVICES`.
-- room/session snapshots: `4`, tied to `ROOM_CATALOG_MAX_ROOMS`.
+- room/session snapshots: `2`, tied to `ROOM_CATALOG_MAX_ROOMS`.
 
 ### `GET /api/gm/devices`
 
@@ -816,9 +816,11 @@ Current room scenario limits:
 
 `END_GAME` finishes the game timer and marks the game complete. It does not stop audio automatically; use a separate `DEVICE_COMMAND` to `system_audio.stop` when silence is required. It also does not force local relay/MOSFET/IO safe-off; use explicit `system_relay`, `system_mosfet` or `system_io` commands for finale cleanup.
 
-Runtime responses include branch progress when a scenario is running. Branch and
-step status are controller-owned; browser and desktop clients should render
-them directly instead of inferring `done/current/waiting` from indexes:
+Runtime responses include branch progress when a scenario is running. Branch
+runtime is controller-owned; browser and desktop clients should render branch
+state directly instead of inferring `done/current/waiting` from indexes.
+Static branch `steps[]` remain part of the scenario catalog rather than being
+duplicated into each live runtime payload:
 
 ```json
 {
@@ -841,12 +843,7 @@ them directly instead of inferring `done/current/waiting` from indexes:
       "failed_step_index": -1,
       "current_step_state": "waiting",
       "state": "waiting",
-      "wait_type": "any_events",
-      "steps": [
-        { "index": 0, "global_index": 0, "state": "done" },
-        { "index": 1, "global_index": 1, "state": "done" },
-        { "index": 2, "global_index": 2, "state": "waiting" }
-      ]
+      "wait_type": "any_events"
     }
   ]
 }
@@ -862,8 +859,9 @@ Step state values:
 - `skipped` reserved for future use
 
 Reactive branches use the same `scenario_branches[]` array with `type:
-"reactive"`. They still expose `done_steps`, `total_steps` and `steps[].state`,
-but an idle trigger-listening branch may legitimately have no `current` step.
+"reactive"`. They still expose `done_steps`, `total_steps` and live wait/state
+metadata, but an idle trigger-listening branch may legitimately have no
+`current` step.
 
 ### `GET /api/gm/room/scenarios?room_id=room_1`
 
@@ -1092,14 +1090,16 @@ Response:
 ### `GET /api/gm/room/runtime?room_id=room_1`
 
 Returns room-scoped runtime state used by browser and desktop clients for live
-scenario rendering.
+scenario rendering. Branch runtime metadata is live here; branch `steps[]`
+remain part of the static scenario catalog and are not duplicated into this
+payload.
 
 Query options:
 
 - default: full runtime detail for the active room-control view
-- `detail=summary`: lighter runtime payload for dashboard/rooms refresh; omits
-  heavy arrays such as branch step runtime, runtime flags, wait-event groups,
-  issue-id lists, and asset readiness detail
+- `detail=summary`: dedicated lightweight summary path for dashboard/rooms
+  refresh; omits heavy arrays such as runtime flags, wait-event groups,
+  issue-id lists, branch runtime metadata, and asset readiness detail
 
 Relevant runtime fields:
 
@@ -1143,14 +1143,36 @@ Example:
       "current_step_state": "waiting",
       "state": "waiting",
       "wait_type": "event",
-      "wait_until_ms": 0,
-      "steps": [
-        { "index": 0, "global_index": 0, "state": "done" },
-        { "index": 1, "global_index": 1, "state": "done" },
-        { "index": 2, "global_index": 2, "state": "waiting" },
-        { "index": 3, "global_index": 3, "state": "pending" },
-        { "index": 4, "global_index": 4, "state": "pending" }
-      ]
+      "wait_until_ms": 0
+    }
+  ]
+}
+```
+
+### `GET /api/gm/rooms/runtime`
+
+Returns a bulk room-runtime summary payload for multi-room refreshes so the UI
+does not need `N` parallel `/api/gm/room/runtime?detail=summary` requests.
+
+Example:
+
+```json
+{
+  "ok": true,
+  "runtime_schema_version": 1,
+  "rooms": [
+    {
+      "room_id": "room_1",
+      "session_present": true,
+      "session_state": "running",
+      "timer_state": "running",
+      "timer_duration_ms": 3600000,
+      "timer_remaining_ms": 2400000,
+      "running_scenario_id": "easy_flow",
+      "running_scenario_generation": 12,
+      "scenario_runtime_state": "waiting",
+      "scenario_wait_type": "event",
+      "scenario_device_count": 3
     }
   ]
 }

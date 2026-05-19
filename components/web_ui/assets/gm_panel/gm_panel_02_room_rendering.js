@@ -7,13 +7,17 @@ uiButton({label:'Reset game',action:'room.game',kind:'danger',dataset:{op:'reset
 ]);
 }
 
+function roomCanStartGame(room,selected){
+return !!selected&&selected.valid!==false&&roomDerivedHealth(room)!=='fault';
+}
+
 function renderRoomProfileControl(room){
 const profiles=roomProfiles(room.room_id);
 const selectedId=roomSelectedProfileId(room.room_id)||room.selected_profile_id||'';
 const selected=profiles.find(p=>p.id===selectedId)||null;
 const selectedName=room.selected_profile_name||((selected&&selected.id===selectedId)?selected.name:'');
 const selectedScenarioId=room.selected_profile_scenario_id||((selected&&selected.scenario_id)||'');
-const canStart=!!selected&&selected.valid!==false;
+const canStart=roomCanStartGame(room,selected);
 return `<div class='card'><h2 class='section-title'>Game mode</h2>${profiles.length?`<label class='field-stack'><span>Selected game mode</span><select class='scenario-select' data-room-profile-room='${esc(room.room_id)}'><option value='' ${
 selected?'':'selected'}
 >Select game mode</option>${
@@ -34,10 +38,9 @@ const scenarioId=room.selected_profile_scenario_id||((selected&&selected.scenari
 const scenario=roomSelectedScenarioObject(room);
 const runtime=room.scenario_runtime_state||'idle';
 const waitType=room.scenario_wait_type||'none';
-const hasBranchRuntime=Array.isArray(room.scenario_branches)&&room.scenario_branches.length>1;
 const runningName=room.running_scenario_name||scenarioDisplayName(room.room_id,room.running_scenario_id||scenarioId,'none');
 const currentStepText=roomCurrentScenarioText(room)||'';
-const canStart=!!selected&&selected.valid!==false;
+const canStart=roomCanStartGame(room,selected);
 const sessionPresent=!!room.session_present||['running','paused','finished'].includes(room.session_state||'');
 const canStop=sessionPresent&&room.session_state!=='finished';
 const canReset=sessionPresent;
@@ -45,7 +48,9 @@ const canPause=room.timer_state==='running';
 const canResume=room.timer_state==='paused';
 const canAdjust=(Number(room.timer_duration_ms)||0)>0||(Number(room.timer_remaining_ms)||0)>0;
 const canApprove=!!(room.selected_scenario_id||room.running_scenario_id)&&runtime==='waiting'&&waitType==='operator';
-const canSkipWait=!hasBranchRuntime&&!!(room.selected_scenario_id||room.running_scenario_id)&&runtime==='waiting'&&waitType!=='none'&&!!room.scenario_wait_operator_skip_allowed;
+const skippableBranch=scenarioSkippableWaitBranch(room);
+const skipBranchId=(skippableBranch&&skippableBranch.id)||'';
+const canSkipWait=!!(room.selected_scenario_id||room.running_scenario_id)&&runtime==='waiting'&&waitType!=='none'&&!!room.scenario_wait_operator_skip_allowed;
 const approveLabel=room.scenario_wait_operator_label||'Continue';
 const skipWaitLabel=room.scenario_wait_operator_skip_label||'Skip wait';
 const waitPrompt=room.scenario_wait_operator_prompt||scenarioWaitText(room);
@@ -74,16 +79,16 @@ esc(room.scenario_operator_message)}
 esc(room.scenario_last_error)}
 </div>`:''}<div style='height:12px'></div>${uiActions([
 uiButton({label:approveLabel,kind:'approve',action:'room.scenario.runtime',dataset:{op:'approve','room-id':room.room_id},disabled:!canApprove}),
-canSkipWait?uiButton({label:skipWaitLabel,action:'room.scenario.runtime',dataset:{op:'next','room-id':room.room_id},confirm:'Force complete current scenario wait?'}):'',
+canSkipWait?uiButton({label:skipWaitLabel,action:'room.scenario.runtime',dataset:{op:'next','room-id':room.room_id,'branch-id':skipBranchId},confirm:'Force complete current scenario wait?'}):'',
 uiButton({label:'Pause',action:'room.timer',dataset:{op:'pause','room-id':room.room_id},disabled:!canPause}),
 uiButton({label:'Resume',action:'room.timer',dataset:{op:'resume','room-id':room.room_id},disabled:!canResume}),
 uiButton({label:'+1 min',action:'room.timer',dataset:{op:'plus1','room-id':room.room_id},disabled:!canAdjust}),
 uiButton({label:'-1 min',action:'room.timer',dataset:{op:'minus1','room-id':room.room_id},disabled:!canAdjust}),
-])}<details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'>${uiButton({label:'Start timer',action:'room.timer',dataset:{op:'start','room-id':room.room_id}})}</div></details></div></div><div class='card'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario)}</div><div style='height:12px'></div>`;
+])}<details class='scenario-advanced'><summary>Manual timer start</summary><div class='timer-start'><input id='gm_timer_minutes' type='number' min='1' step='1' value='${startMinutes}' placeholder='Minutes' aria-label='Duration in minutes'>${uiButton({label:'Start timer',action:'room.timer',dataset:{op:'start','room-id':room.room_id}})}</div></details></div></div><div class='card' data-room-scenario-progress='${esc(room.room_id)}'><h2 class='section-title'>Scenario progress</h2>${renderScenarioProgress(room,scenario)}</div><div style='height:12px'></div>`;
 }
 
 function renderRoomScenarioControl(room){
-const scenarios=roomScenarios(room.room_id);
+const scenarios=scenarioSummariesByRoom(room.room_id);
 const selectedId=currentRoomScenarioId[room.room_id]||room.selected_scenario_id||'';
 const selected=scenarios.find(s=>s.id===selectedId)||null;
 const selectedName=room.selected_scenario_name||((selected&&selected.id===room.selected_scenario_id)?selected.name:'');
@@ -127,7 +132,7 @@ const root=document.getElementById('gm_content');
 if(!room||!root)return;
 if(root.querySelector('[data-room-operator-console]'))return;
 const first=root.querySelector('.card');
-if(first)first.insertAdjacentHTML('beforebegin',renderRoomOperatorConsole(room)+(isAdmin()?renderRoomScenarioControl(room):''));
+if(first)first.insertAdjacentHTML('beforebegin',`<div data-room-control-runtime='${esc(room.room_id)}'><div data-room-runtime-console='1'>${renderRoomOperatorConsole(room)}</div>${isAdmin()?`<div data-room-runtime-admin='1'>${renderRoomScenarioControl(room)}</div>`:''}</div>`);
 }
 
 function tabs(active,names,scope){

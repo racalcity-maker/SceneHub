@@ -1,8 +1,9 @@
 # Quest Device setup
 
 Quest Device is the saved SceneHub-side description of one physical client or
-one built-in system service. It stores commands and events that Room Scenarios
-can use through `DEVICE_COMMAND` and `WAIT_DEVICE_EVENT`.
+one built-in system service. Flat custom devices may store commands and events
+that Room Scenarios can use through `DEVICE_COMMAND` and `WAIT_DEVICE_EVENT`.
+SceneHub Node devices use compact manifests instead of expanded command rows.
 
 ## Model
 
@@ -22,8 +23,8 @@ Minimal command:
 
 ```json
 {
-  "id": "relay_1_pulse",
-  "label": "Relay 1 pulse",
+  "id": "relay.pulse",
+  "label": "Relay pulse",
   "capability": "relay",
   "command": "relay.pulse",
   "default_args": {
@@ -71,8 +72,8 @@ Minimal event:
 
 ```json
 {
-  "id": "input_1_pressed",
-  "label": "Input 1 pressed",
+  "id": "input.pressed",
+  "label": "Input pressed",
   "capability": "input",
   "event": "input.pressed",
   "match": {
@@ -92,6 +93,23 @@ Fields:
 At runtime, `WAIT_DEVICE_EVENT` currently waits on the event name and the
 Quest Device `client_id`. Argument-level `match` is stored for the contract and
 UI, and should be used by later matching logic when needed.
+
+## SceneHub Node Compact Manifest
+
+SceneHub Node devices must use `device_description.manifest_version=2` with
+`format="compact_resources"` and
+`capability_contract="scenehub.node.compact.v1"`.
+
+Compact node manifests store:
+
+- `resources`: relay, MOSFET, input, output and LED strip resources.
+- `command_templates`: stable scenario `command_id` templates such as
+  `relay.set`, `mosfet.effect`, `io.set` and `led.effect`.
+- `event_templates`: stable wait templates.
+- `schemas`: parameter schemas used by the scenario editor.
+
+For compact nodes, channel/effect selection is stored in scenario `params`.
+Do not generate per-channel command ids such as `relay_2_set`.
 
 ## System Audio
 

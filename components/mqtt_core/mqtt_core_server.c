@@ -129,7 +129,7 @@ static void accept_task(void *param)
 {
     (void)param;
     while (1) {
-        struct sockaddr_in6 source_addr;
+        struct sockaddr_in source_addr;
         socklen_t addr_len = sizeof(source_addr);
         int sock = accept(s_listen_sock, (struct sockaddr *)&source_addr, &addr_len);
         if (sock < 0) {
@@ -212,6 +212,7 @@ esp_err_t mqtt_core_start_server(int port)
             .name = "mqtt_sweep",
         };
         esp_timer_create(&args, &s_sweep_timer);
+        ESP_LOGI(TAG, "created mqtt sweep timer handle=%p", (void *)s_sweep_timer);
         esp_timer_start_periodic(s_sweep_timer, MQTT_SWEEP_PERIOD_US);
     }
 

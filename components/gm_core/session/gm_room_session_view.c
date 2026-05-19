@@ -4,6 +4,41 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_attr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+#include "freertos/semphr.h"
+
+static EXT_RAM_BSS_ATTR gm_room_scenario_runtime_semantics_t s_runtime_semantics_scratch;
+static EXT_RAM_BSS_ATTR gm_room_scenario_branch_semantics_t s_branch_semantics_scratch;
+static EXT_RAM_BSS_ATTR char
+    s_device_ref_scratch[ROOM_SCENARIO_MAX_STEPS][ROOM_SCENARIO_DEVICE_ID_MAX_LEN];
+static SemaphoreHandle_t s_view_scratch_mutex = NULL;
+static StaticSemaphore_t s_view_scratch_mutex_storage;
+static portMUX_TYPE s_view_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_err_t gm_room_session_view_scratch_lock(void)
+{
+    if (!s_view_scratch_mutex) {
+        portENTER_CRITICAL(&s_view_scratch_mutex_init_lock);
+        if (!s_view_scratch_mutex) {
+            s_view_scratch_mutex = xSemaphoreCreateMutexStatic(&s_view_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_view_scratch_mutex_init_lock);
+    }
+    if (!s_view_scratch_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_view_scratch_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void gm_room_session_view_scratch_unlock(void)
+{
+    if (s_view_scratch_mutex) {
+        xSemaphoreGive(s_view_scratch_mutex);
+    }
+}
+
 static void gm_room_session_view_copy(char *dst, size_t dst_size, const char *src)
 {
     if (!dst || dst_size == 0) {
@@ -16,56 +51,41 @@ static void gm_room_session_view_copy(char *dst, size_t dst_size, const char *sr
     snprintf(dst, dst_size, "%s", src);
 }
 
-static void gm_room_session_projection_add_device_id(gm_room_session_projection_view_t *out,
-                                                     const char *device_id)
-{
-    if (!out || !device_id || !device_id[0]) {
-        return;
-    }
-    for (uint8_t i = 0; i < out->scenario_device_count && i < ROOM_SCENARIO_MAX_STEPS; ++i) {
-        if (strcmp(out->scenario_device_ids[i], device_id) == 0) {
-            return;
-        }
-    }
-    if (out->scenario_device_count >= ROOM_SCENARIO_MAX_STEPS) {
-        return;
-    }
-    gm_room_session_view_copy(out->scenario_device_ids[out->scenario_device_count],
-                              sizeof(out->scenario_device_ids[out->scenario_device_count]),
-                              device_id);
-    out->scenario_device_count++;
-}
-
-static void gm_room_session_projection_collect_step_devices(
-    gm_room_session_projection_view_t *out,
-    const room_scenario_step_t *step)
-{
-    if (!out || !step) {
-        return;
-    }
-    switch (step->type) {
-    case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
-        gm_room_session_projection_add_device_id(out, step->data.device_command.device_id);
-        break;
-    case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT:
-        gm_room_session_projection_add_device_id(out, step->data.wait_device_event.device_id);
-        break;
-    default:
-        break;
-    }
-}
-
 static void gm_room_session_projection_collect_scenario_devices(
     gm_room_session_projection_view_t *out,
     const room_scenario_t *scenario)
 {
+    size_t count = 0;
     if (!out || !scenario) {
         return;
     }
     out->scenario_device_count = 0;
-    for (size_t i = 0; i < scenario->step_count && i < ROOM_SCENARIO_MAX_STEPS; ++i) {
-        gm_room_session_projection_collect_step_devices(out, &scenario->steps[i]);
+    if (room_scenario_collect_device_refs(scenario,
+                                          out->scenario_device_ids,
+                                          ROOM_SCENARIO_MAX_STEPS,
+                                          &count) == ESP_OK ||
+        count > 0) {
+        out->scenario_device_count = (uint8_t)(count > UINT8_MAX ? UINT8_MAX : count);
     }
+}
+
+static uint8_t gm_room_session_count_scenario_devices(const room_scenario_t *scenario)
+{
+    size_t count = 0;
+
+    if (!scenario) {
+        return 0;
+    }
+    if (gm_room_session_view_scratch_lock() != ESP_OK) {
+        return 0;
+    }
+    memset(s_device_ref_scratch, 0, sizeof(s_device_ref_scratch));
+    (void)room_scenario_collect_device_refs(scenario,
+                                            s_device_ref_scratch,
+                                            ROOM_SCENARIO_MAX_STEPS,
+                                            &count);
+    gm_room_session_view_scratch_unlock();
+    return (uint8_t)(count > UINT8_MAX ? UINT8_MAX : count);
 }
 
 static void gm_room_session_format_step_text(const room_scenario_step_t *step,
@@ -476,7 +496,6 @@ static void gm_room_session_fill_selected_view(const gm_room_session_t *session,
 static void gm_room_session_fill_runtime_summary(const gm_room_session_t *session,
                                                  gm_room_session_runtime_summary_t *out)
 {
-    gm_room_scenario_runtime_semantics_t runtime_semantics = {0};
     if (!out) {
         return;
     }
@@ -487,15 +506,22 @@ static void gm_room_session_fill_runtime_summary(const gm_room_session_t *sessio
     out->present = true;
     out->generation = session->generation;
     out->scenario_state = session->scenario_state;
-    if (gm_room_session_describe_runtime(session, &runtime_semantics) == ESP_OK) {
-        out->total_steps = runtime_semantics.total_steps;
-        out->done_steps = runtime_semantics.done_steps;
-        gm_room_session_view_copy(out->current_step_text,
-                                  sizeof(out->current_step_text),
-                                  runtime_semantics.current_step_text);
-        gm_room_session_view_copy(out->wait_summary,
-                                  sizeof(out->wait_summary),
-                                  runtime_semantics.wait_summary);
+    if (gm_room_session_view_scratch_lock() == ESP_OK) {
+        memset(&s_runtime_semantics_scratch, 0, sizeof(s_runtime_semantics_scratch));
+        if (gm_room_session_describe_runtime(session, &s_runtime_semantics_scratch) == ESP_OK) {
+            out->total_steps = s_runtime_semantics_scratch.total_steps;
+            out->done_steps = s_runtime_semantics_scratch.done_steps;
+            gm_room_session_view_copy(out->current_step_text,
+                                      sizeof(out->current_step_text),
+                                      s_runtime_semantics_scratch.current_step_text);
+            gm_room_session_view_copy(out->wait_summary,
+                                      sizeof(out->wait_summary),
+                                      s_runtime_semantics_scratch.wait_summary);
+        }
+        gm_room_session_view_scratch_unlock();
+    } else {
+        out->total_steps = gm_room_session_total_steps(session);
+        out->done_steps = gm_room_session_done_steps(session);
     }
     out->current_step_index = session->current_step_index;
     out->wait_type = session->wait_type;
@@ -526,6 +552,10 @@ static void gm_room_session_fill_runtime_summary(const gm_room_session_t *sessio
                               session->scenario_operator_message);
     out->scenario_flag_count = session->scenario_flag_count;
     memcpy(out->scenario_flags, session->scenario_flags, sizeof(out->scenario_flags));
+    if (session->running_scenario_valid) {
+        out->scenario_device_count =
+            gm_room_session_count_scenario_devices(&session->running_scenario);
+    }
     gm_room_session_view_copy(out->scenario_last_error,
                               sizeof(out->scenario_last_error),
                               session->scenario_last_error);
@@ -537,7 +567,6 @@ static void gm_room_session_fill_branch_runtime_view(
     uint8_t branch_index,
     gm_room_session_branch_runtime_view_t *out)
 {
-    gm_room_scenario_branch_semantics_t branch_semantics = {0};
     const room_scenario_branch_t *branch = NULL;
 
     if (!out) {
@@ -576,22 +605,26 @@ static void gm_room_session_fill_branch_runtime_view(
     out->wait_type = runtime->wait_type;
     out->wait_until_ms = runtime->wait_until_ms;
     out->wait_started_at_ms = runtime->wait_started_at_ms;
-    if (gm_room_session_describe_branch_runtime(session, runtime, &branch_semantics) == ESP_OK) {
-        out->current_local_step_index = branch_semantics.current_local_step_index;
-        out->done_steps = branch_semantics.done_steps;
-        out->total_steps = branch_semantics.total_steps;
-        out->failed_step_index = branch_semantics.failed_step_index;
-        out->current_step_state = branch_semantics.current_step_state;
-        gm_room_session_view_copy(out->current_step_text,
-                                  sizeof(out->current_step_text),
-                                  branch_semantics.current_step_text);
-        gm_room_session_view_copy(out->wait_summary,
-                                  sizeof(out->wait_summary),
-                                  branch_semantics.wait_summary);
-        out->wait_operator_skip_allowed = branch_semantics.wait_operator_skip_allowed;
-        gm_room_session_view_copy(out->wait_operator_skip_label,
-                                  sizeof(out->wait_operator_skip_label),
-                                  branch_semantics.wait_operator_skip_label);
+    if (gm_room_session_view_scratch_lock() == ESP_OK) {
+        memset(&s_branch_semantics_scratch, 0, sizeof(s_branch_semantics_scratch));
+        if (gm_room_session_describe_branch_runtime(session, runtime, &s_branch_semantics_scratch) == ESP_OK) {
+            out->current_local_step_index = s_branch_semantics_scratch.current_local_step_index;
+            out->done_steps = s_branch_semantics_scratch.done_steps;
+            out->total_steps = s_branch_semantics_scratch.total_steps;
+            out->failed_step_index = s_branch_semantics_scratch.failed_step_index;
+            out->current_step_state = s_branch_semantics_scratch.current_step_state;
+            gm_room_session_view_copy(out->current_step_text,
+                                      sizeof(out->current_step_text),
+                                      s_branch_semantics_scratch.current_step_text);
+            gm_room_session_view_copy(out->wait_summary,
+                                      sizeof(out->wait_summary),
+                                      s_branch_semantics_scratch.wait_summary);
+            out->wait_operator_skip_allowed = s_branch_semantics_scratch.wait_operator_skip_allowed;
+            gm_room_session_view_copy(out->wait_operator_skip_label,
+                                      sizeof(out->wait_operator_skip_label),
+                                      s_branch_semantics_scratch.wait_operator_skip_label);
+        }
+        gm_room_session_view_scratch_unlock();
     }
 }
 

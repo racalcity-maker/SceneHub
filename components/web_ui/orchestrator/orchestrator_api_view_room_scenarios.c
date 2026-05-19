@@ -558,11 +558,61 @@ cJSON *orchestrator_api_view_room_scenarios(const char *room_id,
             }
             cJSON_AddStringToObject(issue_obj, "level", issue->level_text);
             cJSON_AddNumberToObject(issue_obj, "step_index", issue->step_index);
+            if (issue->branch_id[0]) {
+                cJSON_AddStringToObject(issue_obj, "branch_id", issue->branch_id);
+            }
+            if (issue->variant_index >= 0) {
+                cJSON_AddNumberToObject(issue_obj, "variant_index", issue->variant_index);
+            }
+            if (issue->action_index >= 0) {
+                cJSON_AddNumberToObject(issue_obj, "action_index", issue->action_index);
+            }
             cJSON_AddStringToObject(issue_obj, "code", issue->code);
             cJSON_AddStringToObject(issue_obj, "message", issue->message);
             cJSON_AddItemToArray(issues, issue_obj);
         }
         cJSON_AddItemToObject(item, "validation_issues", issues);
+        cJSON_AddItemToArray(items, item);
+    }
+    cJSON_AddItemToObject(root, "scenarios", items);
+    return root;
+}
+
+cJSON *orchestrator_api_view_room_scenario_summaries(const char *room_id,
+                                                     const orch_room_scenario_entry_t *scenarios,
+                                                     size_t scenario_count)
+{
+    cJSON *root = NULL;
+    cJSON *items = NULL;
+
+    if (!room_id || (!scenarios && scenario_count > 0)) {
+        return NULL;
+    }
+    root = cJSON_CreateObject();
+    items = cJSON_CreateArray();
+    if (!root || !items) {
+        cJSON_Delete(root);
+        cJSON_Delete(items);
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(root, "room_id", room_id);
+    cJSON_AddNumberToObject(root, "count", (double)scenario_count);
+    for (size_t i = 0; i < scenario_count; ++i) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item) {
+            cJSON_Delete(root);
+            cJSON_Delete(items);
+            return NULL;
+        }
+        cJSON_AddStringToObject(item, "room_id", scenarios[i].room_id);
+        cJSON_AddStringToObject(item, "id", scenarios[i].id);
+        cJSON_AddStringToObject(item, "name", scenarios[i].name);
+        cJSON_AddNumberToObject(item, "step_count", (double)scenarios[i].step_count);
+        cJSON_AddBoolToObject(item, "valid", scenarios[i].valid);
+        cJSON_AddNumberToObject(item,
+                                "validation_issue_count",
+                                (double)scenarios[i].validation_issue_count);
         cJSON_AddItemToArray(items, item);
     }
     cJSON_AddItemToObject(root, "scenarios", items);

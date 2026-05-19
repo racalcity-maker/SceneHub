@@ -22,6 +22,7 @@
 static EXT_RAM_BSS_ATTR uint8_t s_ota_upload_chunk[OTA_UPLOAD_CHUNK_SIZE];
 static SemaphoreHandle_t s_ota_upload_mutex = NULL;
 static StaticSemaphore_t s_ota_upload_mutex_storage;
+static portMUX_TYPE s_ota_upload_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static esp_err_t web_http_check(esp_err_t err, const char *context)
 {
@@ -38,7 +39,11 @@ static esp_err_t ota_send_error(httpd_req_t *req, const char *status, const char
 static esp_err_t ota_upload_lock(void)
 {
     if (!s_ota_upload_mutex) {
-        s_ota_upload_mutex = xSemaphoreCreateMutexStatic(&s_ota_upload_mutex_storage);
+        portENTER_CRITICAL(&s_ota_upload_mutex_init_lock);
+        if (!s_ota_upload_mutex) {
+            s_ota_upload_mutex = xSemaphoreCreateMutexStatic(&s_ota_upload_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_ota_upload_mutex_init_lock);
     }
     if (!s_ota_upload_mutex) {
         return ESP_ERR_NO_MEM;

@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "cJSON.h"
 #include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -13,8 +14,12 @@ typedef struct {
 } quest_device_slot_t;
 
 EXT_RAM_BSS_ATTR static quest_device_slot_t s_devices[QUEST_DEVICE_MAX_DEVICES];
+EXT_RAM_BSS_ATTR static char s_compact_lookup_description_json[QUEST_DEVICE_DESCRIPTION_JSON_MAX_LEN];
 static SemaphoreHandle_t s_lock = NULL;
+static SemaphoreHandle_t s_compact_lookup_lock = NULL;
 static portMUX_TYPE s_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static StaticSemaphore_t s_compact_lookup_lock_storage;
+static portMUX_TYPE s_compact_lookup_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_generation = 0;
 
 static esp_err_t qd_ensure_lock(void)
@@ -46,9 +51,145 @@ static void qd_unlock(void)
     }
 }
 
+static esp_err_t qd_compact_lookup_lock(void)
+{
+    if (!s_compact_lookup_lock) {
+        portENTER_CRITICAL(&s_compact_lookup_init_lock);
+        if (!s_compact_lookup_lock) {
+            s_compact_lookup_lock =
+                xSemaphoreCreateMutexStatic(&s_compact_lookup_lock_storage);
+        }
+        portEXIT_CRITICAL(&s_compact_lookup_init_lock);
+        if (!s_compact_lookup_lock) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return xSemaphoreTake(s_compact_lookup_lock, portMAX_DELAY) == pdTRUE ? ESP_OK
+                                                                          : ESP_ERR_TIMEOUT;
+}
+
+static void qd_compact_lookup_unlock(void)
+{
+    if (s_compact_lookup_lock) {
+        xSemaphoreGive(s_compact_lookup_lock);
+    }
+}
+
 static bool qd_valid_id(const char *value)
 {
     return value && value[0];
+}
+
+static void qd_copy(char *dst, size_t dst_len, const char *src)
+{
+    size_t len = 0;
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!src) {
+        return;
+    }
+    len = strlen(src);
+    if (len >= dst_len) {
+        len = dst_len - 1;
+    }
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
+static const char *qd_json_string(const cJSON *obj, const char *key)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsString(item) && item->valuestring ? item->valuestring : "";
+}
+
+static void qd_default_capability_from_name(char *dst, size_t dst_len, const char *name)
+{
+    const char *dot = NULL;
+    size_t len = 0;
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!name || !name[0]) {
+        return;
+    }
+    dot = strchr(name, '.');
+    len = dot ? (size_t)(dot - name) : strlen(name);
+    if (len == 0) {
+        return;
+    }
+    if (len >= dst_len) {
+        len = dst_len - 1;
+    }
+    memcpy(dst, name, len);
+    dst[len] = '\0';
+}
+
+static bool qd_compact_manifest_root_valid(const cJSON *root)
+{
+    const cJSON *manifest_version = cJSON_GetObjectItemCaseSensitive(root, "manifest_version");
+    return cJSON_IsObject(root) &&
+           cJSON_IsNumber(manifest_version) &&
+           manifest_version->valueint == 2 &&
+           strcmp(qd_json_string(root, "format"), "compact_resources") == 0 &&
+           qd_json_string(root, "node_kind")[0] &&
+           strcmp(qd_json_string(root, "capability_contract"), "scenehub.node.compact.v1") == 0;
+}
+
+static esp_err_t qd_compact_manifest_get_event(const char *device_description_json,
+                                               const char *event_id,
+                                               quest_device_event_t *out)
+{
+    cJSON *root = NULL;
+    const cJSON *events = NULL;
+    int event_count = 0;
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+
+    if (!device_description_json || !device_description_json[0] || !event_id || !out) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    root = cJSON_Parse(device_description_json);
+    if (!root) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!qd_compact_manifest_root_valid(root)) {
+        cJSON_Delete(root);
+        return ESP_ERR_NOT_FOUND;
+    }
+    events = cJSON_GetObjectItemCaseSensitive(root, "event_templates");
+    if (!cJSON_IsArray(events)) {
+        cJSON_Delete(root);
+        return ESP_ERR_NOT_FOUND;
+    }
+    event_count = cJSON_GetArraySize(events);
+    for (int i = 0; i < event_count; ++i) {
+        const cJSON *item = cJSON_GetArrayItem(events, i);
+        const char *id = qd_json_string(item, "id");
+        const char *event_name = qd_json_string(item, "event");
+        const char *label = qd_json_string(item, "label");
+        const char *capability = qd_json_string(item, "capability");
+        const char *source = qd_json_string(item, "source");
+        if (!cJSON_IsObject(item) || strcmp(id, event_id) != 0 || !event_name[0]) {
+            continue;
+        }
+        memset(out, 0, sizeof(*out));
+        qd_copy(out->id, sizeof(out->id), id);
+        qd_copy(out->label, sizeof(out->label), label[0] ? label : id);
+        if (capability[0]) {
+            qd_copy(out->capability, sizeof(out->capability), capability);
+        } else if (source[0]) {
+            qd_copy(out->capability, sizeof(out->capability), source);
+        } else {
+            qd_default_capability_from_name(out->capability, sizeof(out->capability), event_name);
+        }
+        qd_copy(out->event, sizeof(out->event), event_name);
+        err = ESP_OK;
+        break;
+    }
+    cJSON_Delete(root);
+    return err;
 }
 
 static bool qd_commands_have_duplicate_ids(const quest_device_t *device)
@@ -98,6 +239,10 @@ static bool qd_device_valid(const quest_device_t *device)
         return false;
     }
     if (qd_commands_have_duplicate_ids(device) || qd_events_have_duplicate_ids(device)) {
+        return false;
+    }
+    if (device->device_description_json[0] &&
+        (device->command_count != 0 || device->event_count != 0)) {
         return false;
     }
     for (uint8_t i = 0; i < device->command_count; ++i) {
@@ -352,6 +497,20 @@ esp_err_t quest_device_get_event(const char *device_id,
             qd_unlock();
             return ESP_OK;
         }
+    }
+    if (slot->device.device_description_json[0]) {
+        err = qd_compact_lookup_lock();
+        if (err != ESP_OK) {
+            qd_unlock();
+            return err;
+        }
+        qd_copy(s_compact_lookup_description_json,
+                sizeof(s_compact_lookup_description_json),
+                slot->device.device_description_json);
+        qd_unlock();
+        err = qd_compact_manifest_get_event(s_compact_lookup_description_json, event_id, out);
+        qd_compact_lookup_unlock();
+        return err;
     }
     qd_unlock();
     return ESP_ERR_NOT_FOUND;

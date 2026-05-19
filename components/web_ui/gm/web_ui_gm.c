@@ -6,7 +6,7 @@
 
 #include "cJSON.h"
 #include "esp_attr.h"
-#include "orchestrator_registry.h"
+#include "orch_room_view.h"
 #include "scenehub_control.h"
 #include "web_ui_page.h"
 #include "web_ui_utils.h"

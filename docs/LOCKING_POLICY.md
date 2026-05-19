@@ -76,7 +76,7 @@ most for runtime correctness and deadlock risk:
 | `s_reactive_resolve_mutex` | `gm_core/session` reactive-trigger resolve scratch | [gm_room_session_reactive_v2.c](/d:/Projects/SceneHub/components/gm_core/session/gm_room_session_reactive_v2.c:36) | Protects shared `quest_device_t` scratch while resolving reactive trigger metadata before session-lock entry | Nested under `s_start_scratch_mutex` in scenario-start resolve; no current callback risk | Low |
 | `s_execute_mutex` | `command_executor` execute path | [command_executor_execute()](/d:/Projects/SceneHub/components/command_executor/command_executor.c:467) | Resolves device metadata into local snapshots and releases the lock before side effects | No current external-call nesting in the audited execute path | Low |
 | `s_pending_lock` | `command_executor` pending-result table | [command_executor_result.c](/d:/Projects/SceneHub/components/command_executor/command_executor_result.c:41) | Tracks/clears pending requests and builds timeout events | No longer nested under `s_execute_mutex` in the MQTT dispatch path | Low |
-| `s_cache_mutex` | `scenehub_read_model` registry cache | [orchestrator_registry.c](/d:/Projects/SceneHub/components/scenehub_read_model/registry/orchestrator_registry.c:42) | Builds or copies cached snapshot; may call uncached snapshot builder and broad read-model collectors | Yes. Can hold cache lock while calling into room/device/game-profile/session readers | High |
+| `s_cache_mutex` | `scenehub_read_model` snapshot publish/copy | [orchestrator_registry.c](/d:/Projects/SceneHub/components/scenehub_read_model/registry/orchestrator_registry.c:43) | Publishes and copies cached snapshot metadata/blob only | No. Full uncached snapshot build is serialized by a separate build mutex outside `s_cache_mutex` | Medium |
 | `s_scratch_mutex` | `scenehub_read_model` scratch buffers | [orch_common.c](/d:/Projects/SceneHub/components/scenehub_read_model/orch_common.c:37) | Shared scratch arrays for snapshot and room view assembly | Can be nested under `s_cache_mutex` through uncached snapshot build | Medium |
 | `event_bus` critical sections (`s_pool_lock`, `s_handler_lock`, `s_stats_lock`) | `event_bus` internals | [event_bus.c](/d:/Projects/SceneHub/components/event_bus/event_bus.c:100) | Pool bookkeeping, stats, handler list copy | No handler callbacks run while these critical sections are held | Very short |
 | `mqtt_core` session lock `s_lock` | `mqtt_core` connection/session bookkeeping | [mqtt_core.c](/d:/Projects/SceneHub/components/mqtt_core/mqtt_core.c:119) | Session count and session bookkeeping | Not fully audited in this pass; `mqtt_core_publish()` itself does not take `s_lock` directly in the shown path | Low to medium |
@@ -85,9 +85,12 @@ most for runtime correctness and deadlock risk:
 
 No open P0 boundary violations remain in the currently audited scope.
 
-The main remaining P0 follow-up is still to document and enforce the allowed
-lock ordering, but the concrete `quest_device_*` event-match boundary violation
-is now closed.
+Recent closure worth calling out:
+
+- sequential command-group and reactive-group planning no longer resolve
+  `quest_device_get_command()` under `gm_session_lock`
+- the metadata check still happens, but only in planned dispatch after the
+  session lock is released
 
 ## Important But Not P0
 
@@ -115,28 +118,29 @@ Audited status in the current scope:
 
 ### `scenehub_read_model` cache lock
 
-`s_cache_mutex` is broad, but this is currently more of a latency and lock-order
-risk than an immediate inversion bug.
+`s_cache_mutex` is narrower now, but the overall read-model path still deserves
+ongoing lock-order review because snapshot build and room runtime projection
+walk several subsystems.
 
-Current broad path:
+Current snapshot path:
 
-- [orch_cache_ensure_snapshot_locked()](/d:/Projects/SceneHub/components/scenehub_read_model/registry/orchestrator_registry.c:120)
-- holds `s_cache_mutex`
-- calls [orch_snapshot_builder_build_uncached()](/d:/Projects/SceneHub/components/scenehub_read_model/orch_snapshot_builder.c:30)
-- which then walks devices, rooms, issues, and session projections
+- uncached snapshot build is serialized outside `s_cache_mutex`
+- [orch_snapshot_builder_build_uncached()](/d:/Projects/SceneHub/components/scenehub_read_model/orch_snapshot_builder.c:30)
+  still walks devices, rooms, issues, and session projections
+- `s_cache_mutex` is now limited to publish/copy of the built snapshot
 
 Why it matters:
 
-- one cache lock currently wraps a lot of cross-subsystem reads
-- maximum hold time scales with snapshot size
+- snapshot build still touches many subsystems in one pass
+- build latency still scales with snapshot size
 - lock ordering against `gm_session_lock` and catalog/device paths is not yet
   explicitly documented
 
 Target follow-up:
 
 - document ordering before adding more nested locks
-- consider narrowing the locked region to cache publish/copy rather than whole
-  uncached build
+- keep the publish/copy lock narrow and avoid re-expanding it around uncached
+  build work
 
 ## Observed Lock Ordering
 
@@ -145,8 +149,8 @@ Observed in the audited scope:
 1. `s_tick_mutex -> s_sessions_mutex`
 2. `s_start_scratch_mutex -> s_reactive_resolve_mutex`
 3. `s_start_scratch_mutex -> s_sessions_mutex`
-4. `s_cache_mutex -> s_scratch_mutex`
-5. `s_cache_mutex -> gm/session reads` through snapshot/view builders
+4. snapshot build serialization -> `s_scratch_mutex`
+5. snapshot/view builders -> gm/session reads
 
 What must not be introduced without review:
 

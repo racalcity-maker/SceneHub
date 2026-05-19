@@ -193,8 +193,16 @@ typedef struct {
     char scenario_operator_message[ROOM_SCENARIO_OPERATOR_MESSAGE_MAX_LEN];
     gm_room_scenario_flag_t scenario_flags[GM_ROOM_SCENARIO_MAX_FLAGS];
     uint8_t scenario_flag_count;
+    uint8_t scenario_device_count;
     char scenario_last_error[96];
 } gm_room_session_runtime_summary_t;
+
+typedef struct {
+    uint32_t dropped_critical_events;
+    uint32_t dropped_noncritical_events;
+    uint32_t dropped_event_queue_events;
+    uint32_t dropped_runtime_queue_events;
+} gm_room_session_event_queue_stats_t;
 
 typedef struct {
     char id[ROOM_SCENARIO_BRANCH_ID_MAX_LEN];
@@ -239,6 +247,12 @@ typedef struct {
     gm_room_session_branch_runtime_view_t branches[ROOM_SCENARIO_MAX_BRANCHES];
     uint8_t branch_count;
 } gm_room_session_projection_view_t;
+
+/*
+ * Core projection DTOs above expose a lock-safe runtime snapshot to the
+ * read-model layer. They are not stable HTTP contracts; Web UI should consume
+ * scenehub_read_model DTOs instead.
+ */
 
 typedef struct {
     bool in_use;
@@ -296,6 +310,7 @@ esp_err_t gm_room_session_get_selected_view(const char *room_id,
                                             gm_room_session_selected_view_t *out);
 esp_err_t gm_room_session_get_runtime_summary(const char *room_id,
                                               gm_room_session_runtime_summary_t *out);
+esp_err_t gm_room_session_get_event_queue_stats(gm_room_session_event_queue_stats_t *out);
 esp_err_t gm_room_session_get_read_views(const char *room_id,
                                          uint64_t now_ms,
                                          gm_room_session_timer_view_t *out_timer,

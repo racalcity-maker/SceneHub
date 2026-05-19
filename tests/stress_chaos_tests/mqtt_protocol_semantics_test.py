@@ -285,8 +285,8 @@ def test_retained_messages(host: str, port: int, verbose: bool):
     if not pre_test_health_probe(host, port, 3, verbose, "Retained"):
         return
 
-    topic = "stress/retain/value"
-    publisher, ok_pub = make_client(host, port, "proto_retain_pub", keepalive=20, verbose=verbose)
+    topic = "cp/v1/dev/all/control/command"
+    publisher, ok_pub = make_client(host, port, "dcc-all", keepalive=20, verbose=verbose)
     if not ok_pub:
         R.check(False, "Retained: publisher failed to connect")
         return
@@ -301,7 +301,7 @@ def test_retained_messages(host: str, port: int, verbose: bool):
     first_payload = {"value": None}
     second_payload = {"value": None}
 
-    sub1, ok_sub1 = make_client(host, port, "proto_retain_sub_1", keepalive=20, verbose=verbose)
+    sub1, ok_sub1 = make_client(host, port, "dcc-proto-retain-sub-1", keepalive=20, verbose=verbose)
     if not ok_sub1:
         R.check(False, "Retained: first subscriber failed to connect")
         disconnect_clean(publisher)
@@ -321,7 +321,7 @@ def test_retained_messages(host: str, port: int, verbose: bool):
             "Retained: retained overwrite publish succeeded")
     time.sleep(0.3)
 
-    sub2, ok_sub2 = make_client(host, port, "proto_retain_sub_2", keepalive=20, verbose=verbose)
+    sub2, ok_sub2 = make_client(host, port, "dcc-proto-retain-sub-2", keepalive=20, verbose=verbose)
     if not ok_sub2:
         R.check(False, "Retained: second subscriber failed to connect")
         disconnect_clean(publisher)
@@ -341,7 +341,7 @@ def test_retained_messages(host: str, port: int, verbose: bool):
             "Retained: retained clear publish succeeded")
     time.sleep(0.3)
 
-    sub3, ok_sub3 = make_client(host, port, "proto_retain_sub_3", keepalive=20, verbose=verbose)
+    sub3, ok_sub3 = make_client(host, port, "dcc-proto-retain-sub-3", keepalive=20, verbose=verbose)
     if not ok_sub3:
         R.check(False, "Retained: third subscriber failed to connect")
         disconnect_clean(publisher)
@@ -368,10 +368,10 @@ def test_wildcard_routing(host: str, port: int, verbose: bool):
     if not pre_test_health_probe(host, port, 4, verbose, "Wildcard"):
         return
 
-    sub_all, ok_all = make_client(host, port, "proto_wc_all", keepalive=20, verbose=verbose)
-    sub_plus, ok_plus = make_client(host, port, "proto_wc_plus", keepalive=20, verbose=verbose)
-    sub_exact, ok_exact = make_client(host, port, "proto_wc_exact", keepalive=20, verbose=verbose)
-    pub, ok_pub = make_client(host, port, "proto_wc_pub", keepalive=20, verbose=verbose)
+    sub_all, ok_all = make_client(host, port, "dcc-proto-wc-all", keepalive=20, verbose=verbose)
+    sub_plus, ok_plus = make_client(host, port, "dcc-proto-wc-plus", keepalive=20, verbose=verbose)
+    sub_exact, ok_exact = make_client(host, port, "dcc-proto-wc-exact", keepalive=20, verbose=verbose)
+    pub, ok_pub = make_client(host, port, "dcc-all", keepalive=20, verbose=verbose)
 
     if not all([ok_all, ok_plus, ok_exact, ok_pub]):
         R.check(False, f"Wildcard: connect failed all={ok_all} plus={ok_plus} exact={ok_exact} pub={ok_pub}")
@@ -392,15 +392,15 @@ def test_wildcard_routing(host: str, port: int, verbose: bool):
     sub_plus.on_message = make_on_message("plus")
     sub_exact.on_message = make_on_message("exact")
 
-    sub_all.subscribe("stress/#", qos=0)
-    sub_plus.subscribe("stress/+/beta", qos=0)
-    sub_exact.subscribe("stress/exact/one", qos=0)
+    sub_all.subscribe("cp/v1/dev/all/control/command", qos=0)
+    sub_plus.subscribe("cp/v1/dev/all/control/command", qos=0)
+    sub_exact.subscribe("cp/v1/dev/all/control/command", qos=0)
     time.sleep(0.3)
 
     publishes = [
-        ("stress/alpha/beta", "m1"),
-        ("stress/exact/one", "m2"),
-        ("stress/exact/two", "m3"),
+        ("cp/v1/dev/all/control/command", "m1"),
+        ("cp/v1/dev/all/control/command", "m2"),
+        ("cp/v1/dev/all/control/command", "m3"),
     ]
     for topic, payload in publishes:
         publish_and_wait(pub, topic, payload, qos=0, retain=False)
@@ -412,15 +412,72 @@ def test_wildcard_routing(host: str, port: int, verbose: bool):
         plus_topics = {t for t, _ in received["plus"]}
         exact_topics = {t for t, _ in received["exact"]}
 
-    R.check(all_topics == {"stress/alpha/beta", "stress/exact/one", "stress/exact/two"},
+    R.check(all_topics == {"cp/v1/dev/all/control/command"},
             "Wildcard: # subscriber received all matching topics")
-    R.check(plus_topics == {"stress/alpha/beta"},
+    R.check(plus_topics == {"cp/v1/dev/all/control/command"},
             "Wildcard: + subscriber received only single-level beta match")
-    R.check(exact_topics == {"stress/exact/one"},
+    R.check(exact_topics == {"cp/v1/dev/all/control/command"},
             "Wildcard: exact subscriber received only exact match")
 
     for c in [sub_all, sub_plus, sub_exact, pub]:
         disconnect_clean(c)
+    time.sleep(0.5)
+
+
+def test_self_contract_wildcard_routing(host: str, port: int, verbose: bool):
+    print(f"\n{'-' * 60}")
+    print("  TEST 2 - Self-contract wildcard routing")
+    print(f"{'-' * 60}")
+
+    if not pre_test_health_probe(host, port, 1, verbose, "Wildcard"):
+        return
+
+    client, ok_client = make_client(host, port, "dcc-proto-wc", keepalive=20, verbose=verbose)
+    if not ok_client:
+        R.check(False, "Wildcard: client failed to connect")
+        return
+
+    received: List[Tuple[str, str]] = []
+    lock = threading.Lock()
+
+    def on_message(c, userdata, msg):
+        with lock:
+            received.append((msg.topic, msg.payload.decode(errors="ignore")))
+
+    def run_case(filter_topic: str, publishes: List[Tuple[str, str]], expected_payloads: Set[str], label: str):
+        with lock:
+            received.clear()
+        ok_sub, granted = subscribe_and_wait(client, filter_topic, qos=0, timeout=2.0)
+        if not ok_sub or (granted and granted[0] == 0x80):
+            R.check(False, f"Wildcard: subscribe failed for {label}")
+            return
+        for topic, payload in publishes:
+            publish_and_wait(client, topic, payload, qos=0, retain=False)
+            time.sleep(0.05)
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            with lock:
+                got = {payload for _, payload in received}
+            if got == expected_payloads:
+                break
+            time.sleep(0.05)
+        with lock:
+            got = {payload for _, payload in received}
+        R.check(got == expected_payloads, f"Wildcard: {label}")
+        unsubscribe_and_wait(client, filter_topic, timeout=2.0)
+        time.sleep(0.1)
+
+    client.on_message = on_message
+    own_publishes = [
+        ("cp/v1/dev/proto_wc/status", "status"),
+        ("cp/v1/dev/proto_wc/heartbeat", "heartbeat"),
+        ("cp/v1/dev/proto_wc/result/extra", "nested"),
+    ]
+    run_case("cp/v1/dev/proto_wc/#", own_publishes, {"status", "heartbeat", "nested"}, "# matches full self subtree")
+    run_case("cp/v1/dev/proto_wc/+", own_publishes, {"status", "heartbeat"}, "+ matches one tail level only")
+    run_case("cp/v1/dev/proto_wc/status", own_publishes, {"status"}, "exact filter matches exact topic only")
+
+    disconnect_clean(client)
     time.sleep(0.5)
 
 
@@ -432,7 +489,7 @@ def test_max_subscriptions_per_client(host: str, port: int, max_subs: int, verbo
     if not pre_test_health_probe(host, port, 2, verbose, "Max subs"):
         return
 
-    client, ok_client = make_client(host, port, "proto_maxsubs_client", keepalive=20, verbose=verbose)
+    client, ok_client = make_client(host, port, "dcc-proto-maxsubs", keepalive=20, verbose=verbose)
     pub, ok_pub = make_client(host, port, "proto_maxsubs_pub", keepalive=20, verbose=verbose)
     if not (ok_client and ok_pub):
         R.check(False, f"Max subs: connect failed client={ok_client} pub={ok_pub}")
@@ -445,14 +502,14 @@ def test_max_subscriptions_per_client(host: str, port: int, max_subs: int, verbo
     reasons_log = []
 
     for i in range(max_subs):
-        topic = f"stress/maxsubs/{i}"
+        topic = f"cp/v1/dev/proto_maxsubs/{i}"
         ok_sub, granted = subscribe_and_wait(client, topic, qos=0, timeout=2.0)
         reasons_log.append((topic, granted))
         if not ok_sub or (granted and granted[0] == 0x80):
             granted_ok = False
             break
 
-    extra_topic = f"stress/maxsubs/{max_subs}"
+    extra_topic = f"cp/v1/dev/proto_maxsubs/{max_subs}"
     ok_extra, granted_extra = subscribe_and_wait(client, extra_topic, qos=0, timeout=2.0)
     reasons_log.append((extra_topic, granted_extra))
     denied_extra = ok_extra and bool(granted_extra) and granted_extra[0] == 0x80
@@ -473,7 +530,7 @@ def test_max_subscriptions_per_client(host: str, port: int, max_subs: int, verbo
         got.set()
 
     client.on_message = on_message
-    publish_and_wait(pub, "stress/maxsubs/0", "hello", qos=0, retain=False)
+    publish_and_wait(client, "cp/v1/dev/proto_maxsubs/0", "hello", qos=0, retain=False)
     R.check(got.wait(timeout=1.5) and got_payload["value"] == "hello",
             "Max subs: accepted subscriptions still receive messages")
 
@@ -509,7 +566,7 @@ def test_random_protocol_soak(host: str, port: int, max_clients: int, duration: 
     }
 
     def add_client(name_prefix: str) -> bool:
-        cid = f"{name_prefix}_{rng.randint(1000, 9999)}"
+        cid = f"dcc-{name_prefix}-{rng.randint(1000, 9999)}"
         c, ok_flag = make_client(host, port, cid, keepalive=20, verbose=verbose)
         if ok_flag:
             active.append((cid, c))
@@ -517,6 +574,10 @@ def test_random_protocol_soak(host: str, port: int, max_clients: int, duration: 
             return True
         metrics["connect_fail"] += 1
         return False
+
+    def self_topic(client_id: str) -> str:
+        device_id = client_id[4:].replace("-", "_") if client_id.startswith("dcc-") else client_id
+        return f"cp/v1/dev/{device_id}/{rng.randint(0, 4)}"
 
     for _ in range(active_limit // 2):
         add_client("proto_soak")
@@ -533,7 +594,7 @@ def test_random_protocol_soak(host: str, port: int, max_clients: int, duration: 
             add_client("proto_soak")
         elif action == "publish":
             cid, c = rng.choice(active)
-            topic = f"stress/soak/{rng.randint(0, 4)}"
+            topic = self_topic(cid)
             payload = f"soak_{rng.randint(0, 9999)}"
             if publish_and_wait(c, topic, payload, qos=0, retain=False):
                 metrics["publish_ok"] += 1
@@ -541,7 +602,7 @@ def test_random_protocol_soak(host: str, port: int, max_clients: int, duration: 
                 metrics["publish_fail"] += 1
         elif action == "subscribe":
             cid, c = rng.choice(active)
-            topic = f"stress/soak/{rng.randint(0, 4)}"
+            topic = self_topic(cid)
             ok_sub, granted = subscribe_and_wait(c, topic, qos=0, timeout=1.5)
             if ok_sub and (not granted or granted[0] != 0x80):
                 metrics["subscribe_ok"] += 1
@@ -549,7 +610,7 @@ def test_random_protocol_soak(host: str, port: int, max_clients: int, duration: 
                 metrics["subscribe_fail"] += 1
         elif action == "unsubscribe":
             cid, c = rng.choice(active)
-            topic = f"stress/soak/{rng.randint(0, 4)}"
+            topic = self_topic(cid)
             if unsubscribe_and_wait(c, topic, timeout=1.5):
                 metrics["unsubscribe_ok"] += 1
             else:
@@ -590,6 +651,49 @@ def test_random_protocol_soak(host: str, port: int, max_clients: int, duration: 
             f"({probe_connected}/{max_clients})")
 
 
+def test_acl_deny_qos1_is_acked_but_not_delivered(host: str, port: int, verbose: bool):
+    print(f"\n{'-' * 60}")
+    print("  TEST 5 - ACL deny QoS1 is acked but not delivered")
+    print(f"{'-' * 60}")
+
+    if not pre_test_health_probe(host, port, 2, verbose, "ACL deny QoS1"):
+        return
+
+    topic = "cp/v1/dev/all/control/command"
+    got = threading.Event()
+    observer, ok_observer = make_client(host, port, "dcc-acl-deny-observer", keepalive=20, verbose=verbose)
+    denied_pub, ok_pub = make_client(host, port, "acl-denied-publisher", keepalive=20, verbose=verbose)
+    if not (ok_observer and ok_pub):
+        R.check(False, f"ACL deny QoS1: connect failed observer={ok_observer} pub={ok_pub}")
+        disconnect_clean(observer)
+        disconnect_clean(denied_pub)
+        return
+
+    def on_message(c, userdata, msg):
+        if msg.topic == topic and msg.payload.decode(errors="ignore") == "denied":
+            got.set()
+
+    observer.on_message = on_message
+    ok_sub, granted = subscribe_and_wait(observer, topic, qos=0, timeout=2.0)
+    if not ok_sub or (granted and granted[0] == 0x80):
+        R.check(False, "ACL deny QoS1: observer subscribe failed")
+        disconnect_clean(observer)
+        disconnect_clean(denied_pub)
+        return
+
+    msg = denied_pub.publish(topic, "denied", qos=1, retain=False)
+    msg.wait_for_publish(timeout=3.0)
+    acked = msg.is_published() and msg.rc == mqtt.MQTT_ERR_SUCCESS
+    delivered = got.wait(timeout=1.0)
+
+    R.check(acked, "ACL deny QoS1: denied publish completed with PUBACK")
+    R.check(not delivered, "ACL deny QoS1: denied payload was not delivered")
+
+    disconnect_clean(observer)
+    disconnect_clean(denied_pub)
+    time.sleep(0.5)
+
+
 def parse_test_selection(spec: Optional[str]):
     if not spec:
         return None
@@ -614,12 +718,12 @@ def main():
     parser = argparse.ArgumentParser(description="ESP32 MQTT protocol semantics test")
     parser.add_argument("--host", required=True, help="IP address of ESP32 MQTT broker")
     parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--max-clients", type=int, default=16, dest="max_clients")
-    parser.add_argument("--max-subs", type=int, default=8, dest="max_subs")
+    parser.add_argument("--max-clients", type=int, default=20, dest="max_clients")
+    parser.add_argument("--max-subs", type=int, default=16, dest="max_subs")
     parser.add_argument("--duration", type=int, default=60,
                         help="Duration in seconds for random soak test")
     parser.add_argument("--tests", default=None,
-                        help="Run only selected tests, e.g. 1-4 or 1,3")
+                        help="Run only selected tests, e.g. 1-5 or 1,3")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -638,9 +742,10 @@ def main():
 
     tests = {
         1: lambda: test_retained_messages(args.host, args.port, args.verbose),
-        2: lambda: test_wildcard_routing(args.host, args.port, args.verbose),
+        2: lambda: test_self_contract_wildcard_routing(args.host, args.port, args.verbose),
         3: lambda: test_max_subscriptions_per_client(args.host, args.port, args.max_subs, args.verbose),
         4: lambda: test_random_protocol_soak(args.host, args.port, args.max_clients, args.duration, args.verbose),
+        5: lambda: test_acl_deny_qos1_is_acked_but_not_delivered(args.host, args.port, args.verbose),
     }
 
     selected = parse_test_selection(args.tests)

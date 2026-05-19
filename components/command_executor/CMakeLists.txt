@@ -7,5 +7,5 @@ idf_component_register(
         "command_executor_result.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
-    REQUIRES audio_player esp_timer event_bus freertos hardware_io mqtt_core quest_common quest_device json scenehub_events
+    REQUIRES audio_player device_control_ingest esp_timer event_bus freertos hardware_io mqtt_core quest_common quest_device json scenehub_events
 )

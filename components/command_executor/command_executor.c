@@ -468,6 +468,47 @@ bool command_executor_command_name_is(const quest_device_command_t *command, con
     return command && name && strcmp(command->command, name) == 0;
 }
 
+esp_err_t command_executor_execute_resolved(const command_executor_request_t *request,
+                                            const char *client_id,
+                                            const quest_device_command_t *command,
+                                            command_executor_dispatch_t *out_dispatch,
+                                            char *error,
+                                            size_t error_size)
+{
+    esp_err_t err = ESP_OK;
+    if (!request || !request->device_id[0] || !request->command_id[0] ||
+        !command || !command->id[0] || !command->command[0]) {
+        return command_executor_fail(error, error_size, ESP_ERR_INVALID_ARG, "device_command_invalid");
+    }
+    if (out_dispatch) {
+        memset(out_dispatch, 0, sizeof(*out_dispatch));
+    }
+    if (request->require_manual_allowed && !command->manual_allowed) {
+        return command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_command_manual_disabled");
+    }
+    if (request->require_scenario_allowed && !command->scenario_allowed) {
+        return command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_command_scenario_disabled");
+    }
+    if (strcmp(request->device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0 ||
+        strncmp(command->command, "audio.", strlen("audio.")) == 0) {
+        return command_executor_execute_audio(request, command, error, error_size);
+    } else if (strcmp(request->device_id, QUEST_DEVICE_SYSTEM_RELAY_ID) == 0 ||
+               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0 ||
+               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
+        return command_executor_execute_hardware(request, command, error, error_size);
+    }
+    if (!client_id || !client_id[0]) {
+        return command_executor_fail(error, error_size, ESP_ERR_INVALID_ARG, "device_client_id_missing");
+    }
+    err = command_executor_execute_mqtt(client_id,
+                                        command,
+                                        request,
+                                        out_dispatch,
+                                        error,
+                                        error_size);
+    return err;
+}
+
 esp_err_t command_executor_execute(const command_executor_request_t *request,
                                    command_executor_dispatch_t *out_dispatch,
                                    char *error,
@@ -512,28 +553,12 @@ done:
     if (err != ESP_OK) {
         return err;
     }
-    if (request->require_manual_allowed && !command.manual_allowed) {
-        err = command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_command_manual_disabled");
-        return err;
-    }
-    if (request->require_scenario_allowed && !command.scenario_allowed) {
-        err = command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_command_scenario_disabled");
-        return err;
-    }
-    if (strcmp(request->device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) == 0 ||
-        strncmp(command.command, "audio.", strlen("audio.")) == 0) {
-        return command_executor_execute_audio(request, &command, error, error_size);
-    } else if (strcmp(request->device_id, QUEST_DEVICE_SYSTEM_RELAY_ID) == 0 ||
-               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_MOSFET_ID) == 0 ||
-               strcmp(request->device_id, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
-        return command_executor_execute_hardware(request, &command, error, error_size);
-    }
-    return command_executor_execute_mqtt(device.client_id,
-                                         &command,
-                                         request,
-                                         out_dispatch,
-                                         error,
-                                         error_size);
+    return command_executor_execute_resolved(request,
+                                             device.client_id,
+                                             &command,
+                                             out_dispatch,
+                                             error,
+                                             error_size);
 }
 
 esp_err_t command_executor_execute_device_command(const char *device_id,

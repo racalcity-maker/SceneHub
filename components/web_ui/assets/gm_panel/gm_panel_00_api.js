@@ -83,10 +83,35 @@ command_id:commandId,
 ...(params&&typeof params==='object'?{params}:{}),
 }),
 },
-room:{
-runtime:(roomId,detail='detail')=>gmGet(`/api/gm/room/runtime?room_id=${enc(roomId)}${detail&&detail!=='detail'?`&detail=${enc(detail)}`:''}`),
-runtimeJson:(roomId,detail='detail')=>gmGetJson(`/api/gm/room/runtime?room_id=${enc(roomId)}${detail&&detail!=='detail'?`&detail=${enc(detail)}`:''}`),
-scenarios:roomId=>gmGet(`/api/gm/room/scenarios?room_id=${enc(roomId)}`),
+sidebarPresets:{
+list:()=>gmGet('/api/gm/sidebar-presets'),
+listJson:()=>gmGetJson('/api/gm/sidebar-presets'),
+save:presets=>gmPostJsonResult('/api/gm/sidebar-presets/save',{presets}),
+load:()=>gmPostJsonResult('/api/gm/sidebar-presets/load',{}),
+exportUrl:'/api/gm/sidebar-presets/export',
+importJson:text=>gmFetch('/api/gm/sidebar-presets/import',{method:'POST',headers:{'Content-Type':'application/json'},body:text}),
+},
+  room:{
+  runtime:(roomId,detail='detail',options)=>{
+  const opts=options&&typeof options==='object'?options:{};
+  let url=`/api/gm/room/runtime?room_id=${enc(roomId)}${detail&&detail!=='detail'?`&detail=${enc(detail)}`:''}`;
+  if(Object.prototype.hasOwnProperty.call(opts,'include_assets'))url+=`&include_assets=${opts.include_assets?'1':'0'}`;
+  return gmGet(url);
+},
+  runtimeJson:(roomId,detail='detail',options)=>{
+  const opts=options&&typeof options==='object'?options:{};
+  let url=`/api/gm/room/runtime?room_id=${enc(roomId)}${detail&&detail!=='detail'?`&detail=${enc(detail)}`:''}`;
+  if(Object.prototype.hasOwnProperty.call(opts,'include_assets'))url+=`&include_assets=${opts.include_assets?'1':'0'}`;
+  return gmGetJson(url);
+},
+  scenarios:(roomId,options)=>{
+  if(!roomId)throw new Error('roomId required');
+  const opts=options&&typeof options==='object'?options:{};
+  let url=`/api/gm/room/scenarios?room_id=${enc(roomId)}`;
+  if(opts.detail&&opts.detail!=='detail')url+=`&detail=${enc(opts.detail)}`;
+  if(opts.scenario_id)url+=`&scenario_id=${enc(opts.scenario_id)}`;
+  return gmGet(url);
+},
 profiles:roomId=>gmGet(`/api/gm/room/profiles?room_id=${enc(roomId)}`),
 scenarioEditorCatalog:roomId=>gmGet(`/api/gm/room/scenario-editor/catalog?room_id=${enc(roomId)}`),
 save:body=>gmPostJson('/api/gm/room/save',body),
@@ -111,15 +136,19 @@ if(branchId)url+=`&branch_id=${enc(branchId)}`;
 return gmPost(url);
 },
 },
+rooms:{
+runtimeSummaryJson:()=>gmGetJson('/api/gm/rooms/runtime'),
+},
 storage:{
 post:url=>gmPost(url),
 importJson:(url,text)=>gmFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:text}),
-exportUrl:kind=>kind==='device'?'/api/gm/devices/export':(kind==='scenario'?'/api/gm/room/scenarios/export':'/api/gm/profiles/export'),
+exportUrl:kind=>kind==='device'?'/api/gm/devices/export':(kind==='scenario'?'/api/gm/room/scenarios/export':(kind==='preset'?'/api/gm/sidebar-presets/export':'/api/gm/profiles/export')),
 commandUrl:(kind,op)=>{
 if(kind==='device')return `/api/gm/devices/${op}`;
 if(kind==='scenario')return `/api/gm/room/scenarios/${op}`;
+if(kind==='preset')return `/api/gm/sidebar-presets/${op}`;
 return `/api/gm/profiles/${op}`;
 },
-run:(kind,op)=>gmPost(kind==='device'?`/api/gm/devices/${op}`:(kind==='scenario'?`/api/gm/room/scenarios/${op}`:`/api/gm/profiles/${op}`)),
+run:(kind,op)=>gmPost(kind==='device'?`/api/gm/devices/${op}`:(kind==='scenario'?`/api/gm/room/scenarios/${op}`:(kind==='preset'?`/api/gm/sidebar-presets/${op}`:`/api/gm/profiles/${op}`))),
 },
 };

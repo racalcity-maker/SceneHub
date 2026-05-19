@@ -14,6 +14,21 @@ Base namespace:
 cp/v1/dev/{device_id}/...
 ```
 
+In this namespace `{device_id}` means the physical MQTT namespace id, also
+stored in SceneHub Quest Device metadata as `client_id`. A Quest Device `id` is
+the saved game/config object id and may differ from the physical MQTT namespace
+id. The MQTT connection `client_id` may be different and is used only for broker
+session/auth identity.
+
+Recommended node id format:
+
+- Use stable lowercase ids with `[a-z0-9_-]` only.
+- Prefix field/debug MQTT connection ids with `dcc-`, for example
+  `dcc-relay-room-2`, but keep the topic namespace id stable, for example
+  `relay_room_2`.
+- Do not rely on prefix ACL matching. SceneHub product ACLs should allow exact
+  known node ids or explicitly configured id patterns.
+
 Device publishes:
 
 - `cp/v1/dev/{device_id}/heartbeat`
@@ -29,6 +44,42 @@ Device subscribes:
 Optional broadcast command topic:
 
 - `cp/v1/dev/all/control/command`
+
+The broadcast topic is optional and should only be used for safe node-level
+commands such as `node.identify`. Dangerous commands must target a single node.
+
+## Transport Policy
+
+MQTT version:
+
+- SceneHub targets MQTT 3.1.1 semantics.
+- QoS 0 and QoS 1 are supported. QoS 2 is not supported and may cause the
+  connection to be closed.
+
+QoS:
+
+- Commands may be published as QoS 0 or QoS 1.
+- Heartbeat, status, diagnostics, runtime events and results should be QoS 0 by
+  default.
+- A node may use QoS 1 for command results when the command has physical side
+  effects, but it must still handle duplicates by `request_id`.
+
+Retain:
+
+- Commands must not be retained.
+- Events and results must not be retained.
+- Heartbeat should not be retained.
+- Status may be retained only if the node explicitly republishes fresh status on
+  every reconnect. SceneHub does not require retained status for correctness.
+
+Packet limits:
+
+- Normal command, event, heartbeat, status and result payloads should stay under
+  4 KB.
+- `describe_interface` results may be larger. Current SceneHub target is at
+  least 4 KB payload and 6 KB MQTT packet.
+- Nodes should reject unsupported oversize commands with `status=rejected` and
+  `error.code=invalid_request` or `invalid_args`.
 
 ## Command Envelope
 
@@ -60,6 +111,13 @@ Rules:
 - `args` is an object. Empty args must be `{}`.
 - `ts_ms` is sender timestamp when available.
 - A device must publish a result with the same `request_id`.
+- Nodes must treat `request_id` as the idempotency key. If the same command with
+  the same `request_id` is received again, the node must not repeat unsafe
+  physical side effects. It should republish the last known result, or publish
+  `accepted` if the original work is still running.
+- Nodes may ignore stale duplicate commands whose terminal result was already
+  published and whose local duplicate cache expired, but they must not execute
+  them as fresh commands with the same `request_id`.
 
 ## Result Envelope
 
@@ -131,6 +189,9 @@ Rules:
 - `failed`, `rejected`, or timeout fail the step.
 - `failed` and `rejected` must include `error.code`.
 - SceneHub may time out a request if no terminal result arrives.
+- SceneHub creates pending result tracking before publishing the command. This
+  allows very fast nodes to return a result immediately without racing pending
+  registration.
 
 Recommended error codes:
 
@@ -145,6 +206,36 @@ Recommended error codes:
 
 Runtime events and status may include an optional monotonically increasing
 `seq` field. SceneHub treats it as diagnostic metadata in v1.
+
+## Reconnect And Boot Behavior
+
+After MQTT connect or reconnect, a node should publish in this order:
+
+1. `heartbeat`
+2. `status`
+3. Any queued terminal command results that were completed while disconnected
+
+Heartbeat interval:
+
+- Default target interval is 2 seconds.
+- SceneHub currently considers a device offline after no fresh
+  heartbeat/status/result for the configured online timeout. The current default
+  target is 5 seconds.
+
+Boot identity:
+
+- `boot_id` should change after every MCU reboot.
+- `uptime_ms` should reset after reboot.
+- `status_seq` or `seq` should be monotonically increasing per boot when used.
+
+Inflight commands:
+
+- If a node reconnects while executing a command, it should publish `accepted`
+  for the existing `request_id` if execution is still active, then publish a
+  terminal result when complete.
+- If a node rebooted and lost command state, it should publish `failed` with
+  `error.code=internal_error` when it can identify the lost request. If it cannot
+  identify the request, SceneHub will time out the command.
 
 ## Event Envelope
 
@@ -336,27 +427,25 @@ Device responds on `result`:
 }
 ```
 
-Discovery rules:
+Discovery rules for SceneHub Node compact manifests:
 
-- `device_description.version` is required.
-- `commands[].id`, `commands[].capability` and `commands[].command` are required.
-- `commands[].args_schema` describes user/editable arguments.
-- `commands[].default_args` may provide fixed/default args for manual buttons
-  and scenario presets.
-- `commands[].policy.manual_allowed` defaults to `true`.
-- `commands[].policy.scenario_allowed` defaults to `true`.
-- `commands[].policy.requires_confirmation` defaults to `false`.
-- `commands[].policy.result_required` defaults to `true`.
-- `commands[].policy.timeout_ms` defaults to the SceneHub command timeout.
-- `commands[].policy.danger_level` defaults to `normal`.
-- `events[].id`, `events[].capability` and `events[].event` are required.
-- `events[].match` may constrain event args, for example `{ "channel": 1 }`.
+- `device_description.manifest_version` is required and currently equals `2`.
+- `device_description.format` must be `compact_resources`.
+- `device_description.node_kind` identifies the node class.
+- `device_description.capability_contract` must be
+  `scenehub.node.compact.v1`.
+- Node resources are described under `resources`; raw GPIO numbers are node
+  local config and must not be exposed in the manifest.
+- `command_templates[].id` is the scenario `command_id`.
+- Channel/effect/resource selection lives in scenario `params`, not in
+  generated per-channel command ids.
+- `command_templates[].args_schema_ref` and
+  `event_templates[].args_schema_ref` must reference entries in `schemas`.
+- Flat `commands[]` and `events[]` are a separate custom-device path, not a
+  SceneHub Node compatibility format.
 - SceneHub imports this metadata only after admin confirmation.
 - `device_description` is discovery/config metadata. It must be requested on
   demand, not sent in every heartbeat/status.
-
-MQTT packet limits must allow discovery results larger than normal telemetry.
-Current SceneHub target is at least 4 KB payload and 6 KB packet.
 
 ## Required Node Actions
 
@@ -375,9 +464,10 @@ Recommended optional commands:
 
 - Physical clients appear in GM `Observed`.
 - Quest Devices store a `client_id` that points to the physical
-  control-contract client.
+  control-contract topic namespace id.
 - A physical client is considered registered when referenced by a saved Quest
-  Device `client_id`, even if Quest Device id/name is different.
+  Device `client_id`, even if Quest Device id/name or MQTT connection client id
+  is different.
 - If a previously observed registered device stops sending fresh telemetry, GM
   treats it as `offline`.
 - `offline` registered quest devices are critical faults for room/system health.

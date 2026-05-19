@@ -205,6 +205,15 @@ esp_err_t web_ui_add_scenario_validation_report_json(cJSON *root,
         }
         cJSON_AddStringToObject(item, "level", web_ui_scenario_validation_level_text(issue->level));
         cJSON_AddNumberToObject(item, "step_index", issue->step_index);
+        if (issue->branch_id[0]) {
+            cJSON_AddStringToObject(item, "branch_id", issue->branch_id);
+        }
+        if (issue->variant_index >= 0) {
+            cJSON_AddNumberToObject(item, "variant_index", issue->variant_index);
+        }
+        if (issue->action_index >= 0) {
+            cJSON_AddNumberToObject(item, "action_index", issue->action_index);
+        }
         cJSON_AddStringToObject(item, "code", issue->code);
         cJSON_AddStringToObject(item, "message", issue->message);
         cJSON_AddItemToArray(issues, item);

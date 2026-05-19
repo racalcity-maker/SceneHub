@@ -1,9 +1,11 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 const GM_WS_RECONNECT_MS=3000;
+const GM_RUNTIME_HTTP_FALLBACK_MS=5000;
 let gmWsSocket=null;
 let gmWsReconnectTimer=0;
 let gmWsFlushTimer=0;
 let gmWsVersionsIgnoreUntilMs=0;
+let gmWsLastMessageAt=0;
 const gmWsPendingSlices=new Map();
 
 function gmWsUrl(){
@@ -34,10 +36,11 @@ try{
 await refreshGMByInvalidationSlices(slices);
 }
 catch(err){
-setGMStatus('WS refresh failed','gm-bad');
+console.error('GM WS invalidation refresh failed',slices,err);
+setGMStatus(`WS refresh failed: ${compactText(err&&err.message||'unknown error',52)}`,'gm-bad');
 }
 }
-,50);
+,250);
 }
 
 async function gmWsHandleVersionsChanged(payload){
@@ -56,6 +59,7 @@ runtime_generation:Number(payload.runtime)||0
 
 function gmWsHandleEnvelope(message){
 if(!message||typeof message!=='object')return;
+gmWsLastMessageAt=Date.now();
 const type=String(message.type||'');
 const payload=message.payload&&typeof message.payload==='object'?message.payload:null;
 if(type==='gm.invalidate'&&payload){
@@ -72,6 +76,7 @@ return;
 if(type==='gm.resync.required'&&payload){
 gmWsVersionsIgnoreUntilMs=Date.now()+500;
 refreshGMByInvalidationSlices([{slice:'full.snapshot',target_id:String(payload.target_id||''),scope:'recovery',generation:Number(payload.generation)||0,reason:String(payload.reason||'resync_required')}]).catch(()=>{
+console.error('GM WS resync failed',payload);
 setGMStatus('WS resync failed','gm-bad');
 });
 return;
@@ -91,6 +96,7 @@ try{
 const socket=new WebSocket(gmWsUrl());
 gmWsSocket=socket;
 socket.onopen=()=>{
+gmWsLastMessageAt=Date.now();
 socket.send(JSON.stringify({type:'subscribe'}));
 };
 socket.onmessage=event=>{
@@ -105,6 +111,7 @@ gmWsHandleEnvelope(message);
 };
 socket.onclose=()=>{
 if(gmWsSocket===socket)gmWsSocket=null;
+gmWsLastMessageAt=0;
 gmWsScheduleReconnect();
 };
 socket.onerror=()=>{
@@ -123,7 +130,7 @@ setStatus(text,cls==='gm-bad'?'state-fault':(cls==='gm-ok'?'state-ok':'state-unk
 document.getElementById('gm_nav').onclick=async e=>{
 const btn=e.target.closest('.nav-btn');
 if(!btn)return;
-const view=btn.dataset.view||'dashboard';
+const view=btn.dataset.view||'rooms';
 if(!canOpenView(view))return;
 if(view!==currentView&&!confirmDiscardEditorChanges())return;
 currentView=view;
@@ -149,6 +156,10 @@ if(await gmHandleActionClick(e))return;
 }
 ;
 }
+
+window.__gmRefreshManualSidebar=async()=>{
+renderRightSidebar(true);
+};
 
 initGMEditorEventHandlers();
 
@@ -210,6 +221,8 @@ gmInitWebSocket();
 
 function gmPollActiveRoomRuntimeVisible(){
 if(document.hidden)return;
+const runtimeAge=currentRoomId?Date.now()-((gmRuntimeLastRefreshAt[currentRoomId])||0):GM_RUNTIME_HTTP_FALLBACK_MS;
+if(gmWsSocket&&gmWsSocket.readyState===WebSocket.OPEN&&runtimeAge<GM_RUNTIME_HTTP_FALLBACK_MS)return;
 pollActiveRoomRuntime();
 }
 
@@ -226,10 +239,10 @@ updateVisibleRoomClocks();
 document.addEventListener('visibilitychange',()=>{
 if(document.hidden)return;
 updateVisibleRoomClocks();
-pollActiveRoomRuntime();
+gmPollActiveRoomRuntimeVisible();
 pollGMStateSnapshot();
 });
 
-setInterval(gmPollActiveRoomRuntimeVisible,1000);
+setInterval(gmPollActiveRoomRuntimeVisible,GM_RUNTIME_HTTP_FALLBACK_MS);
 setInterval(gmPollStateSnapshotVisible,10000);
 setInterval(gmUpdateVisibleRoomClocksVisible,250);

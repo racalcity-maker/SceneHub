@@ -12,6 +12,22 @@ const raw=String(values&&values.channel||'effect').toLowerCase();
 return raw==='background'||raw==='bg'||raw==='music'?'background':'effect';
 }
 
+function scenarioNormalizeAudioParams(params){
+const out=params&&typeof params==='object'?{...params}:{};
+out.channel=audioChannelValue(out);
+if(out.channel!=='background')out.repeat=false;
+return out;
+}
+
+function scenarioAudioValidationIssue(params){
+const normalized=scenarioNormalizeAudioParams(params);
+const file=String(normalized.file||'').trim();
+if(!file)return {code:'device_command_audio_file_missing',message:'Choose an audio file.'};
+if(normalized.channel==='background'&&!audioFileIsWav(file))return {code:'device_command_audio_background_requires_wav',message:'Background audio requires a WAV file.'};
+if(normalized.channel!=='background'&&!audioFileIsPlayableEffect(file))return {code:'device_command_audio_file_invalid',message:'Effect audio must be a playable file.'};
+return null;
+}
+
 function renderAudioChannelParam(key,label,value){
 const selected=audioChannelValue({channel:value});
 return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'><option value='effect' ${selected==='effect'?'selected':''}>Effect / one-shot</option><option value='background' ${selected==='background'?'selected':''}>Background / music bed (WAV only)</option></select></div>`;
@@ -22,19 +38,22 @@ scheduleGMAudioFilesLoad();
 const selected=value===undefined?'':String(value||'');
 const background=String(channel||'effect')==='background';
 const files=gmAudioFileItems().filter(item=>background?audioFileIsWav(item.path):audioFileIsPlayableEffect(item.path));
+const selectedAllowed=!selected||(background?audioFileIsWav(selected):audioFileIsPlayableEffect(selected));
+const invalidHint=selected&&!selectedAllowed
+  ? `<div class='row-meta bad-text'>${background?'Background audio requires a WAV file.':'Selected file is not valid for the current audio channel.'}</div>`
+  : '';
 const refresh=uiButton({label:gmAudioFiles.loading?'Loading files':'Refresh files',action:'audio.files.refresh',disabled:gmAudioFiles.loading});
 if(files.length){
 const selectedKnown=files.some(item=>item.path===selected);
-const selectedAllowed=!selected||(background?audioFileIsWav(selected):audioFileIsPlayableEffect(selected));
 const custom=selected&&!selectedKnown?`<option value='${esc(selected)}' selected>${esc(selected)} ${selectedAllowed?'(custom)':'(not allowed for selected channel)'}</option>`:'';
 const options=files.map(item=>{
 const labelText=`${audioDirName(item.path)} / ${audioBaseName(item.path)}`;
 return `<option value='${esc(item.path)}' ${item.path===selected?'selected':''}>${esc(labelText)}</option>`;
 }).join('');
-return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'><option value='' ${selected?'':'selected'}>${esc(label||'Select audio file')}</option>${custom}${options}</select>${refresh}</div>${background?`<div class='row-meta'>Background accepts WAV only. Starting a new background replaces the previous one.</div>`:''}`;
+return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'><option value='' ${selected?'':'selected'}>${esc(label||'Select audio file')}</option>${custom}${options}</select>${refresh}</div>${background?`<div class='row-meta'>Background accepts WAV only. Starting a new background replaces the previous one.</div>`:''}${invalidHint}`;
 }
 const statusText=gmAudioFiles.error?gmAudioFiles.error:(gmAudioFiles.loading?'Scanning /sdcard for audio files...':(background?'No WAV files loaded yet':'No audio files loaded yet'));
-return `<div class='row'><input data-step-param='${esc(key)}' placeholder='${esc(label||'Audio file path')}' value='${esc(selected)}'>${refresh}</div><div class='row-meta'>${esc(statusText)}</div>`;
+return `<div class='row'><input data-step-param='${esc(key)}' placeholder='${esc(label||'Audio file path')}' value='${esc(selected)}'>${refresh}</div><div class='row-meta'>${esc(statusText)}</div>${invalidHint}`;
 }
 
 function renderCommandParams(command,params){
@@ -52,6 +71,15 @@ if(command&&command.id==='play'&&key==='repeat'){
 return audioChannelValue(values)==='background'?`<label class='row-meta'><input data-step-param='${esc(key)}' type='checkbox' ${value?'checked':''} style='min-width:auto'> Repeat background track</label>`:'';
 }
 if(param.type==='checkbox')return `<label class='row-meta'><input data-step-param='${esc(key)}' type='checkbox' ${value?'checked':''} style='min-width:auto'> ${esc(label)}</label>`;
+if(param.type==='resource_channel'&&Array.isArray(param.resource_options)&&param.resource_options.length){
+const selected=value===undefined?param.resource_options[0].id:String(value);
+return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}' data-step-param-type='number'>${optionList(param.resource_options,selected,`Select ${label}`)}</select></div>`;
+}
+if(param.type==='select'&&Array.isArray(param.options)&&param.options.length){
+const items=param.options.map(option=>({id:String(option),name:String(option)}));
+const selected=value===undefined?items[0].id:String(value);
+return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'>${optionList(items,selected,`Select ${label}`)}</select></div>`;
+}
 if(key==='channel'&&command&&Array.isArray(command.channel_options)&&command.channel_options.length){
 const selected=value===undefined?command.channel_options[0].id:String(value);
 return `<div class='row'><select class='scenario-select' data-step-param='${esc(key)}'>${optionList(command.channel_options,selected,'Select channel')}</select></div>`;
@@ -238,9 +266,17 @@ return out;
 }
 
 function renderScenarioStepPayload(step,type){
+type=scenarioStepTypeValue({type});
+if(type==='DEVICE_COMMAND')return renderDeviceCommandPayload(step);
+if(type==='DEVICE_COMMAND_GROUP')return renderCommandGroupControl(step);
+if(type==='WAIT_DEVICE_EVENT')return renderWaitDeviceEventPayload(step);
+if(type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS')return renderEventGroupControl(step);
+if(type==='WAIT_FLAGS')return renderFlagListControl(step);
 if(type==='SET_FLAG')return renderSetFlagPayload(step);
 if(scenarioStepSchema(type))return renderScenarioSchemaPayload(step,type);
 if(type==='OPERATOR_APPROVAL')return `<div class='row'><input data-step-field='prompt' placeholder='Operator prompt' value='${esc(step.prompt||step.operator_prompt||'')}'><input data-step-field='approve_label' placeholder='Approve label' value='${esc(step.approve_label||step.operator_approve_label||'Continue')}'></div>`;
+if(type==='SHOW_OPERATOR_MESSAGE')return `<textarea class='scenario-textarea' rows='1' data-step-field='message' placeholder='Operator message'>${esc(step.message||'')}</textarea>`;
+if(type==='END_GAME')return '';
 return `<div class='row'><input data-step-field='duration_ms' type='number' min='1' step='1' placeholder='Duration sec' value='${esc(durationMsToSeconds(step.duration_ms||1000))}'><span class='row-meta'>sec</span></div>`;
 }
 

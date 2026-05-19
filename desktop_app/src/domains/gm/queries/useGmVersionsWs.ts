@@ -15,6 +15,8 @@ import {
   wsEnvelopeSchema,
 } from "@/platform/ws/envelope";
 
+const ROOM_RUNTIME_INVALIDATION_MIN_MS = 2500;
+
 function buildWsUrl(baseUrl: string): string {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
 
@@ -43,7 +45,10 @@ export function useGmVersionsWs() {
   const versionsRequestRef = useRef<Promise<GmVersions> | null>(null);
   const versionsIgnoreUntilRef = useRef(0);
   const invalidationFlushTimerRef = useRef<number | null>(null);
+  const runtimeInvalidationFlushTimerRef = useRef<number | null>(null);
+  const lastRuntimeInvalidationAtRef = useRef(0);
   const pendingInvalidationsRef = useRef<Map<string, GmInvalidation>>(new Map());
+  const pendingRuntimeInvalidationsRef = useRef<Map<string, GmInvalidation>>(new Map());
 
   useEffect(() => {
     const baseUrl = activeController?.baseUrl;
@@ -189,7 +194,6 @@ export function useGmVersionsWs() {
       }
 
       if (slice === "room.runtime") {
-        invalidateState();
         invalidateRoomRuntime(targetId);
         return;
       }
@@ -213,14 +217,49 @@ export function useGmVersionsWs() {
       }
     }
 
-    function flushInvalidations() {
-      const items = Array.from(pendingInvalidationsRef.current.values());
-      pendingInvalidationsRef.current.clear();
-      clearInvalidationFlushTimer();
+    function clearRuntimeInvalidationFlushTimer() {
+      if (runtimeInvalidationFlushTimerRef.current !== null) {
+        window.clearTimeout(runtimeInvalidationFlushTimerRef.current);
+        runtimeInvalidationFlushTimerRef.current = null;
+      }
+    }
+
+    function flushInvalidationMap(target: Map<string, GmInvalidation>) {
+      const items = Array.from(target.values());
+      target.clear();
       items.forEach(applyInvalidation);
     }
 
+    function flushInvalidations() {
+      clearInvalidationFlushTimer();
+      flushInvalidationMap(pendingInvalidationsRef.current);
+    }
+
+    function flushRuntimeInvalidations() {
+      clearRuntimeInvalidationFlushTimer();
+      lastRuntimeInvalidationAtRef.current = Date.now();
+      flushInvalidationMap(pendingRuntimeInvalidationsRef.current);
+    }
+
+    function queueRuntimeInvalidation(invalidation: GmInvalidation) {
+      const key = `${invalidation.slice}:${invalidation.target_id || ""}`;
+      pendingRuntimeInvalidationsRef.current.set(key, invalidation);
+      if (runtimeInvalidationFlushTimerRef.current !== null) {
+        return;
+      }
+
+      const elapsedMs = Date.now() - lastRuntimeInvalidationAtRef.current;
+      const delayMs = Math.max(0, ROOM_RUNTIME_INVALIDATION_MIN_MS - elapsedMs);
+      runtimeInvalidationFlushTimerRef.current = window.setTimeout(() => {
+        flushRuntimeInvalidations();
+      }, delayMs);
+    }
+
     function queueInvalidation(invalidation: GmInvalidation) {
+      if (invalidation.slice === "room.runtime") {
+        queueRuntimeInvalidation(invalidation);
+        return;
+      }
       const key = `${invalidation.slice}:${invalidation.target_id || ""}`;
       pendingInvalidationsRef.current.set(key, invalidation);
       if (invalidationFlushTimerRef.current !== null) {
@@ -298,6 +337,8 @@ export function useGmVersionsWs() {
             const parsedResync = gmResyncRequiredSchema.safeParse(envelope.payload);
             if (parsedResync.success) {
               versionsIgnoreUntilRef.current = Date.now() + 500;
+              pendingRuntimeInvalidationsRef.current.clear();
+              clearRuntimeInvalidationFlushTimer();
               pendingInvalidationsRef.current.clear();
               clearInvalidationFlushTimer();
               applyResyncRequired();
@@ -342,10 +383,13 @@ export function useGmVersionsWs() {
       closedByEffect = true;
       clearReconnectTimer();
       clearInvalidationFlushTimer();
+      clearRuntimeInvalidationFlushTimer();
       pendingInvalidationsRef.current.clear();
+      pendingRuntimeInvalidationsRef.current.clear();
       lastVersionsRef.current = null;
       versionsRequestRef.current = null;
       versionsIgnoreUntilRef.current = 0;
+      lastRuntimeInvalidationAtRef.current = 0;
 
       if (socketRef.current) {
         socketRef.current.close();

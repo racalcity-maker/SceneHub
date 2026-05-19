@@ -81,7 +81,13 @@ static esp_err_t gm_room_session_ensure_deadline_timer(void)
         .callback = gm_room_session_runtime_deadline_timer_cb,
         .name = "gm_runtime_deadline",
     };
-    return esp_timer_create(&timer_args, &s_runtime_deadline_timer);
+    esp_err_t err = esp_timer_create(&timer_args, &s_runtime_deadline_timer);
+    if (err == ESP_OK) {
+        ESP_LOGD(TAG, "created runtime deadline timer handle=%p", (void *)s_runtime_deadline_timer);
+    } else {
+        ESP_LOGE(TAG, "failed to create runtime deadline timer: %s", esp_err_to_name(err));
+    }
+    return err;
 }
 
 static void gm_room_session_runtime_update_deadline_timer(void)
@@ -136,6 +142,12 @@ static void gm_room_session_runtime_update_deadline_timer(void)
             delay_us = 1000;
         }
     }
+    ESP_LOGD(TAG,
+             "runtime deadline timer start handle=%p next_deadline_ms=%llu now_ms=%llu delay_us=%llu",
+             (void *)s_runtime_deadline_timer,
+             (unsigned long long)next_deadline_ms,
+             (unsigned long long)now_ms,
+             (unsigned long long)delay_us);
     (void)esp_timer_start_once(s_runtime_deadline_timer, delay_us);
 }
 

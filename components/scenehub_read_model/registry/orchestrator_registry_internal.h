@@ -32,6 +32,15 @@ esp_err_t orch_scratch_lock(void);
 void orch_scratch_unlock(void);
 esp_err_t orch_cache_lock(void);
 void orch_cache_unlock(void);
+/*
+ * Shared read-model scratch contract:
+ * - `orch_scratch_*()` pointers are valid only while the current task holds
+ *   `orch_scratch_lock()`.
+ * - Scratch-backed helpers must fully copy into caller-owned output before
+ *   unlocking and must not return long-lived pointers to shared scratch.
+ * - Public read-model APIs should prefer caller-owned `out` buffers or fully
+ *   populated DTOs; shared scratch is an internal implementation detail.
+ */
 quest_device_t *orch_scratch_devices(size_t *out_capacity);
 device_control_ingest_device_t *orch_scratch_ingest(void);
 device_control_ingest_device_t *orch_scratch_ingest_devices(size_t *out_capacity);
@@ -65,6 +74,7 @@ const char *orch_timer_state_str(gm_timer_state_t state);
 
 void orch_collect_services(orch_registry_snapshot_t *snapshot);
 
+/* Requires `orch_scratch_lock()` because control-ingest projection uses shared scratch. */
 void orch_device_view_fill_device(const quest_device_t *dev,
                                   bool services_degraded,
                                   orch_device_entry_t *dst);
@@ -73,6 +83,10 @@ void orch_device_view_fill_control_device(const device_control_ingest_device_t *
 esp_err_t orch_device_view_get_device(const orch_registry_snapshot_t *snapshot,
                                       const char *device_id,
                                       orch_device_entry_t *out);
+esp_err_t orch_device_view_list_quest_device_catalog(orch_quest_device_catalog_entry_t *out_devices,
+                                                     size_t max_devices,
+                                                     size_t *out_count,
+                                                     bool include_system);
 esp_err_t orch_device_view_list_control_devices(orch_control_device_entry_t *out_devices,
                                                 size_t max_devices,
                                                 size_t *out_count);
@@ -82,27 +96,24 @@ orch_room_entry_t *orch_room_view_ensure_room(orch_registry_snapshot_t *snapshot
 bool orch_room_view_has_scenario_device(const orch_room_entry_t *room, const char *device_id);
 void orch_room_view_collect_rooms(orch_registry_snapshot_t *snapshot);
 void orch_room_view_enrich_from_sessions(orch_registry_snapshot_t *snapshot);
-esp_err_t orch_room_view_load_runtime_room(const char *room_id, orch_room_entry_t *out);
-esp_err_t orch_room_view_load_runtime_room_with_session(const char *room_id,
-                                                        const gm_room_session_t *session,
-                                                        orch_room_entry_t *out);
 bool orch_room_runtime_assets_collect(const char *scenario_id,
                                       const gm_room_session_t *session,
                                       room_scenario_t *scratch_scenario,
                                       orch_room_asset_summary_t *out_summary);
 uint32_t orch_room_runtime_assets_generation(void);
-void orch_room_runtime_assets_apply_summary(orch_room_runtime_view_t *out,
-                                            const orch_room_asset_summary_t *summary);
-bool orch_room_runtime_assets_load_cached(orch_room_runtime_view_t *out,
-                                          uint32_t scenario_generation,
-                                          uint32_t device_generation,
-                                          uint32_t asset_generation);
-void orch_room_runtime_assets_store_cached(const orch_room_runtime_view_t *out,
-                                           uint32_t scenario_generation,
-                                           uint32_t device_generation,
-                                           uint32_t asset_generation,
-                                           const orch_room_asset_summary_t *summary);
+void orch_room_runtime_detail_assets_apply_summary(orch_room_runtime_detail_view_t *out,
+                                                   const orch_room_asset_summary_t *summary);
+bool orch_room_runtime_detail_assets_load_cached(orch_room_runtime_detail_view_t *out,
+                                                 uint32_t scenario_generation,
+                                                 uint32_t device_generation,
+                                                 uint32_t asset_generation);
+void orch_room_runtime_detail_assets_store_cached(const orch_room_runtime_detail_view_t *out,
+                                                  uint32_t scenario_generation,
+                                                  uint32_t device_generation,
+                                                  uint32_t asset_generation,
+                                                  const orch_room_asset_summary_t *summary);
 
+/* Requires `orch_scratch_lock()` because scenario enumeration/detail copy uses shared scratch. */
 void orch_room_scenario_view_collect_all(orch_registry_snapshot_t *snapshot);
 esp_err_t orch_room_scenario_view_list(const orch_registry_snapshot_t *snapshot,
                                        const char *room_id,
@@ -117,6 +128,12 @@ esp_err_t orch_room_scenario_view_list_details(const char *room_id,
                                                orch_room_scenario_detail_t *out_scenarios,
                                                size_t max_scenarios,
                                                size_t *out_count);
+esp_err_t orch_room_scenario_view_get_detail(const char *room_id,
+                                             const char *scenario_id,
+                                             orch_room_scenario_detail_t *out);
+esp_err_t orch_room_scenario_view_get_layout(const char *room_id,
+                                             const char *scenario_id,
+                                             room_scenario_t *out);
 
 void orch_issue_builder_add_issue(orch_registry_snapshot_t *snapshot,
                                   orch_issue_scope_t scope,

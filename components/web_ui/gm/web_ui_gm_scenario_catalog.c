@@ -7,9 +7,10 @@
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 
-#include "orchestrator_registry.h"
-#include "quest_device.h"
+#include "orch_device_view.h"
+#include "orch_scenario_view.h"
 #include "room_scenario.h"
+#include "gm/web_ui_gm_quest_device_json.h"
 #include "web_ui_utils.h"
 
 static bool gm_scenario_catalog_read_query_value(httpd_req_t *req,
@@ -93,11 +94,11 @@ static esp_err_t gm_scenario_add_step_schemas(cJSON *root)
     return ESP_OK;
 }
 
-static quest_device_t *gm_scenario_alloc_devices(size_t count)
+static orch_quest_device_catalog_entry_t *gm_scenario_alloc_devices(size_t count)
 {
-    quest_device_t *devices = heap_caps_calloc(count,
-                                               sizeof(*devices),
-                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    orch_quest_device_catalog_entry_t *devices = heap_caps_calloc(count,
+                                                                  sizeof(*devices),
+                                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!devices) {
         devices = heap_caps_calloc(count,
                                    sizeof(*devices),
@@ -108,7 +109,7 @@ static quest_device_t *gm_scenario_alloc_devices(size_t count)
 
 static esp_err_t gm_scenario_add_quest_devices_catalog(cJSON *root)
 {
-    quest_device_t *devices = NULL;
+    orch_quest_device_catalog_entry_t *devices = NULL;
     size_t count = 0;
     cJSON *array = NULL;
     esp_err_t err = ESP_OK;
@@ -122,10 +123,10 @@ static esp_err_t gm_scenario_add_quest_devices_catalog(cJSON *root)
         cJSON_Delete(array);
         return ESP_ERR_NO_MEM;
     }
-    err = orchestrator_registry_list_quest_devices(devices,
-                                                   QUEST_DEVICE_MAX_DEVICES + 4,
-                                                   &count,
-                                                   true);
+    err = orchestrator_registry_list_quest_device_catalog(devices,
+                                                          QUEST_DEVICE_MAX_DEVICES + 4,
+                                                          &count,
+                                                          true);
     if (err != ESP_OK) {
         heap_caps_free(devices);
         cJSON_Delete(array);
@@ -138,7 +139,7 @@ static esp_err_t gm_scenario_add_quest_devices_catalog(cJSON *root)
             cJSON_Delete(array);
             return ESP_ERR_NO_MEM;
         }
-        err = quest_device_to_json(&devices[i], obj);
+        err = gm_quest_device_catalog_entry_to_json(&devices[i], obj);
         if (err != ESP_OK) {
             cJSON_Delete(obj);
             heap_caps_free(devices);

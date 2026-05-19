@@ -28,6 +28,7 @@ extern "C" {
 #define QUEST_DEVICE_DEFAULT_ARGS_JSON_MAX_LEN QUEST_PAYLOAD_MAX_LEN
 #define QUEST_DEVICE_MATCH_JSON_MAX_LEN QUEST_PAYLOAD_MAX_LEN
 #define QUEST_DEVICE_COMMAND_TIMEOUT_DEFAULT_MS 3000
+#define QUEST_DEVICE_DESCRIPTION_JSON_MAX_LEN 4096
 #define QUEST_DEVICE_STORAGE_PATH "/sdcard/quest/quest_devices.json"
 #define QUEST_DEVICE_SYSTEM_AUDIO_ID "system_audio"
 #define QUEST_DEVICE_SYSTEM_RELAY_ID "system_relay"
@@ -82,7 +83,14 @@ typedef struct {
     uint8_t command_count;
     quest_device_event_t events[QUEST_DEVICE_MAX_EVENTS];
     uint8_t event_count;
+    char device_description_json[QUEST_DEVICE_DESCRIPTION_JSON_MAX_LEN];
 } quest_device_t;
+
+/*
+ * Domain/storage DTO owned by quest_device.
+ * Do not pass this directly to Web UI list/catalog endpoints; expose a
+ * scenehub_read_model view when crossing the UI/API read boundary.
+ */
 
 esp_err_t quest_device_init(void);
 esp_err_t quest_device_upsert(const quest_device_t *device);

@@ -18,6 +18,7 @@ typedef struct {
 
 EXT_RAM_BSS_ATTR static orchestrator_audit_entry_t s_audit_entries[ORCH_AUDIT_CAPACITY];
 static orchestrator_audit_state_t s_audit = {0};
+static portMUX_TYPE s_audit_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void audit_str_copy(char *dst, size_t dst_size, const char *src)
 {
@@ -41,7 +42,11 @@ esp_err_t orchestrator_audit_init(void)
     if (s_audit.ready) {
         return ESP_OK;
     }
-    s_audit.lock = xSemaphoreCreateMutexStatic(&s_audit.lock_storage);
+    portENTER_CRITICAL(&s_audit_lock_init_lock);
+    if (!s_audit.lock) {
+        s_audit.lock = xSemaphoreCreateMutexStatic(&s_audit.lock_storage);
+    }
+    portEXIT_CRITICAL(&s_audit_lock_init_lock);
     if (!s_audit.lock) {
         return ESP_ERR_NO_MEM;
     }

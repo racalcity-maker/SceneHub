@@ -6,6 +6,7 @@
 #include "lwip/sockets.h"
 
 static const char *TAG = "mqtt_core";
+static portMUX_TYPE s_session_tx_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
 mqtt_session_t *alloc_session(void)
 {
@@ -15,7 +16,11 @@ mqtt_session_t *alloc_session(void)
     for (size_t i = 0; i < MQTT_MAX_CLIENTS; ++i) {
         if (!s_sessions[i].active) {
             memset(&s_sessions[i], 0, sizeof(s_sessions[i]));
-            s_sessions[i].tx_lock = xSemaphoreCreateMutexStatic(&s_sessions[i].tx_lock_buf);
+            portENTER_CRITICAL(&s_session_tx_lock_init_lock);
+            if (!s_sessions[i].tx_lock) {
+                s_sessions[i].tx_lock = xSemaphoreCreateMutexStatic(&s_sessions[i].tx_lock_buf);
+            }
+            portEXIT_CRITICAL(&s_session_tx_lock_init_lock);
             if (!s_sessions[i].tx_lock) {
                 return NULL;
             }
@@ -73,19 +78,24 @@ void free_session(mqtt_session_t *s)
 void sweep_idle_sessions(void)
 {
     int64_t now = now_ms();
-    lock();
     for (size_t i = 0; i < MQTT_MAX_CLIENTS; ++i) {
+        int close_sock = -1;
+
+        lock();
         mqtt_session_t *s = &s_sessions[i];
         if (!s->active) {
+            unlock();
             continue;
         }
         int64_t idle_ms = now - s->last_rx_ms;
         int64_t limit_ms = (s->keepalive > 0) ? (int64_t)s->keepalive * 1500 : 60000;
         if (idle_ms >= limit_ms) {
-            request_session_close(s, "sweep: closing idle session", 0);
+            close_sock = request_session_prepare_close_locked(s, "sweep: closing idle session", 0);
         }
+        unlock();
+
+        request_session_close_socket(close_sock);
     }
-    unlock();
 }
 
 void send_will_if_needed(mqtt_session_t *sess)

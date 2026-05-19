@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define ROOM_CATALOG_MAX_ROOMS 4
+#define ROOM_CATALOG_MAX_ROOMS 2
 #define ROOM_CATALOG_ROOM_ID_MAX_LEN 32
 #define ROOM_CATALOG_ROOM_NAME_MAX_LEN 64
 #define ROOM_CATALOG_STORAGE_PATH "/sdcard/quest/rooms.json"

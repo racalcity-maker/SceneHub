@@ -6,6 +6,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static EXT_RAM_BSS_ATTR quest_device_t s_scratch_devices[ORCH_REGISTRY_MAX_DEVICES];
 static EXT_RAM_BSS_ATTR device_control_ingest_device_t s_scratch_ingest;
@@ -15,6 +16,14 @@ static EXT_RAM_BSS_ATTR room_scenario_t s_scratch_room_scenario;
 static EXT_RAM_BSS_ATTR room_scenario_validation_report_t s_scratch_validation_report;
 static SemaphoreHandle_t s_scratch_mutex = NULL;
 static StaticSemaphore_t s_scratch_mutex_storage;
+static portMUX_TYPE s_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t s_scratch_owner = NULL;
+
+static void orch_scratch_assert_locked_by_caller(void)
+{
+    configASSERT(s_scratch_mutex != NULL);
+    configASSERT(s_scratch_owner == xTaskGetCurrentTaskHandle());
+}
 
 const char *orch_default_room_id(void)
 {
@@ -29,23 +38,34 @@ uint64_t orch_now_ms(void)
 esp_err_t orch_scratch_lock(void)
 {
     if (!s_scratch_mutex) {
-        s_scratch_mutex = xSemaphoreCreateMutexStatic(&s_scratch_mutex_storage);
+        portENTER_CRITICAL(&s_scratch_mutex_init_lock);
+        if (!s_scratch_mutex) {
+            s_scratch_mutex = xSemaphoreCreateMutexStatic(&s_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_scratch_mutex_init_lock);
     }
     if (!s_scratch_mutex) {
         return ESP_ERR_NO_MEM;
     }
-    return xSemaphoreTake(s_scratch_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+    if (xSemaphoreTake(s_scratch_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_scratch_owner = xTaskGetCurrentTaskHandle();
+    return ESP_OK;
 }
 
 void orch_scratch_unlock(void)
 {
     if (s_scratch_mutex) {
+        configASSERT(s_scratch_owner == xTaskGetCurrentTaskHandle());
+        s_scratch_owner = NULL;
         xSemaphoreGive(s_scratch_mutex);
     }
 }
 
 quest_device_t *orch_scratch_devices(size_t *out_capacity)
 {
+    orch_scratch_assert_locked_by_caller();
     if (out_capacity) {
         *out_capacity = ORCH_REGISTRY_MAX_DEVICES;
     }
@@ -55,12 +75,14 @@ quest_device_t *orch_scratch_devices(size_t *out_capacity)
 
 device_control_ingest_device_t *orch_scratch_ingest(void)
 {
+    orch_scratch_assert_locked_by_caller();
     memset(&s_scratch_ingest, 0, sizeof(s_scratch_ingest));
     return &s_scratch_ingest;
 }
 
 device_control_ingest_device_t *orch_scratch_ingest_devices(size_t *out_capacity)
 {
+    orch_scratch_assert_locked_by_caller();
     if (out_capacity) {
         *out_capacity = ORCH_REGISTRY_MAX_DEVICES;
     }
@@ -70,18 +92,21 @@ device_control_ingest_device_t *orch_scratch_ingest_devices(size_t *out_capacity
 
 gm_room_session_t *orch_scratch_session(void)
 {
+    orch_scratch_assert_locked_by_caller();
     memset(&s_scratch_session, 0, sizeof(s_scratch_session));
     return &s_scratch_session;
 }
 
 room_scenario_t *orch_scratch_room_scenario(void)
 {
+    orch_scratch_assert_locked_by_caller();
     memset(&s_scratch_room_scenario, 0, sizeof(s_scratch_room_scenario));
     return &s_scratch_room_scenario;
 }
 
 room_scenario_validation_report_t *orch_scratch_validation_report(void)
 {
+    orch_scratch_assert_locked_by_caller();
     memset(&s_scratch_validation_report, 0, sizeof(s_scratch_validation_report));
     return &s_scratch_validation_report;
 }

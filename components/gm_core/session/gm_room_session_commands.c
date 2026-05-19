@@ -5,6 +5,7 @@
 #include "command_executor.h"
 #include "quest_common_utils.h"
 #include "quest_device.h"
+#include "scenehub_device_command_resolver.h"
 #include "gm_room_session_projection_internal.h"
 #include "gm_room_session_reactive_internal.h"
 #include "gm_room_session_runner_internal.h"
@@ -54,7 +55,7 @@ static esp_err_t command_group_validate_immediate_only(const room_scenario_devic
                                                        char *error,
                                                        size_t error_size)
 {
-    quest_device_command_t command_meta = {0};
+    scenehub_resolved_device_command_t resolved = {0};
     esp_err_t err = ESP_OK;
 
     if (!command || !command->device_id[0] || !command->command_id[0]) {
@@ -63,16 +64,20 @@ static esp_err_t command_group_validate_immediate_only(const room_scenario_devic
         }
         return ESP_ERR_INVALID_ARG;
     }
-    err = quest_device_get_command(command->device_id,
-                                   command->command_id,
-                                   &command_meta);
+    err = scenehub_device_command_resolve(command->device_id,
+                                          command->command_id,
+                                          command->params_json,
+                                          true,
+                                          &resolved,
+                                          error,
+                                          error_size);
     if (err != ESP_OK) {
         if (error && error_size > 0) {
             quest_str_copy(error, error_size, "device_command_group_command_not_found");
         }
         return err;
     }
-    if (command_meta.result_required) {
+    if (resolved.command.result_required) {
         if (error && error_size > 0) {
             quest_str_copy(error, error_size, "device_command_group_result_required_unsupported");
         }
@@ -102,6 +107,12 @@ static void command_group_entry_to_device_command(
                    group->commands[index].params_json);
 }
 
+static bool command_plan_needs_group_validation(gm_room_session_command_plan_kind_t kind)
+{
+    return kind == GM_ROOM_SESSION_COMMAND_PLAN_SCENARIO_STEP_GROUP ||
+           kind == GM_ROOM_SESSION_COMMAND_PLAN_REACTIVE_ACTION_GROUP;
+}
+
 bool gm_room_session_command_plan_present(const gm_room_session_command_plan_t *plan)
 {
     return plan && plan->kind != GM_ROOM_SESSION_COMMAND_PLAN_NONE;
@@ -123,6 +134,7 @@ esp_err_t gm_room_session_execute_quest_device_command_internal(
 {
     command_executor_request_t request = {0};
     command_executor_dispatch_t dispatch = {0};
+    scenehub_resolved_device_command_t resolved = {0};
     esp_err_t err = ESP_OK;
     if (!step_command || !step_command->device_id[0] || !step_command->command_id[0]) {
         if (error && error_size > 0) {
@@ -135,7 +147,22 @@ esp_err_t gm_room_session_execute_quest_device_command_internal(
     quest_str_copy(request.command_id, sizeof(request.command_id), step_command->command_id);
     quest_str_copy(request.params_json, sizeof(request.params_json), step_command->params_json);
     request.require_scenario_allowed = true;
-    err = command_executor_execute(&request, &dispatch, error, error_size);
+    err = scenehub_device_command_resolve(request.device_id,
+                                          request.command_id,
+                                          request.params_json,
+                                          true,
+                                          &resolved,
+                                          error,
+                                          error_size);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = command_executor_execute_resolved(&request,
+                                            resolved.client_id,
+                                            &resolved.command,
+                                            &dispatch,
+                                            error,
+                                            error_size);
     if (err == ESP_OK && out_dispatch) {
         dispatch_from_executor(out_dispatch, &dispatch);
     }
@@ -178,14 +205,6 @@ esp_err_t gm_room_session_plan_scenario_command_group_locked(
             quest_str_copy(error, error_size, "device_command_group_invalid");
         }
         return ESP_ERR_INVALID_ARG;
-    }
-    for (uint8_t i = 0; i < group->command_count; ++i) {
-        room_scenario_device_command_t command = {0};
-        command_group_entry_to_device_command(&command, group, i);
-        esp_err_t err = command_group_validate_immediate_only(&command, error, error_size);
-        if (err != ESP_OK) {
-            return err;
-        }
     }
     gm_room_session_command_plan_clear(out_plan);
     quest_str_copy(out_plan->room_id, sizeof(out_plan->room_id), session->room_id);
@@ -235,14 +254,6 @@ esp_err_t gm_room_session_plan_reactive_action_command_locked(
             }
             return ESP_ERR_INVALID_ARG;
         }
-        for (uint8_t i = 0; i < action->group_command_count; ++i) {
-            const room_scenario_device_command_t *command =
-                &session->running_scenario.reactive_group_commands[action->group_command_start_index + i];
-            esp_err_t err = command_group_validate_immediate_only(command, error, error_size);
-            if (err != ESP_OK) {
-                return err;
-            }
-        }
         out_plan->kind = GM_ROOM_SESSION_COMMAND_PLAN_REACTIVE_ACTION_GROUP;
     } else if (action->type == ROOM_SCENARIO_STEP_DEVICE_COMMAND) {
         out_plan->kind = GM_ROOM_SESSION_COMMAND_PLAN_REACTIVE_ACTION;
@@ -269,6 +280,8 @@ static esp_err_t planned_command_resolve_locked(
 {
     const room_scenario_step_t *step = NULL;
     const room_scenario_reactive_action_t *action = NULL;
+    (void)error;
+    (void)error_size;
 
     if (out_command) {
         memset(out_command, 0, sizeof(*out_command));
@@ -307,7 +320,7 @@ static esp_err_t planned_command_resolve_locked(
         if (out_has_more) {
             *out_has_more = (uint8_t)(plan->command_index + 1) < step->data.device_command_group.command_count;
         }
-        return command_group_validate_immediate_only(out_command, error, error_size);
+        return ESP_OK;
     case GM_ROOM_SESSION_COMMAND_PLAN_REACTIVE_ACTION:
     case GM_ROOM_SESSION_COMMAND_PLAN_REACTIVE_ACTION_GROUP: {
         uint16_t action_index = branch->reactive_action_start_index + branch->reactive_current_action;
@@ -335,7 +348,7 @@ static esp_err_t planned_command_resolve_locked(
         if (out_has_more) {
             *out_has_more = (uint8_t)(plan->command_index + 1) < action->group_command_count;
         }
-        return command_group_validate_immediate_only(out_command, error, error_size);
+        return ESP_OK;
     }
     case GM_ROOM_SESSION_COMMAND_PLAN_NONE:
     default:
@@ -432,6 +445,29 @@ esp_err_t gm_room_session_dispatch_planned_command(gm_room_session_command_plan_
             }
             gm_room_session_command_plan_clear(plan);
             return err;
+        }
+
+        if (command_plan_needs_group_validation(plan->kind)) {
+            err = command_group_validate_immediate_only(&command, error, sizeof(error));
+            if (err != ESP_OK) {
+                if (gm_room_session_sessions_lock() == ESP_OK) {
+                    session = find_session_mutable_locked(plan->room_id);
+                    if (session &&
+                        session->running_scenario_valid &&
+                        plan->branch_index < session->branch_runtime_count &&
+                        plan->branch_index < ROOM_SCENARIO_MAX_BRANCHES) {
+                        branch = &session->branch_runtimes[plan->branch_index];
+                        gm_room_session_scenario_branch_load_into_session(session, branch);
+                        scenario_set_error_locked(session,
+                                                  error[0] ? error : "device_command_group_failed");
+                        gm_room_session_scenario_branch_save_from_session(branch, session);
+                        gm_room_session_scenario_update_summary_from_branches_locked(session);
+                    }
+                    gm_room_session_sessions_unlock();
+                }
+                gm_room_session_command_plan_clear(plan);
+                return err;
+            }
         }
 
         err = gm_room_session_execute_quest_device_command_internal(&command,
@@ -557,6 +593,8 @@ esp_err_t gm_room_session_execute_device_command(const char *device_id,
                                                  const char *params_json)
 {
     command_executor_request_t request = {0};
+    scenehub_resolved_device_command_t resolved = {0};
+    esp_err_t err = ESP_OK;
     if (!device_id || !device_id[0] || !command_id || !command_id[0]) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -573,7 +611,22 @@ esp_err_t gm_room_session_execute_device_command(const char *device_id,
         }
         quest_str_copy(request.params_json, sizeof(request.params_json), params_json);
     }
-    return command_executor_execute(&request, NULL, NULL, 0);
+    err = scenehub_device_command_resolve(request.device_id,
+                                          request.command_id,
+                                          request.params_json,
+                                          true,
+                                          &resolved,
+                                          NULL,
+                                          0);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return command_executor_execute_resolved(&request,
+                                             resolved.client_id,
+                                             &resolved.command,
+                                             NULL,
+                                             NULL,
+                                             0);
 }
 
 void gm_room_session_stop_audio(void)

@@ -22,12 +22,16 @@ legacy/tests/**/managed_components/
 build_unused.log
 v.1.03.zip
 SceneHub.zip
+.tmp_size_probe/
 
 # Test app build output
 tests/**/build/
 tests/**/sdkconfig.old
 tests/quest_backend/dependencies.lock
 tests/quest_backend/sdkconfig
+scenehub_node_v1/esp_idf/build/
+scenehub_node_v1/esp_idf/sdkconfig
+scenehub_node_v1/esp_idf/sdkconfig.old
 
 # Local archive/reference code, not part of the SceneHub product tree
 legacy/

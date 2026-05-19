@@ -20,16 +20,14 @@ export function useRoomSelections(
   const activeController = useControllerStore((state) => state.activeController);
   const queryClient = useQueryClient();
 
-  async function invalidateRoomData() {
+  function invalidateRoomData() {
     const baseUrl = activeController?.baseUrl ?? "none";
-    await Promise.all([
-      queryClient.invalidateQueries({
-        queryKey: ["controller", baseUrl, "gm", "room-runtime", roomId ?? "none"],
-      }),
-      queryClient.invalidateQueries({
-        queryKey: ["controller", baseUrl, "gm", "room-profiles", roomId ?? "none"],
-      }),
-    ]);
+    queryClient.invalidateQueries({
+      queryKey: ["controller", baseUrl, "gm", "room-runtime", roomId ?? "none"],
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["controller", baseUrl, "gm", "room-profiles", roomId ?? "none"],
+    });
   }
 
   const profileSelectMutation = useMutation({
@@ -51,12 +49,12 @@ export function useRoomSelections(
         message: "Selecting game mode...",
       });
     },
-    onSuccess: async () => {
+    onSuccess: () => {
       setCommandFeedback({
         status: "success",
         message: "Game mode updated",
       });
-      await invalidateRoomData();
+      invalidateRoomData();
     },
     onError: (error) => {
       setCommandFeedback({

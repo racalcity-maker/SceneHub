@@ -49,6 +49,7 @@ static esp_err_t scenehub_event_make_device_control(scenehub_event_t *out,
 
     memset(out, 0, sizeof(*out));
     out->type = SCENEHUB_EVENT_DEVICE_CONTROL;
+    out->origin = SCENEHUB_EVENT_ORIGIN_INTERNAL;
     out->payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL;
     quest_str_copy(out->payload, sizeof(out->payload), payload);
     quest_str_copy(out->data.device_control.device_id,
@@ -226,6 +227,7 @@ esp_err_t scenehub_event_make_text(scenehub_event_t *out,
 
     memset(out, 0, sizeof(*out));
     out->type = type;
+    out->origin = SCENEHUB_EVENT_ORIGIN_INTERNAL;
     out->payload_type = SCENEHUB_EVENT_PAYLOAD_TEXT;
     quest_str_copy(out->topic, sizeof(out->topic), topic);
     quest_str_copy(out->payload, sizeof(out->payload), payload);
@@ -259,6 +261,7 @@ esp_err_t scenehub_event_make_device_status(scenehub_event_t *out,
 
     memset(out, 0, sizeof(*out));
     out->type = SCENEHUB_EVENT_DEVICE_STATUS;
+    out->origin = SCENEHUB_EVENT_ORIGIN_INTERNAL;
     out->payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_STATUS;
     quest_str_copy(out->payload, sizeof(out->payload), state);
     quest_str_copy(out->data.device_status.device_id,
@@ -290,6 +293,7 @@ esp_err_t scenehub_event_make_device_runtime(scenehub_event_t *out,
 
     memset(out, 0, sizeof(*out));
     out->type = SCENEHUB_EVENT_DEVICE_RUNTIME;
+    out->origin = SCENEHUB_EVENT_ORIGIN_INTERNAL;
     out->payload_type = SCENEHUB_EVENT_PAYLOAD_DEVICE_RUNTIME;
     quest_str_copy(out->payload, sizeof(out->payload), state);
     quest_str_copy(out->data.device_runtime.device_id,

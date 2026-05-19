@@ -3,12 +3,12 @@ mqtt_stress_test.py  —  stress / chaos тест для embedded MQTT брок�
 
 Запуск:
     pip install paho-mqtt
-    python mqtt_stress_test.py --host 192.168.1.XX --max-clients 16
+    python mqtt_stress_test.py --host 192.168.1.XX --max-clients 20
 
 Параметры:
     --host          IP адрес ESP32 (обязательно)
     --port          MQTT порт (default 1883)
-    --max-clients   значение SCENEHUB_MQTT_MAX_CLIENTS из sdkconfig (default 16)
+    --max-clients   значение SCENEHUB_MQTT_MAX_CLIENTS из sdkconfig (default 20)
     --rounds        сколько раз гонять churn-тест (default 5)
     --keepalive     keepalive в секундах (default 10)
     --verbose       подробный лог каждого события
@@ -389,10 +389,10 @@ def test_lwt_on_ungraceful_disconnect(host, port, verbose):
     print(f"  ТЕСТ 4 — LWT при ungraceful disconnect (TCP RST)")
     print(f"{'─'*60}")
 
-    WILL_TOPIC   = "stress/will/test"
+    WILL_TOPIC   = "cp/v1/dev/all/control/command"
     WILL_PAYLOAD = "gone"
-    WILL_CLIENT  = "stress_will_sender"
-    OBS_CLIENT   = "stress_will_observer"
+    WILL_CLIENT  = "dcc-all"
+    OBS_CLIENT   = "dcc-stress-will-observer"
 
     lwt_received = threading.Event()
 
@@ -517,7 +517,7 @@ def test_publish_flood(host, port, max_clients, verbose):
 
     info(f"Подключаем {max_clients} клиентов...")
     for i in range(max_clients):
-        cid = f"stress_flood_{i:03d}"
+        cid = f"dcc-stress-flood-{i:03d}"
         c, ok_flag = make_client(host, port, cid, keepalive=60, verbose=verbose)
         if ok_flag:
             clients.append((i, c))
@@ -536,7 +536,7 @@ def test_publish_flood(host, port, max_clients, verbose):
     def flood(idx, c):
         for j in range(50):
             try:
-                topic = f"stress/flood/{idx}"
+                topic = f"cp/v1/dev/stress_flood_{idx:03d}/status"
                 payload = f"msg_{j}_" + "x" * random.randint(10, 200)
                 c.publish(topic, payload, qos=0)
             except Exception as e:
@@ -610,7 +610,7 @@ def test_subscribe_fanout(host, port, max_clients, verbose):
                                  required_clients=sub_count + 1):
         return
 
-    topic = "stress/fanout/all"
+    topic = "cp/v1/dev/all/control/command"
     expected_payloads = [f"fanout_{i}" for i in range(20)]
     expected_set = set(expected_payloads)
     received = {}
@@ -619,7 +619,7 @@ def test_subscribe_fanout(host, port, max_clients, verbose):
 
     info(f"Подключаем {sub_count} подписчиков и 1 publisher...")
     for i in range(sub_count):
-        cid = f"stress_fanout_sub_{i:03d}"
+        cid = f"dcc-stress-fanout-sub-{i:03d}"
         c, ok_flag = make_client(host, port, cid, keepalive=30, verbose=verbose)
         if not ok_flag:
             continue
@@ -637,7 +637,7 @@ def test_subscribe_fanout(host, port, max_clients, verbose):
         else:
             disconnect_clean(c)
 
-    pub, ok_pub = make_client(host, port, "stress_fanout_pub", keepalive=30, verbose=verbose)
+    pub, ok_pub = make_client(host, port, "dcc-all", keepalive=30, verbose=verbose)
     if not ok_pub or len(subscribers) < 2:
         R.check(False, f"Subscribe fanout: недостаточно клиентов (subs={len(subscribers)}, pub={ok_pub})")
         for c in subscribers:
@@ -686,7 +686,7 @@ def test_subscribe_unsubscribe_churn(host, port, max_clients, verbose):
         return
 
     rounds = 3
-    topic = "stress/subchurn/topic"
+    topic = "cp/v1/dev/all/control/command"
     subscribers = []
     lock = threading.Lock()
     stats = {}
@@ -694,7 +694,7 @@ def test_subscribe_unsubscribe_churn(host, port, max_clients, verbose):
 
     info(f"Подключаем {sub_count} подписчиков и 1 publisher...")
     for i in range(sub_count):
-        cid = f"stress_subchurn_sub_{i:03d}"
+        cid = f"dcc-stress-subchurn-sub-{i:03d}"
         c, ok_flag = make_client(host, port, cid, keepalive=30, verbose=verbose)
         if not ok_flag:
             continue
@@ -707,7 +707,7 @@ def test_subscribe_unsubscribe_churn(host, port, max_clients, verbose):
         c.on_message = on_message
         subscribers.append(c)
 
-    pub, ok_pub = make_client(host, port, "stress_subchurn_pub", keepalive=30, verbose=verbose)
+    pub, ok_pub = make_client(host, port, "dcc-all", keepalive=30, verbose=verbose)
     if not ok_pub or len(subscribers) < 2:
         R.check(False, f"Sub/unsub churn: недостаточно клиентов (subs={len(subscribers)}, pub={ok_pub})")
         for c in subscribers:
@@ -905,7 +905,7 @@ def main():
     parser = argparse.ArgumentParser(description="ESP32 MQTT broker stress test")
     parser.add_argument("--host",        required=True,       help="IP адрес ESP32")
     parser.add_argument("--port",        type=int, default=1883)
-    parser.add_argument("--max-clients", type=int, default=16, dest="max_clients",
+    parser.add_argument("--max-clients", type=int, default=20, dest="max_clients",
                         help="SCENEHUB_MQTT_MAX_CLIENTS из sdkconfig")
     parser.add_argument("--rounds",      type=int, default=5,
                         help="Кол-во раундов churn-теста")

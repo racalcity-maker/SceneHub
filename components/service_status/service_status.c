@@ -12,6 +12,7 @@ typedef struct {
 } service_status_state_t;
 
 static service_status_state_t s_status = {0};
+static portMUX_TYPE s_status_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static bool service_status_lock(void)
 {
@@ -28,10 +29,14 @@ static void service_status_unlock(void)
 esp_err_t service_status_init(void)
 {
     if (!s_status.mutex) {
-        s_status.mutex = xSemaphoreCreateMutexStatic(&s_status.mutex_storage);
+        portENTER_CRITICAL(&s_status_mutex_init_lock);
         if (!s_status.mutex) {
-            return ESP_ERR_NO_MEM;
+            s_status.mutex = xSemaphoreCreateMutexStatic(&s_status.mutex_storage);
         }
+        portEXIT_CRITICAL(&s_status_mutex_init_lock);
+    }
+    if (!s_status.mutex) {
+        return ESP_ERR_NO_MEM;
     }
     if (service_status_lock()) {
         memset(s_status.entries, 0, sizeof(s_status.entries));

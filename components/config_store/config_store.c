@@ -33,6 +33,7 @@ static portMUX_TYPE g_config_lock = portMUX_INITIALIZER_UNLOCKED;
 static EXT_RAM_BSS_ATTR app_config_t s_config_scratch;
 static SemaphoreHandle_t s_config_scratch_mutex = NULL;
 static StaticSemaphore_t s_config_scratch_mutex_storage;
+static portMUX_TYPE s_config_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void config_lock(void)
 {
@@ -47,7 +48,11 @@ static void config_unlock(void)
 static esp_err_t config_scratch_lock(void)
 {
     if (!s_config_scratch_mutex) {
-        s_config_scratch_mutex = xSemaphoreCreateMutexStatic(&s_config_scratch_mutex_storage);
+        portENTER_CRITICAL(&s_config_scratch_mutex_init_lock);
+        if (!s_config_scratch_mutex) {
+            s_config_scratch_mutex = xSemaphoreCreateMutexStatic(&s_config_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_config_scratch_mutex_init_lock);
     }
     if (!s_config_scratch_mutex) {
         return ESP_ERR_NO_MEM;

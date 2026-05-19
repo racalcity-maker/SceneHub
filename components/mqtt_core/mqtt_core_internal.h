@@ -81,6 +81,10 @@ mqtt_session_t *alloc_session(void);
 mqtt_session_t *find_session_by_client_id(const char *client_id);
 void free_session(mqtt_session_t *s);
 void sweep_idle_sessions(void);
+int request_session_prepare_close_locked(mqtt_session_t *sess,
+                                         const char *reason,
+                                         int err);
+void request_session_close_socket(int sock);
 bool ensure_session_task_storage(size_t idx);
 uint8_t *ensure_session_rx_buffer(size_t idx);
 uint8_t *ensure_session_tx_buffer(size_t idx);
@@ -98,12 +102,20 @@ esp_err_t mqtt_core_start_server(int port);
 bool acl_can_publish(const char *client_id, const char *topic);
 bool acl_can_subscribe(const char *client_id, const char *topic);
 bool topic_matches_filter(const char *filter, const char *topic);
+uint16_t mqtt_next_packet_id(void);
+uint8_t mqtt_effective_delivery_qos(uint8_t publish_qos, uint8_t subscription_qos);
+bool mqtt_upsert_subscription(mqtt_session_t *sess,
+                              const char *topic,
+                              uint8_t requested_qos,
+                              uint8_t *out_granted_qos);
 
 const char *find_topic_by_type(scenehub_event_type_t type);
 scenehub_event_type_t find_type_by_topic(const char *topic);
+bool mqtt_core_should_bridge_event(const scenehub_event_t *msg);
 void on_event_bus_message(const scenehub_event_t *msg);
 
 void retain_store(const char *topic, const char *payload, uint8_t qos);
+esp_err_t retain_init(void);
 void deliver_retain(mqtt_session_t *sess, const char *filter);
 void publish_to_subscribers(const char *topic,
                             const char *payload,

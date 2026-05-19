@@ -3,7 +3,6 @@
 
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 static const char *TAG = "web_ui_http";
@@ -106,15 +105,6 @@ esp_err_t web_ui_http_resp_send_chunk(httpd_req_t *req, const char *body, ssize_
 esp_err_t web_ui_http_resp_send_err(httpd_req_t *req, httpd_err_code_t error, const char *message)
 {
     const web_ui_http_adapter_t *adapter = web_ui_http_adapter_or_default();
-    const char *uri = (req && req->uri[0]) ? req->uri : "?";
-    ESP_LOGW(TAG,
-             "HTTP error uri=%s status=%d msg=%s free_int=%u largest_int=%u free_psram=%u",
-             uri,
-             (int)error,
-             message ? message : "",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     return (adapter->resp_send_err ? adapter->resp_send_err : s_default_http_adapter.resp_send_err)(
         req, error, message);
 }

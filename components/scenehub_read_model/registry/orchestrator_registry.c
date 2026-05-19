@@ -10,9 +10,13 @@
 #include "scenehub_command_result.h"
 
 EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_cached_snapshot;
+EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_build_snapshot;
 static SemaphoreHandle_t s_cache_mutex = NULL;
 static StaticSemaphore_t s_cache_mutex_storage;
 static portMUX_TYPE s_cache_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_snapshot_build_mutex = NULL;
+static StaticSemaphore_t s_snapshot_build_mutex_storage;
+static portMUX_TYPE s_snapshot_build_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE s_cache_invalidate_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_cache_source_generation = 0;
 static uint32_t s_cache_ingest_generation = 0;
@@ -25,6 +29,9 @@ static bool s_event_handler_registered = false;
 
 static void orch_registry_event_handler(const scenehub_event_t *message);
 static esp_err_t orch_cache_ensure_mutex(void);
+static esp_err_t orch_snapshot_build_lock(void);
+static void orch_snapshot_build_unlock(void);
+static esp_err_t orch_cache_refresh_snapshot(void);
 
 static esp_err_t orch_cache_ensure_mutex(void)
 {
@@ -37,6 +44,28 @@ static esp_err_t orch_cache_ensure_mutex(void)
     }
     portEXIT_CRITICAL(&s_cache_mutex_init_lock);
     return s_cache_mutex ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t orch_snapshot_build_lock(void)
+{
+    if (!s_snapshot_build_mutex) {
+        portENTER_CRITICAL(&s_snapshot_build_mutex_init_lock);
+        if (!s_snapshot_build_mutex) {
+            s_snapshot_build_mutex = xSemaphoreCreateMutexStatic(&s_snapshot_build_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_snapshot_build_mutex_init_lock);
+        if (!s_snapshot_build_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return xSemaphoreTake(s_snapshot_build_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void orch_snapshot_build_unlock(void)
+{
+    if (s_snapshot_build_mutex) {
+        xSemaphoreGive(s_snapshot_build_mutex);
+    }
 }
 
 esp_err_t orch_cache_lock(void)
@@ -70,6 +99,27 @@ static bool orch_cache_take_invalidate_pending(void)
     s_cache_invalidate_pending = false;
     portEXIT_CRITICAL(&s_cache_invalidate_lock);
     return pending;
+}
+
+static bool orch_cache_snapshot_fresh_locked(uint32_t source_generation,
+                                             uint32_t ingest_generation,
+                                             uint32_t gm_generation,
+                                             uint64_t now_ms)
+{
+    uint32_t ttl_ms = ORCH_REGISTRY_CACHE_TTL_MS;
+    bool expired = false;
+
+    if (!s_cache_valid) {
+        return false;
+    }
+    if (device_control_ingest_count() > 0 && ttl_ms < 1000) {
+        ttl_ms = 1000;
+    }
+    expired = now_ms < s_cache_built_at_ms || (now_ms - s_cache_built_at_ms) >= ttl_ms;
+    return s_cache_source_generation == source_generation &&
+           s_cache_ingest_generation == ingest_generation &&
+           s_cache_gm_generation == gm_generation &&
+           !expired;
 }
 
 static esp_err_t orch_current_config_generation(uint32_t *out_generation)
@@ -117,68 +167,114 @@ static void orch_registry_event_handler(const scenehub_event_t *message)
     }
 }
 
-static esp_err_t orch_cache_ensure_snapshot_locked(void)
+static esp_err_t orch_cache_refresh_snapshot(void)
 {
+    esp_err_t err = ESP_OK;
     uint32_t source_generation = 0;
-    uint32_t ingest_generation = device_control_ingest_generation();
-    uint32_t gm_generation = gm_room_session_generation();
-    uint64_t now_ms = orch_now_ms();
-    bool expired = false;
-    esp_err_t err = orch_current_config_generation(&source_generation);
+    uint32_t ingest_generation = 0;
+    uint32_t gm_generation = 0;
+    uint64_t now_ms = 0;
+    bool invalidated_during_build = false;
+
+    ingest_generation = device_control_ingest_generation();
+    gm_generation = gm_room_session_generation();
+    now_ms = orch_now_ms();
+    err = orch_current_config_generation(&source_generation);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = orch_cache_lock();
     if (err != ESP_OK) {
         return err;
     }
     if (orch_cache_take_invalidate_pending()) {
         s_cache_valid = false;
     }
-
-    if (s_cache_valid) {
-        uint32_t ttl_ms = ORCH_REGISTRY_CACHE_TTL_MS;
-        if (device_control_ingest_count() > 0 && ttl_ms < 1000) {
-            ttl_ms = 1000;
-        }
-        expired = now_ms < s_cache_built_at_ms ||
-                  (now_ms - s_cache_built_at_ms) >= ttl_ms;
-        if (s_cache_source_generation == source_generation &&
-            s_cache_ingest_generation == ingest_generation &&
-            s_cache_gm_generation == gm_generation &&
-            !expired) {
-            return ESP_OK;
-        }
+    if (orch_cache_snapshot_fresh_locked(source_generation, ingest_generation, gm_generation, now_ms)) {
+        orch_cache_unlock();
+        return ESP_OK;
     }
+    orch_cache_unlock();
 
-    err = orch_snapshot_builder_build_uncached(&s_cached_snapshot);
+    err = orch_snapshot_build_lock();
     if (err != ESP_OK) {
-        s_cache_valid = false;
         return err;
     }
-    s_cache_source_generation = s_cached_snapshot.generation;
+
+    ingest_generation = device_control_ingest_generation();
+    gm_generation = gm_room_session_generation();
+    now_ms = orch_now_ms();
+    err = orch_current_config_generation(&source_generation);
+    if (err != ESP_OK) {
+        orch_snapshot_build_unlock();
+        return err;
+    }
+
+    err = orch_cache_lock();
+    if (err != ESP_OK) {
+        orch_snapshot_build_unlock();
+        return err;
+    }
+    if (orch_cache_take_invalidate_pending()) {
+        s_cache_valid = false;
+    }
+    if (orch_cache_snapshot_fresh_locked(source_generation, ingest_generation, gm_generation, now_ms)) {
+        orch_cache_unlock();
+        orch_snapshot_build_unlock();
+        return ESP_OK;
+    }
+    orch_cache_unlock();
+
+    memset(&s_build_snapshot, 0, sizeof(s_build_snapshot));
+    err = orch_snapshot_builder_build_uncached(&s_build_snapshot);
+    if (err != ESP_OK) {
+        if (orch_cache_lock() == ESP_OK) {
+            s_cache_valid = false;
+            orch_cache_unlock();
+        }
+        orch_snapshot_build_unlock();
+        return err;
+    }
+
+    err = orch_cache_lock();
+    if (err != ESP_OK) {
+        orch_snapshot_build_unlock();
+        return err;
+    }
+    invalidated_during_build = orch_cache_take_invalidate_pending();
+    s_cached_snapshot = s_build_snapshot;
+    s_cache_source_generation = s_build_snapshot.generation;
     s_cache_ingest_generation = ingest_generation;
     s_cache_gm_generation = gm_generation;
     s_cache_built_at_ms = orch_now_ms();
     s_cache_version++;
     s_cached_snapshot.cache_version = s_cache_version;
     s_cached_snapshot.snapshot_built_at_ms = s_cache_built_at_ms;
-    s_cache_valid = true;
+    s_cache_valid = !invalidated_during_build;
+    orch_cache_unlock();
+    orch_snapshot_build_unlock();
     return ESP_OK;
 }
 
 esp_err_t orchestrator_registry_build_snapshot(orch_registry_snapshot_t *out)
 {
-    esp_err_t err;
+    esp_err_t err = ESP_OK;
+
     if (!out) {
         return ESP_ERR_INVALID_ARG;
+    }
+    err = orch_cache_refresh_snapshot();
+    if (err != ESP_OK) {
+        return err;
     }
     err = orch_cache_lock();
     if (err != ESP_OK) {
         return err;
     }
-    err = orch_cache_ensure_snapshot_locked();
-    if (err == ESP_OK) {
-        *out = s_cached_snapshot;
-    }
+    *out = s_cached_snapshot;
     orch_cache_unlock();
-    return err;
+    return ESP_OK;
 }
 
 esp_err_t orchestrator_registry_get_system_summary(orch_gm_system_summary_t *out)
@@ -188,6 +284,7 @@ esp_err_t orchestrator_registry_get_system_summary(orch_gm_system_summary_t *out
     size_t device_count = 0;
     uint64_t now_ms = orch_now_ms();
     bool services_degraded = false;
+    gm_room_session_event_queue_stats_t event_queue_stats = {0};
     if (!out) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -197,6 +294,12 @@ esp_err_t orchestrator_registry_get_system_summary(orch_gm_system_summary_t *out
     }
     out->generation ^= (device_control_ingest_generation() << 4);
     out->generation ^= (gm_room_session_generation() << 5);
+    if (gm_room_session_get_event_queue_stats(&event_queue_stats) == ESP_OK) {
+        out->dropped_critical_events = event_queue_stats.dropped_critical_events;
+        out->dropped_noncritical_events = event_queue_stats.dropped_noncritical_events;
+        out->dropped_event_queue_events = event_queue_stats.dropped_event_queue_events;
+        out->dropped_runtime_queue_events = event_queue_stats.dropped_runtime_queue_events;
+    }
     if (room_catalog_init() == ESP_OK && room_catalog_refresh() == ESP_OK) {
         size_t rooms = room_catalog_count();
         out->room_count = (uint8_t)(rooms > UINT8_MAX ? UINT8_MAX : rooms);
@@ -351,41 +454,43 @@ esp_err_t orchestrator_registry_list_rooms(orch_room_entry_t *out_rooms,
 
 esp_err_t orchestrator_registry_get_room(const char *room_id, orch_room_entry_t *out)
 {
-    esp_err_t err;
+    esp_err_t err = ESP_OK;
     if (!room_id || !room_id[0] || !out) {
         return ESP_ERR_INVALID_ARG;
+    }
+    err = orch_cache_refresh_snapshot();
+    if (err != ESP_OK) {
+        return err;
     }
     err = orch_cache_lock();
     if (err != ESP_OK) {
         return err;
     }
-    err = orch_cache_ensure_snapshot_locked();
-    if (err == ESP_OK) {
-        const orch_room_entry_t *room = orch_room_view_find_room(&s_cached_snapshot, room_id);
-        if (!room) {
-            err = ESP_ERR_NOT_FOUND;
-        } else {
-            *out = *room;
-        }
+    const orch_room_entry_t *room = orch_room_view_find_room(&s_cached_snapshot, room_id);
+    if (!room) {
+        orch_cache_unlock();
+        return ESP_ERR_NOT_FOUND;
     }
+    *out = *room;
     orch_cache_unlock();
-    return err;
+    return ESP_OK;
 }
 
 esp_err_t orchestrator_registry_get_device(const char *device_id, orch_device_entry_t *out)
 {
-    esp_err_t err;
+    esp_err_t err = ESP_OK;
     if (!device_id || !device_id[0] || !out) {
         return ESP_ERR_INVALID_ARG;
+    }
+    err = orch_cache_refresh_snapshot();
+    if (err != ESP_OK) {
+        return err;
     }
     err = orch_cache_lock();
     if (err != ESP_OK) {
         return err;
     }
-    err = orch_cache_ensure_snapshot_locked();
-    if (err == ESP_OK) {
-        err = orch_device_view_get_device(&s_cached_snapshot, device_id, out);
-    }
+    err = orch_device_view_get_device(&s_cached_snapshot, device_id, out);
     orch_cache_unlock();
     return err;
 }
@@ -399,6 +504,17 @@ esp_err_t orchestrator_registry_list_quest_devices(quest_device_t *out_devices,
         return ESP_ERR_INVALID_ARG;
     }
     return quest_device_list(out_devices, max_devices, out_count, include_system);
+}
+
+esp_err_t orchestrator_registry_list_quest_device_catalog(orch_quest_device_catalog_entry_t *out_devices,
+                                                          size_t max_devices,
+                                                          size_t *out_count,
+                                                          bool include_system)
+{
+    return orch_device_view_list_quest_device_catalog(out_devices,
+                                                     max_devices,
+                                                     out_count,
+                                                     include_system);
 }
 
 esp_err_t orchestrator_registry_list_control_devices(orch_control_device_entry_t *out_devices,
@@ -423,23 +539,24 @@ esp_err_t orchestrator_registry_list_device_issues(const char *device_id,
         return ESP_ERR_INVALID_ARG;
     }
     *out_count = 0;
+    err = orch_cache_refresh_snapshot();
+    if (err != ESP_OK) {
+        return err;
+    }
     err = orch_cache_lock();
     if (err != ESP_OK) {
         return err;
     }
-    err = orch_cache_ensure_snapshot_locked();
-    if (err == ESP_OK) {
-        for (uint8_t i = 0; i < s_cached_snapshot.issue_count && emitted < max_issues; ++i) {
-            const orch_issue_entry_t *issue = &s_cached_snapshot.issues[i];
-            if (strcmp(issue->device_id, device_id) != 0) {
-                continue;
-            }
-            out_issues[emitted++] = *issue;
+    for (uint8_t i = 0; i < s_cached_snapshot.issue_count && emitted < max_issues; ++i) {
+        const orch_issue_entry_t *issue = &s_cached_snapshot.issues[i];
+        if (strcmp(issue->device_id, device_id) != 0) {
+            continue;
         }
-        *out_count = emitted;
+        out_issues[emitted++] = *issue;
     }
+    *out_count = emitted;
     orch_cache_unlock();
-    return err;
+    return ESP_OK;
 }
 
 esp_err_t orchestrator_registry_list_room_scenarios(const char *room_id,
@@ -447,23 +564,24 @@ esp_err_t orchestrator_registry_list_room_scenarios(const char *room_id,
                                                     size_t max_scenarios,
                                                     size_t *out_count)
 {
-    esp_err_t err;
+    esp_err_t err = ESP_OK;
     if (!room_id || !room_id[0] || !out_count || !out_scenarios || max_scenarios == 0) {
         return ESP_ERR_INVALID_ARG;
     }
     *out_count = 0;
+    err = orch_cache_refresh_snapshot();
+    if (err != ESP_OK) {
+        return err;
+    }
     err = orch_cache_lock();
     if (err != ESP_OK) {
         return err;
     }
-    err = orch_cache_ensure_snapshot_locked();
-    if (err == ESP_OK) {
-        err = orch_room_scenario_view_list(&s_cached_snapshot,
-                                           room_id,
-                                           out_scenarios,
-                                           max_scenarios,
-                                           out_count);
-    }
+    err = orch_room_scenario_view_list(&s_cached_snapshot,
+                                       room_id,
+                                       out_scenarios,
+                                       max_scenarios,
+                                       out_count);
     orch_cache_unlock();
     return err;
 }
@@ -488,4 +606,24 @@ esp_err_t orchestrator_registry_list_room_scenario_details(const char *room_id,
         return ESP_ERR_INVALID_ARG;
     }
     return orch_room_scenario_view_list_details(room_id, out_scenarios, max_scenarios, out_count);
+}
+
+esp_err_t orchestrator_registry_get_room_scenario_detail(const char *room_id,
+                                                         const char *scenario_id,
+                                                         orch_room_scenario_detail_t *out)
+{
+    if (!room_id || !room_id[0] || !scenario_id || !scenario_id[0] || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return orch_room_scenario_view_get_detail(room_id, scenario_id, out);
+}
+
+esp_err_t orchestrator_registry_get_room_scenario_layout(const char *room_id,
+                                                         const char *scenario_id,
+                                                         room_scenario_t *out)
+{
+    if (!room_id || !room_id[0] || !scenario_id || !scenario_id[0] || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return orch_room_scenario_view_get_layout(room_id, scenario_id, out);
 }

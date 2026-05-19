@@ -43,56 +43,36 @@ if(!stepEl)return;
 const label=stepEl.querySelector('[data-step-field="label"]');
 const typeField=stepEl.querySelector('[data-step-field="type"]');
 if(!label||!typeField)return;
-const type=typeField.value||'WAIT_TIME';
-if(type==='DEVICE_COMMAND'){
-const deviceId=(stepEl.querySelector('[data-step-field="device_id"]')||{}).value||'';
-const commandId=(stepEl.querySelector('[data-step-field="command_id"]')||{}).value||'';
-const device=scenarioDeviceById(deviceId);
-label.value=`${scenarioRoomNameForDevice(device)}: ${scenarioDeviceName(device)} - ${scenarioCommandName(deviceId,commandId)}`;
-}
-else if(type==='WAIT_DEVICE_EVENT'){
-const deviceId=(stepEl.querySelector('[data-step-field="device_id"]')||{}).value||'';
-const eventId=(stepEl.querySelector('[data-step-field="event_id"]')||{}).value||'';
-const device=scenarioDeviceById(deviceId);
-label.value=`${scenarioRoomNameForDevice(device)}: wait ${scenarioDeviceName(device)} - ${scenarioDeviceEventName(deviceId,eventId)}`;
-}
-else if(type==='WAIT_ANY_DEVICE_EVENT'){
-const count=stepEl.querySelectorAll('[data-event-group-item]').length||1;
-label.value=`Wait any device event (${count})`;
-}
-else if(type==='WAIT_ALL_DEVICE_EVENTS'){
-const count=stepEl.querySelectorAll('[data-event-group-item]').length||1;
-label.value=`Wait all device events (${count})`;
-}
-else if(type==='WAIT_TIME'){
-const seconds=(stepEl.querySelector('[data-step-field="duration_ms"]')||{}).value||1;
-label.value=`Wait ${seconds} sec`;
-}
-else if(type==='OPERATOR_APPROVAL'){
-const prompt=(stepEl.querySelector('[data-step-field="prompt"]')||{}).value||'approval';
-label.value=`Operator approval: ${prompt}`;
-}
-else if(type==='SHOW_OPERATOR_MESSAGE'){
-const message=(stepEl.querySelector('[data-step-field="message"]')||{}).value||'message';
-label.value=`Show operator: ${message}`;
-}
-else if(type==='DEVICE_COMMAND_GROUP'){
-const count=stepEl.querySelectorAll('[data-command-group-item]').length||1;
-label.value=`Command group (${count})`;
-}
-else if(type==='SET_FLAG'){
-const flag=(stepEl.querySelector('[data-step-field="flag_name"]')||{}).value||'flag';
+const step={type:typeField.value||'WAIT_TIME'};
+step.device_id=(stepEl.querySelector('[data-step-field="device_id"]')||{}).value||'';
+step.command_id=(stepEl.querySelector('[data-step-field="command_id"]')||{}).value||'';
+step.event_id=(stepEl.querySelector('[data-step-field="event_id"]')||{}).value||'';
+const durationField=stepEl.querySelector('[data-step-field="duration_ms"]');
+if(durationField)step.duration_ms=durationSecondsToMs(durationField.value||1);
+const promptField=stepEl.querySelector('[data-step-field="prompt"]');
+if(promptField)step.prompt=promptField.value||'';
+const messageField=stepEl.querySelector('[data-step-field="message"]');
+if(messageField)step.message=messageField.value||'';
+const flagNameField=stepEl.querySelector('[data-step-field="flag_name"]');
+if(flagNameField)step.flag_name=flagNameField.value||'';
 const valueField=stepEl.querySelector('[data-step-field="value"]');
-const value=valueField?(valueField.type==='checkbox'?valueField.checked:valueField.value!=='false'):true;
-label.value=`Set ${flag} = ${value?'true':'false'}`;
+if(valueField)step.value=valueField.type==='checkbox'?valueField.checked:valueField.value!=='false';
+if(step.type==='DEVICE_COMMAND_GROUP')step.commands=new Array(stepEl.querySelectorAll('[data-command-group-item]').length||1).fill({});
+if(step.type==='WAIT_ANY_DEVICE_EVENT'||step.type==='WAIT_ALL_DEVICE_EVENTS')step.events=new Array(stepEl.querySelectorAll('[data-event-group-item]').length||1).fill({});
+if(step.type==='WAIT_FLAGS')step.flags=new Array(stepEl.querySelectorAll('[data-flag-list-item]').length||1).fill({flag_name:'',value:true});
+if(step.device_id==='system_audio'&&step.command_id==='play'){
+const fileField=stepEl.querySelector('[data-step-param="file"]');
+const volumeField=stepEl.querySelector('[data-step-param="volume"]');
+const channelField=stepEl.querySelector('[data-step-param="channel"]');
+const repeatField=stepEl.querySelector('[data-step-param="repeat"]');
+step.params=scenarioNormalizeAudioParams({
+file:fileField?fileField.value:'',
+volume:volumeField?Number(volumeField.value)||0:undefined,
+channel:channelField?channelField.value||'effect':'effect',
+repeat:repeatField?!!repeatField.checked:false
+});
 }
-else if(type==='WAIT_FLAGS'){
-const count=stepEl.querySelectorAll('[data-flag-list-item]').length||1;
-label.value=`Wait flags (${count})`;
-}
-else if(type==='END_GAME'){
-label.value='End game';
-}
+label.value=scenarioStepAutoLabel(step);
 }
 
 function scenarioStepSummaryText(step){
@@ -115,7 +95,7 @@ if(type==='SHOW_OPERATOR_MESSAGE')return `Show operator: ${step.message||'messag
 if(type==='SET_FLAG')return `Set ${step.flag_name||'flag'} = ${step.value===false?'false':'true'}`;
 if(type==='WAIT_FLAGS')return `Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`;
 if(type==='END_GAME')return 'End game';
-return step.label||type;
+return scenarioStepAutoLabel(step);
 }
 
 function scenarioStepVisualType(step){
@@ -178,7 +158,8 @@ return `<div class='builder-step scenario-step-row scenario-step-${visual} scena
 
 function applyScenarioStepAction(action,index,type){
 const wasDirty=!!scenarioEditor.dirty;
-const draft=collectScenarioEditor();
+const draft=scenarioWorkingDraft();
+if(!draft)return;
 const activeBranch=scenarioActiveBranch(draft);
 const steps=scenarioActiveSteps(draft);
 const nextIndex=scenarioNextStepLocalIndex(steps);

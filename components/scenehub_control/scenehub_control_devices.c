@@ -3,7 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cJSON.h"
 #include "device_control_ingest.h"
+#include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -12,16 +15,11 @@
 #include "gm_api.h"
 #include "mqtt_core.h"
 #include "quest_device.h"
+#include "scenehub_device_command_resolver.h"
 
 static const char *TAG = "scenehub_control";
 static const uint32_t SCENEHUB_CONTROL_INTERFACE_DISCOVERY_TIMEOUT_MS = 3000;
 static const uint32_t SCENEHUB_CONTROL_INTERFACE_DISCOVERY_POLL_MS = 100;
-
-static SemaphoreHandle_t s_device_command_scratch_mutex = NULL;
-static StaticSemaphore_t s_device_command_scratch_mutex_storage;
-static portMUX_TYPE s_device_command_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
-static quest_device_t s_device_command_scratch_device;
-static quest_device_command_t s_device_command_scratch_command;
 
 static esp_err_t scenehub_control_publish_describe_interface(const char *client_id,
                                                              const char *request_id)
@@ -66,28 +64,132 @@ static cJSON *scenehub_control_extract_device_description(const char *data_json)
     return detached;
 }
 
-static esp_err_t scenehub_control_device_command_scratch_lock(void)
+static const char *scenehub_control_json_string(const cJSON *obj, const char *key)
 {
-    if (!s_device_command_scratch_mutex) {
-        portENTER_CRITICAL(&s_device_command_scratch_mutex_init_lock);
-        if (!s_device_command_scratch_mutex) {
-            s_device_command_scratch_mutex =
-                xSemaphoreCreateMutexStatic(&s_device_command_scratch_mutex_storage);
-        }
-        portEXIT_CRITICAL(&s_device_command_scratch_mutex_init_lock);
-        if (!s_device_command_scratch_mutex) {
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    return xSemaphoreTake(s_device_command_scratch_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK
-                                                                                    : ESP_ERR_TIMEOUT;
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsString(item) && item->valuestring ? item->valuestring : "";
 }
 
-static void scenehub_control_device_command_scratch_unlock(void)
+static bool scenehub_control_json_has_key(const cJSON *obj, const char *key)
 {
-    if (s_device_command_scratch_mutex) {
-        xSemaphoreGive(s_device_command_scratch_mutex);
+    return cJSON_IsObject(obj) && key && key[0] &&
+           cJSON_GetObjectItemCaseSensitive(obj, key) != NULL;
+}
+
+static bool scenehub_control_resource_array_has_gpio(const cJSON *array)
+{
+    if (!cJSON_IsArray(array)) {
+        return false;
     }
+    int count = cJSON_GetArraySize(array);
+    for (int i = 0; i < count; ++i) {
+        if (scenehub_control_json_has_key(cJSON_GetArrayItem(array, i), "gpio")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool scenehub_control_manifest_has_gpio(const cJSON *manifest)
+{
+    static const char *resource_keys[] = {
+        "relays",
+        "mosfets",
+        "inputs",
+        "outputs",
+        "led_strips",
+    };
+    const cJSON *resources = cJSON_GetObjectItemCaseSensitive(manifest, "resources");
+    if (!cJSON_IsObject(resources)) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(resource_keys) / sizeof(resource_keys[0]); ++i) {
+        if (scenehub_control_resource_array_has_gpio(
+                cJSON_GetObjectItemCaseSensitive(resources, resource_keys[i]))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool scenehub_control_compact_manifest_root_present(const cJSON *manifest)
+{
+    return cJSON_IsObject(manifest) &&
+           (scenehub_control_json_has_key(manifest, "manifest_version") ||
+            scenehub_control_json_has_key(manifest, "format") ||
+            scenehub_control_json_has_key(manifest, "node_kind") ||
+            scenehub_control_json_has_key(manifest, "capability_contract") ||
+            scenehub_control_json_has_key(manifest, "resources") ||
+            scenehub_control_json_has_key(manifest, "command_templates") ||
+            scenehub_control_json_has_key(manifest, "event_templates"));
+}
+
+static void scenehub_control_fill_device_payload_error(scenehub_control_result_t *result,
+                                                       const cJSON *device_payload,
+                                                       esp_err_t err)
+{
+    const cJSON *manifest = cJSON_GetObjectItemCaseSensitive(device_payload, "device_description");
+    const cJSON *manifest_version = cJSON_GetObjectItemCaseSensitive(manifest, "manifest_version");
+    const cJSON *resources = cJSON_GetObjectItemCaseSensitive(manifest, "resources");
+    const cJSON *commands = cJSON_GetObjectItemCaseSensitive(manifest, "command_templates");
+    const cJSON *events = cJSON_GetObjectItemCaseSensitive(manifest, "event_templates");
+    const cJSON *schemas = cJSON_GetObjectItemCaseSensitive(manifest, "schemas");
+
+    if (!cJSON_IsObject(manifest) || !scenehub_control_compact_manifest_root_present(manifest)) {
+        scenehub_control_fill_common_error(result, err);
+        return;
+    }
+    if (scenehub_control_json_has_key(manifest, "version") ||
+        scenehub_control_json_has_key(manifest, "commands") ||
+        scenehub_control_json_has_key(manifest, "events")) {
+        scenehub_control_set_result(result,
+                                    SCENEHUB_CONTROL_STATUS_REJECTED,
+                                    err,
+                                    false,
+                                    "invalid_device_manifest",
+                                    "SceneHub Node manifest must use compact v2 fields only; root version/commands/events are not supported.");
+        return;
+    }
+    if (!cJSON_IsNumber(manifest_version) || manifest_version->valueint != 2 ||
+        strcmp(scenehub_control_json_string(manifest, "format"), "compact_resources") != 0 ||
+        !scenehub_control_json_string(manifest, "node_kind")[0] ||
+        strcmp(scenehub_control_json_string(manifest, "capability_contract"),
+               "scenehub.node.compact.v1") != 0) {
+        scenehub_control_set_result(result,
+                                    SCENEHUB_CONTROL_STATUS_REJECTED,
+                                    err,
+                                    false,
+                                    "invalid_device_manifest_identity",
+                                    "SceneHub Node manifest must include manifest_version=2, format=compact_resources, node_kind and capability_contract=scenehub.node.compact.v1.");
+        return;
+    }
+    if (!cJSON_IsObject(resources) ||
+        !cJSON_IsArray(commands) ||
+        !cJSON_IsArray(events) ||
+        !cJSON_IsObject(schemas)) {
+        scenehub_control_set_result(result,
+                                    SCENEHUB_CONTROL_STATUS_REJECTED,
+                                    err,
+                                    false,
+                                    "invalid_device_manifest_shape",
+                                    "SceneHub Node manifest must include resources, command_templates, event_templates and schemas.");
+        return;
+    }
+    if (scenehub_control_manifest_has_gpio(manifest)) {
+        scenehub_control_set_result(result,
+                                    SCENEHUB_CONTROL_STATUS_REJECTED,
+                                    err,
+                                    false,
+                                    "invalid_device_manifest_gpio",
+                                    "GPIO pins are node-local configuration and must not be exposed in the SceneHub device manifest.");
+        return;
+    }
+    scenehub_control_set_result(result,
+                                SCENEHUB_CONTROL_STATUS_REJECTED,
+                                err,
+                                false,
+                                "invalid_device_manifest",
+                                "SceneHub Node manifest is invalid; check duplicate ids and schema references.");
 }
 
 esp_err_t scenehub_control_save_device(const char *source,
@@ -103,11 +205,84 @@ esp_err_t scenehub_control_save_device(const char *source,
         scenehub_control_fill_common_error(out_result, ESP_ERR_INVALID_ARG);
         return ESP_OK;
     }
-    return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  quest_device_upsert_and_save(device),
-                                                                  SCENEHUB_STATE_SLICE_DEVICES_CATALOG,
-                                                                  device->id,
-                                                                  "device_save");
+    return scenehub_control_finalize_api_result_with_invalidation(
+        out_result,
+        scenehub_control_persistence_enabled() ? quest_device_upsert_and_save(device)
+                                               : quest_device_upsert(device),
+        SCENEHUB_STATE_SLICE_DEVICES_CATALOG,
+        device->id,
+        "device_save");
+}
+
+esp_err_t scenehub_control_save_device_payload(const char *source,
+                                               const cJSON *payload,
+                                               cJSON **out_device_json,
+                                               scenehub_control_result_t *out_result)
+{
+    (void)source;
+    const cJSON *device_payload = NULL;
+    quest_device_t *device = NULL;
+    cJSON *device_json = NULL;
+    esp_err_t err = scenehub_control_prepare_result("", "device_save", out_result);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (out_device_json) {
+        *out_device_json = NULL;
+    }
+    if (!payload) {
+        scenehub_control_fill_common_error(out_result, ESP_ERR_INVALID_ARG);
+        return ESP_OK;
+    }
+
+    device_payload = cJSON_GetObjectItemCaseSensitive(payload, "device");
+    if (!cJSON_IsObject(device_payload)) {
+        device_payload = payload;
+    }
+
+    device = heap_caps_calloc(1, sizeof(*device), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!device) {
+        device = heap_caps_calloc(1, sizeof(*device), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!device) {
+        scenehub_control_fill_common_error(out_result, ESP_ERR_NO_MEM);
+        return ESP_OK;
+    }
+
+    err = quest_device_from_json(device_payload, device);
+    if (err == ESP_OK && out_device_json) {
+        device_json = cJSON_CreateObject();
+        if (!device_json) {
+            err = ESP_ERR_NO_MEM;
+        } else {
+            err = quest_device_to_json(device, device_json);
+        }
+    }
+    if (err != ESP_OK) {
+        cJSON_Delete(device_json);
+        heap_caps_free(device);
+        scenehub_control_fill_device_payload_error(out_result, device_payload, err);
+        return ESP_OK;
+    }
+
+    err = scenehub_control_finalize_api_result_with_invalidation(
+        out_result,
+        scenehub_control_persistence_enabled() ? quest_device_upsert_and_save(device)
+                                               : quest_device_upsert(device),
+        SCENEHUB_STATE_SLICE_DEVICES_CATALOG,
+        device->id,
+        "device_save");
+    heap_caps_free(device);
+    if (out_result->status != SCENEHUB_CONTROL_STATUS_DONE) {
+        cJSON_Delete(device_json);
+        device_json = NULL;
+    }
+    if (out_device_json) {
+        *out_device_json = device_json;
+    } else {
+        cJSON_Delete(device_json);
+    }
+    return err;
 }
 
 esp_err_t scenehub_control_delete_device(const char *source,
@@ -119,11 +294,13 @@ esp_err_t scenehub_control_delete_device(const char *source,
     if (err != ESP_OK) {
         return err;
     }
-    return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  quest_device_delete_and_save(device_id),
-                                                                  SCENEHUB_STATE_SLICE_DEVICES_CATALOG,
-                                                                  device_id,
-                                                                  "device_delete");
+    return scenehub_control_finalize_api_result_with_invalidation(
+        out_result,
+        scenehub_control_persistence_enabled() ? quest_device_delete_and_save(device_id)
+                                               : quest_device_delete(device_id),
+        SCENEHUB_STATE_SLICE_DEVICES_CATALOG,
+        device_id,
+        "device_delete");
 }
 
 esp_err_t scenehub_control_device_command_run(const char *source,
@@ -134,6 +311,7 @@ esp_err_t scenehub_control_device_command_run(const char *source,
                                               scenehub_control_result_t *out_result)
 {
     bool log_warning = false;
+    scenehub_resolved_device_command_t resolved = {0};
     esp_err_t err = scenehub_control_prepare_result("", "device_command_run", out_result);
     if (err != ESP_OK) {
         return err;
@@ -142,39 +320,30 @@ esp_err_t scenehub_control_device_command_run(const char *source,
         memset(out_info, 0, sizeof(*out_info));
     }
 
-    err = scenehub_control_device_command_scratch_lock();
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    memset(&s_device_command_scratch_device, 0, sizeof(s_device_command_scratch_device));
-    memset(&s_device_command_scratch_command, 0, sizeof(s_device_command_scratch_command));
-
-    err = quest_device_get(device_id, &s_device_command_scratch_device);
+    err = scenehub_device_command_resolve(device_id,
+                                          command_id,
+                                          params_json,
+                                          true,
+                                          &resolved,
+                                          NULL,
+                                          0);
     if (err == ESP_OK && out_info) {
         scenehub_control_copy(out_info->device_name,
                               sizeof(out_info->device_name),
-                              s_device_command_scratch_device.name);
-    }
-    if (err == ESP_OK && !s_device_command_scratch_device.enabled) {
-        err = ESP_ERR_INVALID_STATE;
-    }
-    if (err == ESP_OK) {
-        err = quest_device_get_command(device_id, command_id, &s_device_command_scratch_command);
+                              resolved.device_name);
     }
     if (err == ESP_OK && out_info) {
         scenehub_control_copy(out_info->command_label,
                               sizeof(out_info->command_label),
-                              s_device_command_scratch_command.label);
+                              resolved.command.label);
     }
     if (err == ESP_OK) {
-        log_warning = s_device_command_scratch_command.requires_confirmation ||
-                      strcmp(s_device_command_scratch_command.danger_level, "normal") != 0;
+        log_warning = resolved.command.requires_confirmation ||
+                      strcmp(resolved.command.danger_level, "normal") != 0;
     }
-    if (err == ESP_OK && !s_device_command_scratch_command.manual_allowed) {
+    if (err == ESP_OK && !resolved.command.manual_allowed) {
         err = ESP_ERR_INVALID_STATE;
     }
-    scenehub_control_device_command_scratch_unlock();
 
     if (err == ESP_OK) {
         err = gm_api_device_command_run(device_id, command_id, params_json);

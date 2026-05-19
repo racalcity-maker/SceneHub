@@ -1,14 +1,12 @@
 #include "web_ui_utils.h"
 #include "web_ui_handlers.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #include "cJSON.h"
 #include "esp_http_server.h"
 #include "hardware_io.h"
-#include "quest_device.h"
-#include "room_scenario.h"
+#include "scenehub_control.h"
 #include "service_status.h"
 
 #define HARDWARE_IO_MODE_BODY_MAX_BYTES 256
@@ -209,135 +207,6 @@ static esp_err_t hardware_io_read_json(httpd_req_t *req, cJSON **out_root)
     return ESP_OK;
 }
 
-static int hardware_io_event_channel(const char *event_id)
-{
-    int channel = 0;
-    if (!event_id || sscanf(event_id, "ch%d_", &channel) != 1) {
-        return 0;
-    }
-    return channel;
-}
-
-static int hardware_io_params_channel(const cJSON *obj)
-{
-    const cJSON *params = cJSON_GetObjectItemCaseSensitive(obj, "params");
-    const cJSON *channel = params ? cJSON_GetObjectItemCaseSensitive(params, "channel") : NULL;
-    if (!cJSON_IsNumber(channel)) {
-        return 0;
-    }
-    return channel->valueint;
-}
-
-static bool hardware_io_command_uses_output(const char *command_id)
-{
-    return command_id &&
-           (strcmp(command_id, "set") == 0 ||
-            strcmp(command_id, "pulse") == 0 ||
-            strcmp(command_id, "blink") == 0 ||
-            strcmp(command_id, "toggle") == 0);
-}
-
-static bool hardware_io_mode_blocks_input(hardware_io_io_mode_t requested)
-{
-    return requested != HARDWARE_IO_IO_MODE_INPUT;
-}
-
-static bool hardware_io_mode_blocks_output(hardware_io_io_mode_t requested)
-{
-    return requested != HARDWARE_IO_IO_MODE_OUTPUT;
-}
-
-static bool hardware_io_scan_io_refs(const cJSON *node,
-                                     uint8_t channel,
-                                     hardware_io_io_mode_t requested,
-                                     const char *scenario_id,
-                                     char *message,
-                                     size_t message_size)
-{
-    if (!node) {
-        return false;
-    }
-    if (cJSON_IsObject(node)) {
-        const cJSON *device_id = cJSON_GetObjectItemCaseSensitive(node, "device_id");
-        if (cJSON_IsString(device_id) &&
-            device_id->valuestring &&
-            strcmp(device_id->valuestring, QUEST_DEVICE_SYSTEM_IO_ID) == 0) {
-            const cJSON *event_id = cJSON_GetObjectItemCaseSensitive(node, "event_id");
-            const cJSON *command_id = cJSON_GetObjectItemCaseSensitive(node, "command_id");
-            int ref_channel = 0;
-            if (cJSON_IsString(event_id) && event_id->valuestring) {
-                ref_channel = hardware_io_event_channel(event_id->valuestring);
-                if (ref_channel == channel && hardware_io_mode_blocks_input(requested)) {
-                    snprintf(message,
-                             message_size,
-                             "IO %u is used as input in scenario %s",
-                             (unsigned)channel,
-                             scenario_id && scenario_id[0] ? scenario_id : "?");
-                    return true;
-                }
-            }
-            if (cJSON_IsString(command_id) &&
-                command_id->valuestring &&
-                hardware_io_command_uses_output(command_id->valuestring)) {
-                ref_channel = hardware_io_params_channel(node);
-                if (ref_channel == channel && hardware_io_mode_blocks_output(requested)) {
-                    snprintf(message,
-                             message_size,
-                             "IO %u is used as output in scenario %s",
-                             (unsigned)channel,
-                             scenario_id && scenario_id[0] ? scenario_id : "?");
-                    return true;
-                }
-            }
-        }
-        for (const cJSON *child = node->child; child; child = child->next) {
-            if (hardware_io_scan_io_refs(child, channel, requested, scenario_id, message, message_size)) {
-                return true;
-            }
-        }
-        return false;
-    }
-    if (cJSON_IsArray(node)) {
-        const cJSON *child = NULL;
-        cJSON_ArrayForEach(child, node) {
-            if (hardware_io_scan_io_refs(child, channel, requested, scenario_id, message, message_size)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static esp_err_t hardware_io_check_mode_conflict(uint8_t channel,
-                                                 hardware_io_io_mode_t requested,
-                                                 char *message,
-                                                 size_t message_size)
-{
-    cJSON *root = NULL;
-    const cJSON *scenarios = NULL;
-    const cJSON *scenario = NULL;
-    esp_err_t err = room_scenario_store_export_json(&root);
-    if (err != ESP_OK) {
-        return err;
-    }
-    scenarios = cJSON_GetObjectItemCaseSensitive(root, "room_scenarios");
-    cJSON_ArrayForEach(scenario, scenarios) {
-        const cJSON *id = cJSON_GetObjectItemCaseSensitive(scenario, "id");
-        const char *scenario_id = cJSON_IsString(id) ? id->valuestring : "?";
-        if (hardware_io_scan_io_refs(scenario,
-                                     channel,
-                                     requested,
-                                     scenario_id,
-                                     message,
-                                     message_size)) {
-            cJSON_Delete(root);
-            return ESP_ERR_INVALID_STATE;
-        }
-    }
-    cJSON_Delete(root);
-    return ESP_OK;
-}
-
 esp_err_t hardware_io_status_handler(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
@@ -384,8 +253,8 @@ esp_err_t hardware_io_io_mode_handler(httpd_req_t *req)
     const cJSON *channel_item = NULL;
     const cJSON *mode_item = NULL;
     hardware_io_io_mode_t mode = HARDWARE_IO_IO_MODE_DISABLED;
-    char conflict[128] = {0};
     uint8_t channel = 0;
+    scenehub_control_result_t result = {0};
     esp_err_t err = hardware_io_read_json(req, &input);
     if (err != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid hardware io request");
@@ -400,27 +269,10 @@ esp_err_t hardware_io_io_mode_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid io mode request");
     }
     channel = (uint8_t)channel_item->valueint;
-    if (!hardware_io_is_available()) {
-        cJSON_Delete(input);
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "hardware_io_unavailable");
-    }
-    err = hardware_io_check_mode_conflict(channel, mode, conflict, sizeof(conflict));
-    if (err == ESP_ERR_INVALID_STATE) {
-        cJSON_Delete(input);
-        httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_send(req, conflict, HTTPD_RESP_USE_STRLEN);
-    }
-    if (err != ESP_OK) {
-        cJSON_Delete(input);
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "io mode validation failed");
-    }
-    err = hardware_io_io_set_mode(channel, mode);
+    err = scenehub_control_hardware_io_set_mode("http", channel, mode, &result);
     cJSON_Delete(input);
-    if (err == ESP_ERR_INVALID_ARG || err == ESP_ERR_INVALID_STATE) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "io mode cannot be applied");
-    }
-    if (err != ESP_OK) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "io mode update failed");
+    if (!web_ui_scenehub_control_is_done(err, &result)) {
+        return web_ui_send_scenehub_control_error(req, err, &result, "io mode update failed");
     }
     root = cJSON_CreateObject();
     if (!root) {

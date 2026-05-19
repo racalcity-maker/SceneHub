@@ -114,12 +114,21 @@ static void publish_event_message(void *ctx)
     bridge_job_free(msg);
 }
 
-void on_event_bus_message(const scenehub_event_t *msg)
+bool mqtt_core_should_bridge_event(const scenehub_event_t *msg)
 {
     if (!msg) {
-        return;
+        return false;
     }
-    if (!msg->topic[0] && !find_topic_by_type(msg->type)) {
+    if (msg->origin == SCENEHUB_EVENT_ORIGIN_MQTT ||
+        msg->type == SCENEHUB_EVENT_MQTT_MESSAGE) {
+        return false;
+    }
+    return msg->topic[0] || find_topic_by_type(msg->type);
+}
+
+void on_event_bus_message(const scenehub_event_t *msg)
+{
+    if (!mqtt_core_should_bridge_event(msg)) {
         return;
     }
 

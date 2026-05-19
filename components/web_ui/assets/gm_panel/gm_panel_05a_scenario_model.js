@@ -29,7 +29,7 @@ step=step||{};
 const type=inferScenarioEditorStepType(step);
 const out={
 id:step.id||'',label:step.label||'',enabled:step.enabled!==false,type}
-;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms!==undefined&&step.duration_ms!==null)out.duration_ms=Number(step.duration_ms)||0;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:cmd.params&&typeof cmd.params==='object'?cmd.params:{}}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;if(type==='WAIT_TIME'&&(!Number.isFinite(Number(out.duration_ms))||Number(out.duration_ms)<=0))out.duration_ms=1000;return out;}
+;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms!==undefined&&step.duration_ms!==null)out.duration_ms=Number(step.duration_ms)||0;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:scenarioHydrateCommandParams(cmd.device_id||'',cmd.command_id||'',cmd.params&&typeof cmd.params==='object'?cmd.params:null)}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;if(type==='WAIT_TIME'&&(!Number.isFinite(Number(out.duration_ms))||Number(out.duration_ms)<=0))out.duration_ms=1000;if(out.device_id&&out.command_id)out.params=scenarioHydrateCommandParams(out.device_id,out.command_id,out.params&&typeof out.params==='object'?out.params:null);return out;}
 function scenarioBranchTypeValue(branch){
 const raw=String(branch&&branch.type||'normal').toLowerCase();
 return raw==='reactive'||raw==='reaction'?'reactive':'normal';
@@ -54,6 +54,7 @@ if(branch&&typeof branch==='object'){
 if(branch[key]!==undefined)out[key]=JSON.parse(JSON.stringify(branch[key]));
 });
 }
+if(type==='reactive')return ensureReactiveV2Branch(out);
 return out;
 }
 
@@ -128,28 +129,9 @@ function scenarioClone(obj){
 return obj?JSON.parse(JSON.stringify(obj)):obj;
 }
 
-function scenarioRestoreMissingOriginalBranches(source){
-if(!source||!scenarioEditor.original_scenario)return source;
-const original=scenarioEditor.original_scenario;
-if((source.id||'')!==(original.id||'')||(source.room_id||'')!==(original.room_id||''))return source;
-if(!Array.isArray(source.branches)||!Array.isArray(original.branches))return source;
-const shrinkFloor=Number(scenarioEditor.branch_count_shrink_floor)||0;
-if(scenarioEditor.branch_count_shrink_allowed&&shrinkFloor>0&&source.branches.length>=shrinkFloor)return source;
-if(scenarioEditor.branch_count_shrink_allowed&&shrinkFloor<=0)return source;
-if(source.branches.length>=original.branches.length)return source;
-const currentById=new Map(source.branches.map(branch=>[String(branch&&branch.id||''),branch]));
-const originalIds=new Set(original.branches.map(branch=>String(branch&&branch.id||'')));
-const merged=[];
-original.branches.forEach(branch=>{
-const id=String(branch&&branch.id||'');
-merged.push(currentById.has(id)?currentById.get(id):scenarioClone(branch));
-});
-source.branches.forEach(branch=>{
-const id=String(branch&&branch.id||'');
-if(!originalIds.has(id))merged.push(branch);
-});
-source.branches=merged;
-return source;
+function scenarioWorkingDraft(){
+const source=scenarioEditorSource();
+return source?scenarioClone(source):null;
 }
 
 function scenarioActiveBranchIndex(scenario){
@@ -385,14 +367,98 @@ return all.map(t=>`<option value='${esc(t)}' ${type===t?'selected':''}>${esc(sce
 
 function scenarioCatalogDevices(){
 if(!gmHardwareIo.loaded&&!gmHardwareIo.loading&&typeof loadHardwareIoStatus==='function'){
-setTimeout(()=>loadHardwareIoStatus(true),0);
+setTimeout(()=>loadHardwareIoStatus(false),0);
 }
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const catalogDevices=Array.isArray(catalog.quest_devices)?catalog.quest_devices:[];
 const base=catalogDevices.length?catalogDevices:questDevices().map(device=>({
-id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
+id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',device_description:device.device_description,commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
 )).filter(device=>device.id);
 return base.map(scenarioNormalizeHardwareDevice).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
+}
+
+function compactManifest(device){
+const manifest=device&&device.device_description;
+return manifest&&Number(manifest.manifest_version)===2&&manifest.format==='compact_resources'&&manifest.node_kind&&manifest.capability_contract==='scenehub.node.compact.v1'?manifest:null;
+}
+
+function compactResourceId(item,target){
+if(target==='led_strips')return String(item&&item.strip!==undefined?item.strip:'');
+return String(item&&item.channel!==undefined?item.channel:'');
+}
+
+function compactResourceLabel(item,target){
+const id=compactResourceId(item,target);
+const fallback=target==='led_strips'?`LED Strip ${id}`:target==='mosfets'?`MOSFET ${id}`:target==='outputs'?`Output ${id}`:target==='inputs'?`Input ${id}`:`Relay ${id}`;
+return item&&(item.label||fallback)||fallback;
+}
+
+function compactResourceOptions(manifest,target){
+const resources=manifest&&manifest.resources&&typeof manifest.resources==='object'?manifest.resources:{};
+return (Array.isArray(resources[target])?resources[target]:[]).map(item=>({id:compactResourceId(item,target),name:compactResourceLabel(item,target)})).filter(item=>item.id);
+}
+
+function compactSchemaForTemplate(manifest,template){
+const schemas=manifest&&manifest.schemas&&typeof manifest.schemas==='object'?manifest.schemas:{};
+const ref=template&&template.args_schema_ref||'';
+const schema=Array.isArray(schemas[ref])?schemas[ref]:[];
+const target=template&&template.target||'';
+const resourceOptions=compactResourceOptions(manifest,target);
+return schema.map(param=>{
+const out={...param};
+if(out.type==='resource_channel'){
+out.resource_target=target;
+out.resource_options=resourceOptions;
+}
+return out;
+});
+}
+
+function compactPolicy(policy){
+policy=policy&&typeof policy==='object'?policy:{};
+return {
+manual_allowed:policy.manual_allowed===false?false:true,
+scenario_allowed:policy.scenario_allowed===false?false:true,
+requires_confirmation:!!policy.requires_confirmation,
+result_required:policy.result_required===false?false:true,
+timeout_ms:Number(policy.timeout_ms)||3000,
+danger_level:String(policy.danger_level||'normal')
+};
+}
+
+function compactCommandsForDevice(device){
+const manifest=compactManifest(device);
+if(!manifest)return Array.isArray(device&&device.commands)?device.commands:[];
+return (Array.isArray(manifest.command_templates)?manifest.command_templates:[]).map(template=>{
+const commandName=String(template&&template.command||'');
+return {
+id:String(template&&template.id||commandName),
+label:String(template&&template.label||template&&template.id||commandName),
+capability:String(template&&template.capability||template&&template.target||commandName.split('.')[0]||'node'),
+command:commandName,
+target:template&&template.target||'',
+default_args:template&&template.default_args&&typeof template.default_args==='object'?template.default_args:undefined,
+policy:compactPolicy(template&&template.policy),
+manual_allowed:!template||!template.policy||template.policy.manual_allowed!==false,
+scenario_allowed:!template||!template.policy||template.policy.scenario_allowed!==false,
+args_schema:compactSchemaForTemplate(manifest,template)
+};
+}).filter(command=>command.id&&command.command);
+}
+
+function compactEventsForDevice(device){
+const manifest=compactManifest(device);
+if(!manifest)return Array.isArray(device&&device.events)?device.events:[];
+return (Array.isArray(manifest.event_templates)?manifest.event_templates:[]).map(template=>{
+const eventName=String(template&&template.event||'');
+return {
+id:String(template&&template.id||eventName),
+label:String(template&&template.label||template&&template.id||eventName),
+capability:String(template&&template.capability||template&&template.source||eventName.split('.')[0]||'node'),
+event:eventName,
+source:template&&template.source||''
+};
+}).filter(event=>event.id&&event.event);
 }
 
 function scenarioIoModeText(mode){
@@ -428,8 +494,8 @@ return cmd;
 function scenarioNormalizeHardwareDevice(device){
 if(!device||!device.id)return device;
 const out={...device};
-out.commands=Array.isArray(device.commands)?device.commands.slice():[];
-out.events=Array.isArray(device.events)?device.events.slice():[];
+out.commands=compactCommandsForDevice(device).slice();
+out.events=compactEventsForDevice(device).slice();
 if(device.id==='system_relay'){
 const channels=scenarioEnabledChannels('relays');
 out.name='Relay channels';
@@ -474,7 +540,36 @@ params.volume=70;
 params.channel='effect';
 params.repeat=false;
 }
-return params;
+const schema=command&&Array.isArray(command.args_schema)?command.args_schema:[];
+schema.forEach(param=>{
+const key=param&&param.key||'';
+if(!key||params[key]!==undefined)return;
+if(param.type==='resource_channel'&&Array.isArray(param.resource_options)&&param.resource_options.length){
+const raw=param.resource_options[0].id;
+const num=Number(raw);
+params[key]=Number.isFinite(num)?num:String(raw);
+}
+else if(param.type==='select'&&Array.isArray(param.options)&&param.options.length){
+params[key]=String(param.options[0]);
+}
+else if(param.type==='checkbox'&&param.optional!==true){
+params[key]=false;
+}
+});
+return deviceId==='system_audio'&&commandId==='play'?scenarioNormalizeAudioParams(params):params;
+}
+
+function scenarioHydrateCommandParams(deviceId,commandId,params,device,command){
+const targetDevice=device||scenarioDeviceById(deviceId);
+const targetCommand=command||scenarioCommandById(deviceId,commandId);
+const defaults=defaultParamsForCommand(targetDevice,targetCommand);
+const existing=params&&typeof params==='object'?params:{};
+const merged={...(defaults&&typeof defaults==='object'?defaults:{}),...existing};
+if(String(deviceId||'')==='system_audio'&&String(commandId||'')==='play'){
+const normalized=scenarioNormalizeAudioParams(merged);
+return Object.keys(normalized).length?normalized:undefined;
+}
+return Object.keys(merged).length?merged:undefined;
 }
 
 function defaultScenarioCommandItem(){
@@ -504,6 +599,43 @@ return device&&(device.name||device.id)||'Device';
 
 function scenarioRoomNameForDevice(device){
 return roomName(device&&device.room_id||scenarioEditor.room_id);
+}
+
+function scenarioStepAutoLabel(step){
+const type=scenarioStepTypeValue(step);
+if(type==='DEVICE_COMMAND'){
+if(String(step&&step.device_id||'')==='system_audio')return scenarioAudioCommandAutoLabel(step);
+const device=scenarioDeviceById(step&&step.device_id||'');
+return `${scenarioRoomNameForDevice(device)}: ${scenarioDeviceName(device)} - ${scenarioCommandName(step&&step.device_id||'',step&&step.command_id||'')}`;
+}
+if(type==='DEVICE_COMMAND_GROUP')return `Command group (${(Array.isArray(step&&step.commands)?step.commands:[]).length||1})`;
+if(type==='WAIT_DEVICE_EVENT'){
+const device=scenarioDeviceById(step&&step.device_id||'');
+return `${scenarioRoomNameForDevice(device)}: wait ${scenarioDeviceName(device)} - ${scenarioDeviceEventName(step&&step.device_id||'',step&&step.event_id||'')}`;
+}
+if(type==='WAIT_ANY_DEVICE_EVENT')return `Wait any device event (${(Array.isArray(step&&step.events)?step.events:[]).length||1})`;
+if(type==='WAIT_ALL_DEVICE_EVENTS')return `Wait all device events (${(Array.isArray(step&&step.events)?step.events:[]).length||1})`;
+if(type==='WAIT_TIME')return waitTimeLabel(step&&step.duration_ms);
+if(type==='OPERATOR_APPROVAL')return `Operator approval: ${step&&step.prompt||step&&step.operator_prompt||'approval'}`;
+if(type==='SHOW_OPERATOR_MESSAGE')return `Show operator: ${step&&step.message||'message'}`;
+if(type==='SET_FLAG')return `Set ${(step&&step.flag_name)||'flag'} = ${(step&&step.value)===false?'false':'true'}`;
+if(type==='WAIT_FLAGS')return `Wait flags (${(Array.isArray(step&&step.flags)?step.flags:[]).length||1})`;
+if(type==='END_GAME')return 'End game';
+return step&&step.label||type;
+}
+
+function scenarioRefreshAutoLabel(step,previous){
+if(!step)return step;
+const current=String(step.label||'').trim();
+const prevLabel=String(previous&&previous.label||'').trim();
+const prevAuto=previous?String(scenarioStepAutoLabel(previous)||'').trim():'';
+const legacyAudioAuto=String(step.device_id||'')==='system_audio'&&
+  String(step.command_id||'')==='play'&&
+  scenarioAudioMissingAutoLabel(current);
+if(!current||current===prevLabel||current===prevAuto||legacyAudioAuto){
+step.label=scenarioStepAutoLabel(step);
+}
+return step;
 }
 
 function newScenarioStep(index,kind){

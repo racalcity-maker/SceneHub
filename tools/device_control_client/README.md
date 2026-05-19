@@ -11,13 +11,18 @@ Path:
 For each configured device:
 
 - publishes:
-  - `cp/v1/dev/{device_id}/heartbeat`
-  - `cp/v1/dev/{device_id}/status`
-  - `cp/v1/dev/{device_id}/diag`
-  - `cp/v1/dev/{device_id}/result`
+  - `cp/v1/dev/{node_id}/heartbeat`
+  - `cp/v1/dev/{node_id}/status`
+  - `cp/v1/dev/{node_id}/diag`
+  - `cp/v1/dev/{node_id}/result`
 - subscribes:
-  - `cp/v1/dev/{device_id}/control/command`
+  - `cp/v1/dev/{node_id}/control/command`
   - `cp/v1/dev/all/control/command`
+
+`device_id` is the local config/UI target name. `node_id` is the physical MQTT
+namespace id used in topics. By default `node_id` is copied from `device_id`.
+`client_id` is only the MQTT connection/auth identity and may be prefixed, for
+example `dcc-relay-room-2`.
 
 Supported commands:
 
@@ -27,11 +32,25 @@ Supported commands:
 - `node.reset_runtime`
 - `node.apply_preset` (uses local profile preset map; returns `not_supported` if preset missing)
 - `describe_interface` when `device_description` is configured for the device
-- commands listed in `device_description.commands`
+- flat custom commands listed in `device_description.commands`
+- compact node command templates listed in `device_description.command_templates`
 
 ## Device Description Discovery
 
 Each configured device may include a `device_description` block. This is used by GM Panel Device Setup to import device capabilities.
+
+SceneHub Node devices should use compact manifest v2:
+
+- `manifest_version: 2`
+- `format: "compact_resources"`
+- `node_kind`
+- `capability_contract: "scenehub.node.compact.v1"`
+- `resources`, `command_templates`, `event_templates`, `schemas`
+
+The client returns compact v2 unchanged from `describe_interface` and builds
+its local command lookup from `command_templates`. Flat `commands[]` /
+`events[]` remain supported only for hand-written custom device tests, not as a
+SceneHub Node compatibility format.
 
 When the broker sends:
 
@@ -56,15 +75,23 @@ the client returns:
   "message": "",
   "data": {
     "device_description": {
-      "version": 1,
-      "commands": [],
-      "events": []
+      "manifest_version": 2,
+      "format": "compact_resources",
+      "node_kind": "virtual_relay_node",
+      "capability_contract": "scenehub.node.compact.v1",
+      "resources": {},
+      "command_templates": [],
+      "event_templates": [],
+      "schemas": {}
     }
   }
 }
 ```
 
-If a configured command has `emit_event_id`, the client publishes the matching native event to `cp/v1/dev/{device_id}/event` after optional `emit_delay_ms`.
+If a configured command template has `emit_event_id`, the client publishes the
+matching native event to `cp/v1/dev/{node_id}/event` after optional
+`emit_delay_ms`. Test templates may also use `emit_event_id_by_channel` to map a
+resource channel to an event id.
 
 Command results use the current terminal statuses:
 
@@ -72,6 +99,10 @@ Command results use the current terminal statuses:
 - `failed`
 - `rejected`
 - `accepted` followed by terminal `done` for long-running commands such as `node.reboot`
+
+Duplicate commands with the same `request_id` are idempotent: the client
+re-publishes the cached terminal result, or `accepted` while the original command
+is still running.
 
 ## Internal Runtime State
 
@@ -93,6 +124,7 @@ Per device (config):
 - `response_delay_ms` - artificial delay before command handling
 - `silent_mode` - suppresses all outbound MQTT telemetry
 - `fake_reboot_ms` - reboot downtime for `node.reboot`
+- `result_qos` - result publish QoS, `0` by default and `1` when configured
 
 ## Requirements
 

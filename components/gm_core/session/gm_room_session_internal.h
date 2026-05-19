@@ -12,6 +12,9 @@
 
 #define GM_ROOM_SESSION_EVENT_QUEUE_LEN 32
 #define GM_ROOM_SESSION_RUNTIME_QUEUE_LEN 32
+#define GM_ROOM_SESSION_EVENT_QUEUE_WAIT_TICKS pdMS_TO_TICKS(5)
+#define GM_ROOM_SESSION_RUNTIME_QUEUE_WAIT_TICKS pdMS_TO_TICKS(5)
+#define GM_ROOM_SESSION_RUNTIME_QUEUE_CRITICAL_WAIT_TICKS pdMS_TO_TICKS(50)
 #define GM_ROOM_SESSION_EVENT_TASK_STACK 12288
 #define GM_ROOM_SESSION_RUNTIME_TASK_STACK 16384
 
@@ -66,6 +69,10 @@ uint32_t gm_room_session_scenario_now_ms(void);
 
 void gm_room_session_event_handler(const scenehub_event_t *message);
 void gm_room_session_event_task(void *ctx);
+void gm_room_session_set_async_workers_enabled_for_test(bool enabled);
+void gm_room_session_record_event_drop(bool critical, bool runtime_queue);
+esp_err_t gm_room_session_runtime_post_event_with_wait(const scenehub_event_t *message,
+                                                       TickType_t wait_ticks);
 esp_err_t gm_room_session_runtime_post_event(const scenehub_event_t *message);
 void gm_room_session_runtime_wake(void);
 void gm_room_session_runtime_task(void *ctx);

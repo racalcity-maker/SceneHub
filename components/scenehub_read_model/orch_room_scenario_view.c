@@ -413,6 +413,11 @@ static void orch_room_scenario_copy_detail(const room_scenario_t *src,
                            sizeof(dst->validation_issues[i].level_text),
                            orch_room_scenario_validation_level_str(report->issues[i].level));
             dst->validation_issues[i].step_index = report->issues[i].step_index;
+            quest_str_copy(dst->validation_issues[i].branch_id,
+                           sizeof(dst->validation_issues[i].branch_id),
+                           report->issues[i].branch_id);
+            dst->validation_issues[i].variant_index = report->issues[i].variant_index;
+            dst->validation_issues[i].action_index = report->issues[i].action_index;
             quest_str_copy(dst->validation_issues[i].code,
                            sizeof(dst->validation_issues[i].code),
                            report->issues[i].code);
@@ -524,4 +529,59 @@ esp_err_t orch_room_scenario_view_list_details(const char *room_id,
     err = count > max_scenarios ? ESP_ERR_INVALID_SIZE : ESP_OK;
     orch_scratch_unlock();
     return err;
+}
+
+esp_err_t orch_room_scenario_view_get_detail(const char *room_id,
+                                             const char *scenario_id,
+                                             orch_room_scenario_detail_t *out)
+{
+    room_scenario_t *scenario = NULL;
+    esp_err_t err = ESP_OK;
+
+    if (!room_id || !room_id[0] || !scenario_id || !scenario_id[0] || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = orch_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    scenario = orch_scratch_room_scenario();
+    if (!scenario) {
+        orch_scratch_unlock();
+        return ESP_ERR_NO_MEM;
+    }
+    err = room_scenario_get(scenario_id, scenario);
+    if (err != ESP_OK) {
+        orch_scratch_unlock();
+        return err;
+    }
+    if (strcmp(scenario->room_id, room_id) != 0) {
+        orch_scratch_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    orch_room_scenario_copy_detail(scenario, out);
+    orch_scratch_unlock();
+    return ESP_OK;
+}
+
+esp_err_t orch_room_scenario_view_get_layout(const char *room_id,
+                                             const char *scenario_id,
+                                             room_scenario_t *out)
+{
+    esp_err_t err = ESP_OK;
+
+    if (!room_id || !room_id[0] || !scenario_id || !scenario_id[0] || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = room_scenario_get(scenario_id, out);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (strcmp(out->room_id, room_id) != 0) {
+        memset(out, 0, sizeof(*out));
+        return ESP_ERR_NOT_FOUND;
+    }
+    return ESP_OK;
 }

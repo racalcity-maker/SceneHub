@@ -361,8 +361,32 @@ static void validation_add_issue(room_scenario_validation_report_t *report,
     issue = &report->issues[report->issue_count++];
     issue->level = level;
     issue->step_index = step_index;
+    issue->branch_id[0] = '\0';
+    issue->variant_index = -1;
+    issue->action_index = -1;
     snprintf(issue->code, sizeof(issue->code), "%s", code ? code : "UNKNOWN");
     snprintf(issue->message, sizeof(issue->message), "%s", message ? message : "");
+}
+
+static void validation_add_reactive_issue(room_scenario_validation_report_t *report,
+                                          room_scenario_validation_level_t level,
+                                          const room_scenario_branch_t *branch,
+                                          int16_t variant_index,
+                                          int16_t action_index,
+                                          uint16_t step_index,
+                                          const char *code,
+                                          const char *message)
+{
+    validation_add_issue(report, level, step_index, code, message);
+    if (!report || report->issue_count == 0) {
+        return;
+    }
+    room_scenario_validation_issue_t *issue = &report->issues[report->issue_count - 1];
+    if (branch) {
+        snprintf(issue->branch_id, sizeof(issue->branch_id), "%s", branch->id);
+    }
+    issue->variant_index = variant_index;
+    issue->action_index = action_index;
 }
 
 static void validation_check_device_command_payload_static(const room_scenario_device_command_t *command_payload,
@@ -635,9 +659,14 @@ static void validation_check_wait_all_device_events_step_runtime(const room_scen
 
 static void validation_check_reactive_action_v2_static(const room_scenario_t *scenario,
                                                        const room_scenario_reactive_action_t *action,
+                                                       const room_scenario_branch_t *branch,
+                                                       int16_t variant_index,
+                                                       int16_t action_index,
                                                        uint16_t branch_step_index,
                                                        room_scenario_validation_report_t *report)
 {
+    size_t issue_base = report ? report->issue_count : 0;
+
     if (!scenario || !action || !report) {
         return;
     }
@@ -652,11 +681,14 @@ static void validation_check_reactive_action_v2_static(const room_scenario_t *sc
         if (action->group_command_count == 0 ||
             (size_t)action->group_command_start_index + action->group_command_count >
                 scenario->reactive_group_command_count) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_ERROR,
-                                 branch_step_index,
-                                 "REACTIVE_GROUP_COMMAND_RANGE_INVALID",
-                                 "Reactive DEVICE_COMMAND_GROUP command range is invalid");
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_ERROR,
+                                          branch,
+                                          variant_index,
+                                          action_index,
+                                          branch_step_index,
+                                          "REACTIVE_GROUP_COMMAND_RANGE_INVALID",
+                                          "Reactive DEVICE_COMMAND_GROUP command range is invalid");
             return;
         }
         for (uint8_t i = 0; i < action->group_command_count; ++i) {
@@ -669,43 +701,67 @@ static void validation_check_reactive_action_v2_static(const room_scenario_t *sc
         break;
     case ROOM_SCENARIO_STEP_WAIT_TIME:
         if (action->data.wait_time.duration_ms == 0) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_ERROR,
-                                 branch_step_index,
-                                 "REACTIVE_WAIT_TIME_ZERO",
-                                 "Reactive WAIT_TIME duration_ms must be greater than zero");
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_ERROR,
+                                          branch,
+                                          variant_index,
+                                          action_index,
+                                          branch_step_index,
+                                          "REACTIVE_WAIT_TIME_ZERO",
+                                          "Reactive WAIT_TIME duration_ms must be greater than zero");
         }
         break;
     case ROOM_SCENARIO_STEP_SET_FLAG:
         if (!action->data.set_flag.name[0]) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_ERROR,
-                                 branch_step_index,
-                                 "REACTIVE_FLAG_NAME_EMPTY",
-                                 "Reactive SET_FLAG has empty flag name");
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_ERROR,
+                                          branch,
+                                          variant_index,
+                                          action_index,
+                                          branch_step_index,
+                                          "REACTIVE_FLAG_NAME_EMPTY",
+                                          "Reactive SET_FLAG has empty flag name");
         }
         break;
     case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
         if (!action->data.operator_message.message[0]) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_ERROR,
-                                 branch_step_index,
-                                 "REACTIVE_OPERATOR_MESSAGE_EMPTY",
-                                 "Reactive SHOW_OPERATOR_MESSAGE message is empty");
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_ERROR,
+                                          branch,
+                                          variant_index,
+                                          action_index,
+                                          branch_step_index,
+                                          "REACTIVE_OPERATOR_MESSAGE_EMPTY",
+                                          "Reactive SHOW_OPERATOR_MESSAGE message is empty");
         }
         break;
     default:
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             branch_step_index,
-                             "REACTIVE_ACTION_TYPE_UNSUPPORTED",
-                             "Reactive action type is not allowed in v2");
+        validation_add_reactive_issue(report,
+                                      ROOM_SCENARIO_VALIDATION_ERROR,
+                                      branch,
+                                      variant_index,
+                                      action_index,
+                                      branch_step_index,
+                                      "REACTIVE_ACTION_TYPE_UNSUPPORTED",
+                                      "Reactive action type is not allowed in v2");
         break;
+    }
+    for (size_t i = issue_base; report && i < report->issue_count; ++i) {
+        room_scenario_validation_issue_t *issue = &report->issues[i];
+        if (issue->branch_id[0]) {
+            continue;
+        }
+        snprintf(issue->branch_id, sizeof(issue->branch_id), "%s", branch ? branch->id : "");
+        issue->variant_index = variant_index;
+        issue->action_index = action_index;
     }
 }
 
 static void validation_check_reactive_action_v2_runtime(const room_scenario_t *scenario,
                                                         const room_scenario_reactive_action_t *action,
+                                                        const room_scenario_branch_t *branch,
+                                                        int16_t variant_index,
+                                                        int16_t action_index,
                                                         uint16_t branch_step_index,
                                                         room_scenario_validation_report_t *report)
 {
@@ -717,11 +773,14 @@ static void validation_check_reactive_action_v2_runtime(const room_scenario_t *s
         break;
     case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP:
         if (action->group_mode == ROOM_SCENARIO_COMMAND_GROUP_PARALLEL) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_WARNING,
-                                 branch_step_index,
-                                 "REACTIVE_GROUP_PARALLEL_UNSUPPORTED",
-                                 "Reactive DEVICE_COMMAND_GROUP parallel mode is reserved for future runtime support");
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_WARNING,
+                                          branch,
+                                          variant_index,
+                                          action_index,
+                                          branch_step_index,
+                                          "REACTIVE_GROUP_PARALLEL_UNSUPPORTED",
+                                          "Reactive DEVICE_COMMAND_GROUP parallel mode is reserved for future runtime support");
         }
         break;
     default:
@@ -738,66 +797,87 @@ static void validation_check_reactive_branch_v2_static(const room_scenario_t *sc
         return;
     }
     if (!room_scenario_valid_reactive_trigger(&branch->trigger)) {
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             branch_step_index,
-                             "REACTIVE_TRIGGER_INVALID",
-                             "Reactive v2 branch has invalid trigger");
+        validation_add_reactive_issue(report,
+                                      ROOM_SCENARIO_VALIDATION_ERROR,
+                                      branch,
+                                      -1,
+                                      -1,
+                                      branch_step_index,
+                                      "REACTIVE_TRIGGER_INVALID",
+                                      "Reactive v2 branch has invalid trigger");
     }
     if (branch->variant_count == 0 ||
         (size_t)branch->variant_start_index + branch->variant_count >
             scenario->reactive_variant_count) {
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             branch_step_index,
-                             "REACTIVE_VARIANTS_INVALID",
-                             "Reactive v2 branch must have at least one valid variant");
+        validation_add_reactive_issue(report,
+                                      ROOM_SCENARIO_VALIDATION_ERROR,
+                                      branch,
+                                      -1,
+                                      -1,
+                                      branch_step_index,
+                                      "REACTIVE_VARIANTS_INVALID",
+                                      "Reactive v2 branch must have at least one valid variant");
         return;
     }
     for (uint8_t i = 0; i < branch->guard_flag_count; ++i) {
         if (!branch->guard_flags[i].name[0]) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_ERROR,
-                                 branch_step_index,
-                                 "REACTIVE_GUARD_FLAG_EMPTY",
-                                 "Reactive guard flag name is empty");
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_ERROR,
+                                          branch,
+                                          -1,
+                                          -1,
+                                          branch_step_index,
+                                          "REACTIVE_GUARD_FLAG_EMPTY",
+                                          "Reactive guard flag name is empty");
         }
     }
     for (uint8_t i = 0; i < branch->variant_count; ++i) {
         const room_scenario_reactive_variant_t *variant =
             &scenario->reactive_variants[branch->variant_start_index + i];
         if (!variant->id[0]) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_ERROR,
-                                 branch_step_index,
-                                 "REACTIVE_VARIANT_ID_EMPTY",
-                                 "Reactive variant id is empty");
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_ERROR,
+                                          branch,
+                                          (int16_t)i,
+                                          -1,
+                                          branch_step_index,
+                                          "REACTIVE_VARIANT_ID_EMPTY",
+                                          "Reactive variant id is empty");
         }
         if (variant->action_count == 0 ||
             (size_t)variant->action_start_index + variant->action_count >
                 scenario->reactive_action_count) {
-            validation_add_issue(report,
-                                 ROOM_SCENARIO_VALIDATION_ERROR,
-                                 branch_step_index,
-                                 "REACTIVE_VARIANT_ACTIONS_INVALID",
-                                 "Reactive variant must have at least one valid action");
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_ERROR,
+                                          branch,
+                                          (int16_t)i,
+                                          -1,
+                                          branch_step_index,
+                                          "REACTIVE_VARIANT_ACTIONS_INVALID",
+                                          "Reactive variant must have at least one valid action");
             continue;
         }
         for (uint8_t action_index = 0; action_index < variant->action_count; ++action_index) {
             validation_check_reactive_action_v2_static(
                 scenario,
                 &scenario->reactive_actions[variant->action_start_index + action_index],
+                branch,
+                (int16_t)i,
+                (int16_t)action_index,
                 branch_step_index,
                 report);
         }
     }
     if ((size_t)branch->on_complete_action_start_index + branch->on_complete_action_count >
         scenario->reactive_action_count) {
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_ERROR,
-                             branch_step_index,
-                             "REACTIVE_ON_COMPLETE_RANGE_INVALID",
-                             "Reactive on_complete action range is invalid");
+        validation_add_reactive_issue(report,
+                                      ROOM_SCENARIO_VALIDATION_ERROR,
+                                      branch,
+                                      -1,
+                                      -1,
+                                      branch_step_index,
+                                      "REACTIVE_ON_COMPLETE_RANGE_INVALID",
+                                      "Reactive on_complete action range is invalid");
     }
 }
 
@@ -822,17 +902,23 @@ static void validation_check_reactive_branch_v2_runtime(const room_scenario_t *s
             validation_check_reactive_action_v2_runtime(
                 scenario,
                 &scenario->reactive_actions[variant->action_start_index + action_index],
+                branch,
+                (int16_t)i,
+                (int16_t)action_index,
                 branch_step_index,
                 report);
         }
     }
     if (branch->reentry_mode == ROOM_SCENARIO_REENTRY_RESTART ||
         branch->reentry_mode == ROOM_SCENARIO_REENTRY_PARALLEL) {
-        validation_add_issue(report,
-                             ROOM_SCENARIO_VALIDATION_WARNING,
-                             branch_step_index,
-                             "REACTIVE_REENTRY_UNSUPPORTED",
-                             "Reactive branch reentry mode is reserved for future runtime support");
+        validation_add_reactive_issue(report,
+                                      ROOM_SCENARIO_VALIDATION_WARNING,
+                                      branch,
+                                      -1,
+                                      -1,
+                                      branch_step_index,
+                                      "REACTIVE_REENTRY_UNSUPPORTED",
+                                      "Reactive branch reentry mode is reserved for future runtime support");
     }
 }
 

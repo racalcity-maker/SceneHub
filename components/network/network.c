@@ -375,6 +375,7 @@ esp_err_t network_init(void)
             .name = "wifi_reconnect",
         };
         ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_reconnect_timer));
+        ESP_LOGI(TAG, "created reconnect timer handle=%p", (void *)s_reconnect_timer);
     }
     if (!s_state_mutex) {
         s_state_mutex = xSemaphoreCreateMutex();

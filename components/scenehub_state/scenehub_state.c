@@ -5,16 +5,21 @@
 
 #include "device_control_ingest.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "gm_game_profile.h"
+#include "gm_sidebar_presets.h"
 #include "gm_room_session.h"
-#include "orchestrator_registry.h"
+#include "orch_registry_snapshot.h"
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
 #include "ws_runtime.h"
 
 static TaskHandle_t s_state_watcher_task = NULL;
+static SemaphoreHandle_t s_state_mutex = NULL;
+static StaticSemaphore_t s_state_mutex_storage;
+static portMUX_TYPE s_state_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_last_combined_generation = 0;
 static uint32_t s_last_ingest_generation = 0;
 static uint32_t s_last_session_generation = 0;
@@ -24,6 +29,7 @@ static uint32_t s_pending_invalidation_mask = 0;
 static bool s_ws_broadcast_pending = false;
 static scenehub_state_versions_t s_last_versions = {0};
 static size_t s_pending_explicit_count = 0;
+#define SCENEHUB_STATE_MAX_PENDING_EXPLICIT 8
 
 typedef struct {
     scenehub_state_slice_t slice;
@@ -31,7 +37,29 @@ typedef struct {
     char reason[SCENEHUB_STATE_REASON_MAX_LEN];
 } scenehub_state_pending_invalidation_t;
 
-static scenehub_state_pending_invalidation_t s_pending_explicit[8];
+static scenehub_state_pending_invalidation_t s_pending_explicit[SCENEHUB_STATE_MAX_PENDING_EXPLICIT];
+
+static esp_err_t scenehub_state_lock(void)
+{
+    if (!s_state_mutex) {
+        portENTER_CRITICAL(&s_state_mutex_init_lock);
+        if (!s_state_mutex) {
+            s_state_mutex = xSemaphoreCreateMutexStatic(&s_state_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_state_mutex_init_lock);
+        if (!s_state_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return xSemaphoreTake(s_state_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void scenehub_state_unlock(void)
+{
+    if (s_state_mutex) {
+        xSemaphoreGive(s_state_mutex);
+    }
+}
 
 #define SCENEHUB_STATE_WS_MIN_INTERVAL_MS 250U
 
@@ -40,9 +68,10 @@ enum {
     SCENEHUB_INVALIDATE_DEVICES_CATALOG = 1u << 1,
     SCENEHUB_INVALIDATE_ROOM_SCENARIOS = 1u << 2,
     SCENEHUB_INVALIDATE_ROOM_PROFILES = 1u << 3,
-    SCENEHUB_INVALIDATE_DEVICES_RUNTIME = 1u << 4,
-    SCENEHUB_INVALIDATE_ROOM_RUNTIME = 1u << 5,
-    SCENEHUB_INVALIDATE_SYSTEM_SUMMARY = 1u << 6,
+    SCENEHUB_INVALIDATE_GM_SIDEBAR_PRESETS = 1u << 4,
+    SCENEHUB_INVALIDATE_DEVICES_RUNTIME = 1u << 5,
+    SCENEHUB_INVALIDATE_ROOM_RUNTIME = 1u << 6,
+    SCENEHUB_INVALIDATE_SYSTEM_SUMMARY = 1u << 7,
 };
 
 static void scenehub_state_copy_text(char *dst, size_t dst_size, const char *src)
@@ -84,6 +113,8 @@ static uint32_t scenehub_state_slice_mask(scenehub_state_slice_t slice)
         return SCENEHUB_INVALIDATE_ROOM_SCENARIOS;
     case SCENEHUB_STATE_SLICE_ROOM_PROFILES:
         return SCENEHUB_INVALIDATE_ROOM_PROFILES;
+    case SCENEHUB_STATE_SLICE_GM_SIDEBAR_PRESETS:
+        return SCENEHUB_INVALIDATE_GM_SIDEBAR_PRESETS;
     case SCENEHUB_STATE_SLICE_DEVICES_RUNTIME:
         return SCENEHUB_INVALIDATE_DEVICES_RUNTIME;
     case SCENEHUB_STATE_SLICE_ROOM_RUNTIME:
@@ -95,6 +126,7 @@ static uint32_t scenehub_state_slice_mask(scenehub_state_slice_t slice)
                SCENEHUB_INVALIDATE_DEVICES_CATALOG |
                SCENEHUB_INVALIDATE_ROOM_SCENARIOS |
                SCENEHUB_INVALIDATE_ROOM_PROFILES |
+               SCENEHUB_INVALIDATE_GM_SIDEBAR_PRESETS |
                SCENEHUB_INVALIDATE_DEVICES_RUNTIME |
                SCENEHUB_INVALIDATE_ROOM_RUNTIME |
                SCENEHUB_INVALIDATE_SYSTEM_SUMMARY;
@@ -115,6 +147,8 @@ static const char *scenehub_state_slice_name(scenehub_state_slice_t slice)
         return "room.scenarios";
     case SCENEHUB_STATE_SLICE_ROOM_PROFILES:
         return "room.profiles";
+    case SCENEHUB_STATE_SLICE_GM_SIDEBAR_PRESETS:
+        return "gm.sidebar_presets";
     case SCENEHUB_STATE_SLICE_DEVICES_RUNTIME:
         return "devices.runtime";
     case SCENEHUB_STATE_SLICE_ROOM_RUNTIME:
@@ -140,6 +174,8 @@ static const char *scenehub_state_slice_scope(scenehub_state_slice_t slice)
         return "device";
     case SCENEHUB_STATE_SLICE_FULL_SNAPSHOT:
         return "recovery";
+    case SCENEHUB_STATE_SLICE_GM_SIDEBAR_PRESETS:
+        return "global";
     case SCENEHUB_STATE_SLICE_ROOM_CATALOG:
     case SCENEHUB_STATE_SLICE_DEVICES_CATALOG:
     case SCENEHUB_STATE_SLICE_SYSTEM_SUMMARY:
@@ -165,6 +201,8 @@ static uint32_t scenehub_state_slice_generation(scenehub_state_slice_t slice,
         return versions->scenarios;
     case SCENEHUB_STATE_SLICE_ROOM_PROFILES:
         return versions->profiles;
+    case SCENEHUB_STATE_SLICE_GM_SIDEBAR_PRESETS:
+        return gm_sidebar_preset_generation();
     case SCENEHUB_STATE_SLICE_DEVICES_RUNTIME:
         return versions->ingest;
     case SCENEHUB_STATE_SLICE_ROOM_RUNTIME:
@@ -198,7 +236,7 @@ static void scenehub_state_queue_explicit_invalidation(scenehub_state_slice_t sl
         }
     }
 
-    if (s_pending_explicit_count >= (sizeof(s_pending_explicit) / sizeof(s_pending_explicit[0]))) {
+    if (s_pending_explicit_count >= SCENEHUB_STATE_MAX_PENDING_EXPLICIT) {
         return;
     }
 
@@ -212,43 +250,62 @@ static void scenehub_state_queue_explicit_invalidation(scenehub_state_slice_t sl
     ++s_pending_explicit_count;
 }
 
-static uint32_t scenehub_state_pending_explicit_mask(void)
+static size_t scenehub_state_copy_pending_explicit_locked(
+    scenehub_state_pending_invalidation_t *out_items,
+    size_t max_items)
+{
+    size_t count = s_pending_explicit_count;
+
+    if (!out_items || max_items == 0 || count == 0) {
+        return 0;
+    }
+    if (count > max_items) {
+        count = max_items;
+    }
+    memcpy(out_items, s_pending_explicit, count * sizeof(*out_items));
+    return count;
+}
+
+static uint32_t scenehub_state_pending_explicit_mask(
+    const scenehub_state_pending_invalidation_t *items,
+    size_t count)
 {
     uint32_t mask = 0;
     size_t i = 0;
 
-    for (i = 0; i < s_pending_explicit_count; ++i) {
-        mask |= scenehub_state_slice_mask(s_pending_explicit[i].slice);
+    for (i = 0; i < count; ++i) {
+        mask |= scenehub_state_slice_mask(items[i].slice);
     }
     return mask;
 }
 
-static void scenehub_state_broadcast_explicit_invalidations(const scenehub_state_versions_t *versions)
+static void scenehub_state_broadcast_explicit_invalidations(
+    const scenehub_state_pending_invalidation_t *items,
+    size_t count,
+    const scenehub_state_versions_t *versions)
 {
     size_t i = 0;
 
-    for (i = 0; i < s_pending_explicit_count; ++i) {
-        if (s_pending_explicit[i].slice == SCENEHUB_STATE_SLICE_FULL_SNAPSHOT) {
+    for (i = 0; i < count; ++i) {
+        if (items[i].slice == SCENEHUB_STATE_SLICE_FULL_SNAPSHOT) {
             ws_runtime_resync_required_t resync = {
-                .reason = s_pending_explicit[i].reason,
-                .target_id = s_pending_explicit[i].target_id,
-                .generation = scenehub_state_slice_generation(s_pending_explicit[i].slice, versions),
+                .reason = items[i].reason,
+                .target_id = items[i].target_id,
+                .generation = scenehub_state_slice_generation(items[i].slice, versions),
             };
             (void)ws_runtime_broadcast_resync_required(&resync);
             continue;
         }
 
         ws_runtime_invalidation_t event = {
-            .slice = scenehub_state_slice_name(s_pending_explicit[i].slice),
-            .target_id = s_pending_explicit[i].target_id,
-            .scope = scenehub_state_slice_scope(s_pending_explicit[i].slice),
-            .reason = s_pending_explicit[i].reason,
-            .generation = scenehub_state_slice_generation(s_pending_explicit[i].slice, versions),
+            .slice = scenehub_state_slice_name(items[i].slice),
+            .target_id = items[i].target_id,
+            .scope = scenehub_state_slice_scope(items[i].slice),
+            .reason = items[i].reason,
+            .generation = scenehub_state_slice_generation(items[i].slice, versions),
         };
         (void)ws_runtime_broadcast_invalidation(&event);
     }
-
-    s_pending_explicit_count = 0;
 }
 
 static uint32_t scenehub_state_collect_change_mask(const scenehub_state_versions_t *prev,
@@ -370,6 +427,9 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
                                         const char *reason)
 {
     scenehub_state_versions_t versions = {0};
+    ws_runtime_versions_changed_t payload = {0};
+    scenehub_state_pending_invalidation_t explicit_items[SCENEHUB_STATE_MAX_PENDING_EXPLICIT] = {0};
+    size_t explicit_count = 0;
     uint32_t change_mask = 0;
     uint32_t explicit_mask = 0;
     uint32_t coarse_mask = 0;
@@ -380,6 +440,10 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
 
     orchestrator_registry_invalidate();
 
+    if (scenehub_state_lock() != ESP_OK) {
+        return;
+    }
+
     change_mask = scenehub_state_collect_change_mask(&s_last_versions, &versions);
     scenehub_state_queue_explicit_invalidation(slice, target_id, reason);
 
@@ -389,6 +453,7 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
         !s_ws_broadcast_pending &&
         s_pending_invalidation_mask == 0 &&
         s_pending_explicit_count == 0) {
+        scenehub_state_unlock();
         return;
     }
 
@@ -399,6 +464,7 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
     if (s_last_ws_broadcast_at_ms != 0 &&
         (now_ms - s_last_ws_broadcast_at_ms) < SCENEHUB_STATE_WS_MIN_INTERVAL_MS) {
         s_ws_broadcast_pending = true;
+        scenehub_state_unlock();
         return;
     }
 
@@ -406,7 +472,7 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
     s_last_ws_broadcast_at_ms = now_ms;
     s_ws_broadcast_pending = false;
 
-    ws_runtime_versions_changed_t payload = {
+    payload = (ws_runtime_versions_changed_t){
         .generation = s_ws_versions_generation,
         .rooms = versions.rooms,
         .devices = versions.devices,
@@ -417,12 +483,17 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
         .static_generation = versions.static_generation,
         .runtime_generation = versions.runtime_generation,
     };
-    (void)ws_runtime_broadcast_versions_changed(&payload);
-    explicit_mask = scenehub_state_pending_explicit_mask();
-    scenehub_state_broadcast_explicit_invalidations(&versions);
+    explicit_count = scenehub_state_copy_pending_explicit_locked(explicit_items,
+                                                                 SCENEHUB_STATE_MAX_PENDING_EXPLICIT);
+    explicit_mask = scenehub_state_pending_explicit_mask(explicit_items, explicit_count);
     coarse_mask = s_pending_invalidation_mask & ~explicit_mask;
-    scenehub_state_broadcast_invalidation(coarse_mask, &versions);
+    s_pending_explicit_count = 0;
     s_pending_invalidation_mask = 0;
+    scenehub_state_unlock();
+
+    (void)ws_runtime_broadcast_versions_changed(&payload);
+    scenehub_state_broadcast_explicit_invalidations(explicit_items, explicit_count, &versions);
+    scenehub_state_broadcast_invalidation(coarse_mask, &versions);
 }
 
 static void scenehub_state_watcher_task(void *ctx)
@@ -435,8 +506,22 @@ static void scenehub_state_watcher_task(void *ctx)
         const uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         char changed_device_id[QUEST_ID_MAX_LEN] = {0};
         char changed_room_id[QUEST_ROOM_ID_MAX_LEN] = {0};
-        const bool ingest_changed = ingest_generation != s_last_ingest_generation;
-        const bool session_changed = session_generation != s_last_session_generation;
+        uint32_t last_ingest_generation = 0;
+        uint32_t last_session_generation = 0;
+        uint32_t last_ws_broadcast_at_ms = 0;
+        bool ws_broadcast_pending = false;
+        bool ingest_changed = false;
+        bool session_changed = false;
+
+        if (scenehub_state_lock() == ESP_OK) {
+            last_ingest_generation = s_last_ingest_generation;
+            last_session_generation = s_last_session_generation;
+            last_ws_broadcast_at_ms = s_last_ws_broadcast_at_ms;
+            ws_broadcast_pending = s_ws_broadcast_pending;
+            scenehub_state_unlock();
+        }
+        ingest_changed = ingest_generation != last_ingest_generation;
+        session_changed = session_generation != last_session_generation;
 
         if (ingest_changed) {
             if (device_control_ingest_get_last_changed_device_id(changed_device_id,
@@ -456,9 +541,9 @@ static void scenehub_state_watcher_task(void *ctx)
                                                changed_room_id,
                                                "watcher_session");
         } else if (!ingest_changed &&
-                   s_ws_broadcast_pending &&
-                   (s_last_ws_broadcast_at_ms == 0 ||
-                    (now_ms - s_last_ws_broadcast_at_ms) >= SCENEHUB_STATE_WS_MIN_INTERVAL_MS)) {
+                   ws_broadcast_pending &&
+                   (last_ws_broadcast_at_ms == 0 ||
+                    (now_ms - last_ws_broadcast_at_ms) >= SCENEHUB_STATE_WS_MIN_INTERVAL_MS)) {
             scenehub_state_notify_changed();
         }
 
@@ -474,10 +559,15 @@ esp_err_t scenehub_state_init(void)
         return err;
     }
 
+    err = scenehub_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
     s_last_combined_generation = versions.combined_generation;
     s_last_ingest_generation = versions.ingest;
     s_last_session_generation = versions.session;
     s_last_versions = versions;
+    scenehub_state_unlock();
 
     if (s_state_watcher_task) {
         return ESP_OK;

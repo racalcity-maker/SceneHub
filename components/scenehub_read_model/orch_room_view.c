@@ -2,6 +2,41 @@
 
 #include <string.h>
 
+#include "esp_attr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+#include "freertos/semphr.h"
+
+static EXT_RAM_BSS_ATTR gm_room_session_projection_view_t s_room_projection_scratch;
+static SemaphoreHandle_t s_room_projection_scratch_mutex = NULL;
+static StaticSemaphore_t s_room_projection_scratch_mutex_storage;
+static portMUX_TYPE s_room_projection_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_err_t orch_room_projection_scratch_lock(void)
+{
+    if (!s_room_projection_scratch_mutex) {
+        portENTER_CRITICAL(&s_room_projection_scratch_mutex_init_lock);
+        if (!s_room_projection_scratch_mutex) {
+            s_room_projection_scratch_mutex =
+                xSemaphoreCreateMutexStatic(&s_room_projection_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_room_projection_scratch_mutex_init_lock);
+    }
+    if (!s_room_projection_scratch_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_room_projection_scratch_mutex, portMAX_DELAY) == pdTRUE
+               ? ESP_OK
+               : ESP_ERR_TIMEOUT;
+}
+
+static void orch_room_projection_scratch_unlock(void)
+{
+    if (s_room_projection_scratch_mutex) {
+        xSemaphoreGive(s_room_projection_scratch_mutex);
+    }
+}
+
 static void orch_room_view_add_scenario_device_id(orch_room_entry_t *room, const char *device_id)
 {
     if (!room || !device_id || !device_id[0]) {
@@ -38,33 +73,20 @@ bool orch_room_view_has_scenario_device(const orch_room_entry_t *room, const cha
     return false;
 }
 
-static void orch_room_view_collect_scenario_step_devices(orch_room_entry_t *room,
-                                                         const room_scenario_step_t *step)
-{
-    if (!room || !step) {
-        return;
-    }
-    switch (step->type) {
-    case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
-        orch_room_view_add_scenario_device_id(room, step->data.device_command.device_id);
-        break;
-    case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT:
-        orch_room_view_add_scenario_device_id(room, step->data.wait_device_event.device_id);
-        break;
-    default:
-        break;
-    }
-}
-
 static void orch_room_view_collect_scenario_devices(orch_room_entry_t *room,
                                                     const room_scenario_t *scenario)
 {
+    size_t count = 0;
     if (!room || !scenario) {
         return;
     }
     room->scenario_device_count = 0;
-    for (size_t i = 0; i < scenario->step_count && i < ROOM_SCENARIO_MAX_STEPS; ++i) {
-        orch_room_view_collect_scenario_step_devices(room, &scenario->steps[i]);
+    if (room_scenario_collect_device_refs(scenario,
+                                          room->scenario_device_ids,
+                                          ORCH_ROOM_SCENARIO_MAX_DEVICE_REFS,
+                                          &count) == ESP_OK ||
+        count > 0) {
+        room->scenario_device_count = (uint8_t)count;
     }
 }
 
@@ -86,12 +108,13 @@ static void orch_room_view_fill_scenario_devices(orch_room_entry_t *room,
         }
         return;
     }
-    if (view->selected.running_scenario_valid) {
-        return;
+    if (view->selected.running_scenario_valid && view->selected.running_scenario_id[0]) {
+        scenario_id = view->selected.running_scenario_id;
+    } else {
+        scenario_id = view->selected.selected_profile_scenario_id[0]
+                          ? view->selected.selected_profile_scenario_id
+                          : view->selected.selected_scenario_id;
     }
-    scenario_id = view->selected.selected_profile_scenario_id[0]
-                      ? view->selected.selected_profile_scenario_id
-                      : view->selected.selected_scenario_id;
     if (!scenario_id || !scenario_id[0]) {
         return;
     }
@@ -103,6 +126,62 @@ static void orch_room_view_fill_scenario_devices(orch_room_entry_t *room,
         return;
     }
     orch_room_view_collect_scenario_devices(room, scenario);
+}
+
+static const orch_device_entry_t *orch_room_view_find_snapshot_device(
+    const orch_registry_snapshot_t *snapshot,
+    const char *device_id)
+{
+    if (!snapshot || !device_id || !device_id[0]) {
+        return NULL;
+    }
+    for (uint8_t i = 0; i < snapshot->device_count; ++i) {
+        const orch_device_entry_t *device = &snapshot->devices[i];
+        if (strcmp(device->device_id, device_id) == 0) {
+            return device;
+        }
+    }
+    return NULL;
+}
+
+static void orch_room_view_promote_health_from_device(orch_room_entry_t *room,
+                                                      const orch_device_entry_t *device)
+{
+    if (!room || !device) {
+        return;
+    }
+    if (device->health == ORCH_HEALTH_FAULT) {
+        room->health = ORCH_HEALTH_FAULT;
+    } else if (device->health == ORCH_HEALTH_DEGRADED && room->health != ORCH_HEALTH_FAULT) {
+        room->health = ORCH_HEALTH_DEGRADED;
+    }
+    quest_str_copy(room->health_text, sizeof(room->health_text), orch_health_str(room->health));
+}
+
+static void orch_room_view_apply_scenario_devices(orch_registry_snapshot_t *snapshot,
+                                                  orch_room_entry_t *room)
+{
+    if (!snapshot || !room) {
+        return;
+    }
+    for (uint8_t i = 0;
+         i < room->scenario_device_count && i < ORCH_ROOM_SCENARIO_MAX_DEVICE_REFS;
+         ++i) {
+        const orch_device_entry_t *device =
+            orch_room_view_find_snapshot_device(snapshot, room->scenario_device_ids[i]);
+        if (!device) {
+            continue;
+        }
+        bool already_room_owned = device->room_id[0] &&
+                                  strcmp(device->room_id, room->room_id) == 0;
+        if (!already_room_owned) {
+            room->device_count++;
+            if (orch_runtime_is_active(device->runtime_state)) {
+                room->active_device_count++;
+            }
+        }
+        orch_room_view_promote_health_from_device(room, device);
+    }
 }
 
 static orch_room_scenario_step_runtime_state_t
@@ -270,6 +349,7 @@ static void orch_room_view_fill_from_projection(orch_registry_snapshot_t *snapsh
                    sizeof(room->scenario_operator_message),
                    view->runtime.scenario_operator_message);
     orch_room_view_fill_scenario_devices(room, view);
+    orch_room_view_apply_scenario_devices(snapshot, room);
     room->scenario_flag_count = view->runtime.scenario_flag_count;
     for (uint8_t flag_index = 0;
          flag_index < view->runtime.scenario_flag_count &&
@@ -418,72 +498,22 @@ void orch_room_view_collect_rooms(orch_registry_snapshot_t *snapshot)
 void orch_room_view_enrich_from_sessions(orch_registry_snapshot_t *snapshot)
 {
     uint64_t now_ms = orch_now_ms();
-    gm_room_session_projection_view_t view = {0};
     if (!snapshot) {
+        return;
+    }
+    if (orch_room_projection_scratch_lock() != ESP_OK) {
         return;
     }
     for (uint8_t i = 0; i < snapshot->room_count; ++i) {
         orch_room_entry_t *room = &snapshot->rooms[i];
-        memset(&view, 0, sizeof(view));
-        if (gm_room_session_get_projection_view(room->room_id, now_ms, &view) != ESP_OK) {
+        memset(&s_room_projection_scratch, 0, sizeof(s_room_projection_scratch));
+        if (gm_room_session_get_projection_view(room->room_id, now_ms, &s_room_projection_scratch) != ESP_OK) {
             quest_str_copy(room->session_state, sizeof(room->session_state), "idle");
             quest_str_copy(room->timer_state, sizeof(room->timer_state), "idle");
             orch_room_view_sync_room_labels(room);
             continue;
         }
-        orch_room_view_fill_from_projection(snapshot, room, &view, now_ms);
+        orch_room_view_fill_from_projection(snapshot, room, &s_room_projection_scratch, now_ms);
     }
-}
-
-esp_err_t orch_room_view_load_runtime_room_with_session(const char *room_id,
-                                                        const gm_room_session_t *session,
-                                                        orch_room_entry_t *out)
-{
-    room_catalog_entry_t room_info = {0};
-    gm_room_session_projection_view_t view = {0};
-
-    if (!room_id || !room_id[0] || !out) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (room_catalog_init() != ESP_OK ||
-        room_catalog_refresh() != ESP_OK ||
-        room_catalog_find(room_id, &room_info) != ESP_OK) {
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    memset(out, 0, sizeof(*out));
-    quest_str_copy(out->room_id, sizeof(out->room_id), room_info.room_id);
-    quest_str_copy(out->title,
-                   sizeof(out->title),
-                   room_info.name[0] ? room_info.name : room_info.room_id);
-    quest_str_copy(out->session_state, sizeof(out->session_state), "idle");
-    quest_str_copy(out->timer_state, sizeof(out->timer_state), "idle");
-    out->health = ORCH_HEALTH_OK;
-    orch_room_view_sync_room_labels(out);
-    if (session) {
-        gm_room_session_build_projection_view(session, orch_now_ms(), &view);
-        orch_room_view_fill_from_projection(NULL, out, &view, orch_now_ms());
-    }
-    return ESP_OK;
-}
-
-esp_err_t orch_room_view_load_runtime_room(const char *room_id, orch_room_entry_t *out)
-{
-    gm_room_session_projection_view_t view = {0};
-    esp_err_t err = ESP_OK;
-
-    if (!room_id || !room_id[0] || !out) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    err = gm_room_session_get_projection_view(room_id, orch_now_ms(), &view);
-    if (err == ESP_OK || err == ESP_ERR_NOT_FOUND) {
-        err = orch_room_view_load_runtime_room_with_session(room_id,
-                                                            NULL,
-                                                            out);
-        if (err == ESP_OK && view.present) {
-            orch_room_view_fill_from_projection(NULL, out, &view, orch_now_ms());
-        }
-    }
-    return err;
+    orch_room_projection_scratch_unlock();
 }

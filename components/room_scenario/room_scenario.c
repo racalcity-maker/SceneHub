@@ -5,7 +5,6 @@
 
 #include "cJSON.h"
 #include "esp_attr.h"
-#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -23,17 +22,8 @@ static SemaphoreHandle_t s_scratch_lock = NULL;
 static StaticSemaphore_t s_scratch_lock_storage;
 static portMUX_TYPE s_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_generation = 0;
-static room_scenario_t *s_scratch_scenario = NULL;
-static room_scenario_validation_report_t *s_scratch_report = NULL;
-
-static void *room_scenario_heap_alloc(size_t size)
-{
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return ptr;
-}
+EXT_RAM_BSS_ATTR static room_scenario_t s_scratch_scenario;
+EXT_RAM_BSS_ATTR static room_scenario_validation_report_t s_scratch_report;
 
 static esp_err_t room_scenario_ensure_lock(void)
 {
@@ -50,7 +40,7 @@ static esp_err_t room_scenario_ensure_lock(void)
 
 static esp_err_t room_scenario_ensure_scratch(void)
 {
-    if (s_scratch_lock && s_scratch_scenario && s_scratch_report) {
+    if (s_scratch_lock) {
         return ESP_OK;
     }
     portENTER_CRITICAL(&s_init_lock);
@@ -60,18 +50,6 @@ static esp_err_t room_scenario_ensure_scratch(void)
     portEXIT_CRITICAL(&s_init_lock);
     if (!s_scratch_lock) {
         return ESP_ERR_NO_MEM;
-    }
-    if (!s_scratch_scenario) {
-        s_scratch_scenario = room_scenario_heap_alloc(sizeof(*s_scratch_scenario));
-        if (!s_scratch_scenario) {
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    if (!s_scratch_report) {
-        s_scratch_report = room_scenario_heap_alloc(sizeof(*s_scratch_report));
-        if (!s_scratch_report) {
-            return ESP_ERR_NO_MEM;
-        }
     }
     return ESP_OK;
 }
@@ -136,10 +114,10 @@ esp_err_t room_scenario_acquire_scratch(room_scenario_t **out_scenario,
         return ESP_ERR_TIMEOUT;
     }
     if (out_scenario) {
-        *out_scenario = s_scratch_scenario;
+        *out_scenario = &s_scratch_scenario;
     }
     if (out_report) {
-        *out_report = s_scratch_report;
+        *out_report = &s_scratch_report;
     }
     return ESP_OK;
 }

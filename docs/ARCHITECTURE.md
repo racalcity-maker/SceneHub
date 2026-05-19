@@ -69,6 +69,77 @@ Product-aware scenario environment checks are owned by
 | `error_monitor` | Fault collection for dashboard/room health |
 | `status_led` | Device status indication |
 
+## Layering Contract
+
+SceneHub uses a one-way command/read/event boundary. This is a durable
+architecture rule, not an optimization preference.
+
+The practical risk map for these boundaries is tracked in
+`ARCHITECTURE_LAYER_RISK_MAP.md`.
+DTO ownership and cleanup targets are tracked in
+`DTO_BOUNDARY_INVENTORY.md`.
+
+Target dependency direction:
+
+```text
+web_ui
+  -> scenehub_control / gm_control / scenehub_read_model
+  -> gm_core / room_scenario / quest_device / device_control_ingest
+  -> event_bus / mqtt_core / hardware_io / audio_player / storage
+```
+
+The practical rule is:
+
+- Commands go down through control/application services.
+- Events go up through `event_bus` or component-owned queues.
+- Read models only read and project state.
+- Web UI only calls services and serializes/deserializes HTTP/WebSocket data.
+
+Allowed dependency shapes:
+
+- `web_ui -> scenehub_control` for write-side actions.
+- `web_ui -> scenehub_read_model` for read-side projections.
+- `scenehub_control -> gm_core / room_scenario / quest_device` for domain
+  writes.
+- `gm_core -> command_executor` for external command dispatch.
+- `command_executor -> mqtt_core / hardware_io / audio_player` for side
+  effects.
+- `device_control_ingest -> event_bus` for normalized telemetry/result events.
+- `mqtt_core -> event_bus` for inbound MQTT events after origin tagging.
+- `scenehub_read_model -> gm_core / quest_device / device_control_ingest` for
+  read-only projections.
+
+Dependencies that require extra scrutiny:
+
+- `web_ui` using low-level domain DTOs directly instead of view/control DTOs.
+- `scenehub_read_model` depending on session internals, assets, or storage-heavy
+  helpers beyond projection needs.
+- `gm_core` depending on Quest Device metadata beyond planned command/runtime
+  semantics.
+- `event_bus` bridges that can reflect inbound transport messages back to the
+  same transport.
+
+If a change violates this contract, prefer adding a narrow control/read-model
+function over pulling another lower-level type into `web_ui` or `gm_core`.
+
+## DTO Boundary Rules
+
+DTOs are allowed only as layer boundary contracts:
+
+- `quest_device_t`, `room_scenario_t` and profile structs are domain/storage
+  DTOs owned by their modules.
+- `gm_room_session_*_view_t` structs are core projection DTOs. They are used by
+  read-model code, not by HTTP handlers directly.
+- `orch_*_entry_t`, `orch_*_view_t` and `orch_*_detail_t` structs are
+  read-model DTOs for UI/API serialization.
+- `scenehub_control_result_t` and related small info structs are write-side
+  control envelopes.
+- Web UI code may serialize DTOs, but must not become the owner of domain
+  storage DTOs.
+
+A new DTO is rejected by default if it only mirrors another DTO 1:1 without
+changing layer, ownership, lifetime, payload width or stability guarantees.
+
 ## Runtime Flow
 
 Game start:
@@ -298,6 +369,8 @@ an unseen client is degraded/warning until it sends the first valid telemetry.
 - New gameplay behavior belongs in Room Scenarios.
 - Devices expose capabilities; they do not own quest flow.
 - Game Modes are selection presets, not a second scenario engine.
+- Commands go down through control/services; events go up through event queues;
+  read-models project only; UI serializes and calls boundaries.
 - Event-bus handlers are transport adapters, not execution sites for heavy
   domain logic.
 - UI should show names first and hide ids behind advanced/debug sections.

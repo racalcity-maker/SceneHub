@@ -261,6 +261,9 @@ typedef struct {
 typedef struct {
     room_scenario_validation_level_t level;
     uint16_t step_index;
+    char branch_id[ROOM_SCENARIO_BRANCH_ID_MAX_LEN];
+    int16_t variant_index;
+    int16_t action_index;
     char code[ROOM_SCENARIO_VALIDATION_CODE_MAX_LEN];
     char message[ROOM_SCENARIO_VALIDATION_MESSAGE_MAX_LEN];
 } room_scenario_validation_issue_t;
@@ -270,6 +273,8 @@ typedef struct {
     room_scenario_validation_issue_t issues[ROOM_SCENARIO_VALIDATION_MAX_ISSUES];
     size_t issue_count;
 } room_scenario_validation_report_t;
+
+typedef void (*room_scenario_device_ref_cb_t)(const char *device_id, void *ctx);
 
 esp_err_t room_scenario_init(void);
 esp_err_t room_scenario_add(const room_scenario_t *scenario);
@@ -301,6 +306,14 @@ esp_err_t room_scenario_validate_by_id(const char *scenario_id,
 const char *room_scenario_step_type_to_str(room_scenario_step_type_t type);
 esp_err_t room_scenario_step_type_from_str(const char *s,
                                            room_scenario_step_type_t *out);
+void room_scenario_step_for_each_device_ref(const room_scenario_step_t *step,
+                                            room_scenario_device_ref_cb_t cb,
+                                            void *ctx);
+esp_err_t room_scenario_collect_device_refs(
+    const room_scenario_t *scenario,
+    char out_device_ids[][ROOM_SCENARIO_DEVICE_ID_MAX_LEN],
+    size_t max_device_ids,
+    size_t *out_count);
 const char *room_scenario_branch_type_to_str(room_scenario_branch_type_t type);
 esp_err_t room_scenario_branch_type_from_str(const char *s,
                                              room_scenario_branch_type_t *out);

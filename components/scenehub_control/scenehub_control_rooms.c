@@ -99,11 +99,13 @@ esp_err_t scenehub_control_save_room(const char *source,
     resolved_name = (name && name[0]) ? name : room_id;
     snprintf(room.room_id, sizeof(room.room_id), "%s", room_id);
     snprintf(room.name, sizeof(room.name), "%s", resolved_name);
-    return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  room_catalog_upsert_and_save(&room),
-                                                                  SCENEHUB_STATE_SLICE_ROOM_CATALOG,
-                                                                  room.room_id,
-                                                                  "room_save");
+    return scenehub_control_finalize_api_result_with_invalidation(
+        out_result,
+        scenehub_control_persistence_enabled() ? room_catalog_upsert_and_save(&room)
+                                               : room_catalog_upsert(&room),
+        SCENEHUB_STATE_SLICE_ROOM_CATALOG,
+        room.room_id,
+        "room_save");
 }
 
 esp_err_t scenehub_control_delete_room(const char *source,
@@ -136,7 +138,8 @@ esp_err_t scenehub_control_delete_room(const char *source,
     }
 
     existed = room_catalog_exists(room_id);
-    err = room_catalog_delete_and_save(room_id);
+    err = scenehub_control_persistence_enabled() ? room_catalog_delete_and_save(room_id)
+                                                 : room_catalog_delete(room_id);
     if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
         scenehub_control_fill_common_error(out_result, err);
         return ESP_OK;

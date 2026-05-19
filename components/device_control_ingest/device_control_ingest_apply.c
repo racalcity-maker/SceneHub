@@ -669,16 +669,8 @@ esp_err_t dci_apply_event_text_locked(dci_slot_t *slot, const char *json, uint64
     if (dci_json_iterate_object(json, strlen(json), &cursor, &end) != ESP_OK) {
         return ESP_ERR_INVALID_ARG;
     }
-    slot->state.has_result = true;
     slot->state.has_event = true;
-    slot->state.result_rx_ms = rx_ms;
     slot->state.event_rx_ms = rx_ms;
-    slot->state.result_request_id[0] = '\0';
-    slot->state.result_command[0] = '\0';
-    slot->state.result_status[0] = '\0';
-    slot->state.result_error_code[0] = '\0';
-    slot->state.result_message[0] = '\0';
-    slot->state.result_data_json[0] = '\0';
     slot->state.event_name[0] = '\0';
     slot->state.event_args_json[0] = '\0';
     for (;;) {
@@ -693,33 +685,25 @@ esp_err_t dci_apply_event_text_locked(dci_slot_t *slot, const char *json, uint64
         }
         if (dci_json_key_equals(&pair, "ts_ms")) {
             if (dci_json_parse_u64_value(pair.value, pair.value_len, &value) == ESP_OK) {
-                slot->state.result_ts_ms = value;
                 slot->state.event_ts_ms = value;
             }
         } else if (dci_json_key_equals(&pair, "event")) {
             (void)dci_json_copy_string_field(&pair,
-                                             slot->state.result_command,
-                                             sizeof(slot->state.result_command));
-            quest_str_copy(slot->state.event_name,
-                           sizeof(slot->state.event_name),
-                           slot->state.result_command);
+                                             slot->state.event_name,
+                                             sizeof(slot->state.event_name));
         } else if (dci_json_key_equals(&pair, "args")) {
             (void)dci_json_copy_raw_value(pair.value,
                                           pair.value_len,
-                                          slot->state.result_data_json,
-                                          sizeof(slot->state.result_data_json));
-            quest_str_copy(slot->state.event_args_json,
-                           sizeof(slot->state.event_args_json),
-                           slot->state.result_data_json);
+                                          slot->state.event_args_json,
+                                          sizeof(slot->state.event_args_json));
         }
     }
     if (dci_json_validate_consumed(cursor, end) != ESP_OK) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!slot->state.result_command[0]) {
+    if (!slot->state.event_name[0]) {
         return ESP_ERR_INVALID_ARG;
     }
-    quest_str_copy(slot->state.result_status, sizeof(slot->state.result_status), "event");
-    slot->state.result_count++;
+    slot->state.event_count++;
     return ESP_OK;
 }

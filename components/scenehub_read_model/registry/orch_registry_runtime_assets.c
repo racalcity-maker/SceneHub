@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "audio_player.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 typedef struct {
     bool valid;
@@ -20,6 +22,31 @@ typedef struct {
 
 static orch_room_asset_cache_entry_t s_room_asset_cache[ORCH_REGISTRY_MAX_ROOMS];
 static size_t s_room_asset_cache_next = 0;
+static SemaphoreHandle_t s_asset_cache_mutex = NULL;
+static StaticSemaphore_t s_asset_cache_mutex_storage;
+static portMUX_TYPE s_asset_cache_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_err_t orch_asset_cache_lock(void)
+{
+    if (!s_asset_cache_mutex) {
+        portENTER_CRITICAL(&s_asset_cache_mutex_init_lock);
+        if (!s_asset_cache_mutex) {
+            s_asset_cache_mutex = xSemaphoreCreateMutexStatic(&s_asset_cache_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_asset_cache_mutex_init_lock);
+        if (!s_asset_cache_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return xSemaphoreTake(s_asset_cache_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void orch_asset_cache_unlock(void)
+{
+    if (s_asset_cache_mutex) {
+        xSemaphoreGive(s_asset_cache_mutex);
+    }
+}
 
 static const char *orch_json_skip_ws(const char *p)
 {
@@ -322,6 +349,89 @@ static void orch_room_asset_count_file(orch_room_asset_summary_t *summary, const
     }
 }
 
+static void orch_room_asset_summary_apply(char *state,
+                                          size_t state_size,
+                                          uint16_t *total,
+                                          uint16_t *ready,
+                                          uint16_t *missing,
+                                          uint16_t *bad,
+                                          uint16_t *unsupported,
+                                          uint16_t *io_error,
+                                          uint16_t *unknown,
+                                          const orch_room_asset_summary_t *summary)
+{
+    const char *value = "none";
+
+    if (!state || state_size == 0 || !total || !ready || !missing || !bad || !unsupported ||
+        !io_error || !unknown || !summary) {
+        return;
+    }
+    if (summary->total > 0) {
+        value = (summary->missing || summary->bad || summary->unsupported || summary->io_error)
+                    ? "error"
+                    : (summary->unknown ? "pending" : "ready");
+    }
+    quest_str_copy(state, state_size, value);
+    *total = summary->total;
+    *ready = summary->ready;
+    *missing = summary->missing;
+    *bad = summary->bad;
+    *unsupported = summary->unsupported;
+    *io_error = summary->io_error;
+    *unknown = summary->unknown;
+}
+
+static bool orch_room_runtime_assets_load_cached_summary(const char *scenario_id,
+                                                         uint32_t scenario_generation,
+                                                         uint32_t device_generation,
+                                                         uint32_t asset_generation,
+                                                         orch_room_asset_summary_t *out_summary)
+{
+    orch_room_asset_cache_entry_t *cached = NULL;
+    esp_err_t err = ESP_OK;
+
+    if (!scenario_id || !scenario_id[0] || !out_summary) {
+        return false;
+    }
+
+    err = orch_asset_cache_lock();
+    if (err == ESP_OK) {
+        cached = orch_room_asset_cache_find(scenario_id,
+                                            scenario_generation,
+                                            device_generation,
+                                            asset_generation);
+        if (cached) {
+            *out_summary = cached->summary;
+        }
+        orch_asset_cache_unlock();
+    }
+    return cached != NULL;
+}
+
+static void orch_room_runtime_assets_store_cached_summary(const char *scenario_id,
+                                                          uint32_t scenario_generation,
+                                                          uint32_t device_generation,
+                                                          uint32_t asset_generation,
+                                                          const orch_room_asset_summary_t *summary)
+{
+    esp_err_t err = ESP_OK;
+
+    if (!scenario_id || !scenario_id[0] || !summary) {
+        return;
+    }
+
+    err = orch_asset_cache_lock();
+    if (err != ESP_OK) {
+        return;
+    }
+    orch_room_asset_cache_store(scenario_id,
+                                scenario_generation,
+                                device_generation,
+                                asset_generation,
+                                summary);
+    orch_asset_cache_unlock();
+}
+
 static void orch_room_asset_count_args(orch_room_asset_summary_t *summary, const char *args_json)
 {
     orch_json_string_view_t file = {0};
@@ -396,79 +506,57 @@ uint32_t orch_room_runtime_assets_generation(void)
     return audio_player_asset_generation();
 }
 
-void orch_room_runtime_assets_apply_summary(orch_room_runtime_view_t *out,
-                                            const orch_room_asset_summary_t *summary)
+void orch_room_runtime_detail_assets_apply_summary(orch_room_runtime_detail_view_t *out,
+                                                   const orch_room_asset_summary_t *summary)
 {
-    const char *state = "none";
     if (!out || !summary) {
         return;
     }
-    if (summary->total > 0) {
-        state = (summary->missing || summary->bad || summary->unsupported || summary->io_error)
-                    ? "error"
-                    : (summary->unknown ? "pending" : "ready");
-    }
-    quest_str_copy(out->asset_prepare_state, sizeof(out->asset_prepare_state), state);
-    out->asset_audio_total = summary->total;
-    out->asset_audio_ready = summary->ready;
-    out->asset_audio_missing = summary->missing;
-    out->asset_audio_bad = summary->bad;
-    out->asset_audio_unsupported = summary->unsupported;
-    out->asset_audio_io_error = summary->io_error;
-    out->asset_audio_unknown = summary->unknown;
+    orch_room_asset_summary_apply(out->asset_prepare_state,
+                                  sizeof(out->asset_prepare_state),
+                                  &out->asset_audio_total,
+                                  &out->asset_audio_ready,
+                                  &out->asset_audio_missing,
+                                  &out->asset_audio_bad,
+                                  &out->asset_audio_unsupported,
+                                  &out->asset_audio_io_error,
+                                  &out->asset_audio_unknown,
+                                  summary);
 }
 
-bool orch_room_runtime_assets_load_cached(orch_room_runtime_view_t *out,
-                                          uint32_t scenario_generation,
-                                          uint32_t device_generation,
-                                          uint32_t asset_generation)
+bool orch_room_runtime_detail_assets_load_cached(orch_room_runtime_detail_view_t *out,
+                                                 uint32_t scenario_generation,
+                                                 uint32_t device_generation,
+                                                 uint32_t asset_generation)
 {
-    orch_room_asset_cache_entry_t *cached = NULL;
-    esp_err_t err = ESP_OK;
     orch_room_asset_summary_t summary = {0};
 
-    if (!out || !out->room.running_scenario_id[0]) {
+    if (!out || !out->summary.running_scenario_id[0]) {
         return false;
     }
-
-    err = orch_cache_lock();
-    if (err == ESP_OK) {
-        cached = orch_room_asset_cache_find(out->room.running_scenario_id,
-                                            scenario_generation,
-                                            device_generation,
-                                            asset_generation);
-        if (cached) {
-            summary = cached->summary;
-        }
-        orch_cache_unlock();
-    }
-    if (cached) {
-        orch_room_runtime_assets_apply_summary(out, &summary);
+    if (orch_room_runtime_assets_load_cached_summary(out->summary.running_scenario_id,
+                                                     scenario_generation,
+                                                     device_generation,
+                                                     asset_generation,
+                                                     &summary)) {
+        orch_room_runtime_detail_assets_apply_summary(out, &summary);
         return true;
     }
     return false;
 }
 
-void orch_room_runtime_assets_store_cached(const orch_room_runtime_view_t *out,
-                                           uint32_t scenario_generation,
-                                           uint32_t device_generation,
-                                           uint32_t asset_generation,
-                                           const orch_room_asset_summary_t *summary)
+void orch_room_runtime_detail_assets_store_cached(const orch_room_runtime_detail_view_t *out,
+                                                  uint32_t scenario_generation,
+                                                  uint32_t device_generation,
+                                                  uint32_t asset_generation,
+                                                  const orch_room_asset_summary_t *summary)
 {
-    esp_err_t err = ESP_OK;
-
-    if (!out || !summary || !out->room.running_scenario_id[0]) {
+    if (!out || !summary || !out->summary.running_scenario_id[0]) {
         return;
     }
-
-    err = orch_cache_lock();
-    if (err != ESP_OK) {
-        return;
-    }
-    orch_room_asset_cache_store(out->room.running_scenario_id,
-                                scenario_generation,
-                                device_generation,
-                                asset_generation,
-                                summary);
-    orch_cache_unlock();
+    orch_room_runtime_assets_store_cached_summary(out->summary.running_scenario_id,
+                                                  scenario_generation,
+                                                  device_generation,
+                                                  asset_generation,
+                                                  summary);
 }

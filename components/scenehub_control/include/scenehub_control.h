@@ -1,11 +1,13 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "cJSON.h"
 #include "esp_err.h"
 #include "gm_game_profile.h"
+#include "hardware_io.h"
 #include "quest_common_limits.h"
 #include "quest_device.h"
 #include "room_catalog.h"
@@ -38,6 +40,11 @@ typedef struct {
     char message[SCENEHUB_CONTROL_MESSAGE_MAX_LEN];
 } scenehub_control_result_t;
 
+/*
+ * Write-side control envelope. HTTP handlers may serialize this result, but
+ * domain modules should not depend on Web UI response formats.
+ */
+
 typedef struct {
     char device_name[QUEST_DEVICE_NAME_MAX_LEN];
     char command_label[QUEST_DEVICE_NAME_MAX_LEN];
@@ -49,6 +56,7 @@ typedef struct {
 } scenehub_control_device_interface_info_t;
 
 const char *scenehub_control_status_str(scenehub_control_status_t status);
+void scenehub_control_set_persistence_enabled_for_test(bool enabled);
 
 esp_err_t scenehub_control_execute_room_action(const char *source,
                                                const char *room_id,
@@ -90,6 +98,10 @@ esp_err_t scenehub_control_select_profile(const char *source,
 esp_err_t scenehub_control_save_profile(const char *source,
                                         const gm_game_profile_t *profile,
                                         scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_save_profile_payload(const char *source,
+                                                const cJSON *payload,
+                                                cJSON **out_profile_json,
+                                                scenehub_control_result_t *out_result);
 esp_err_t scenehub_control_delete_profile(const char *source,
                                           const char *profile_id,
                                           scenehub_control_result_t *out_result);
@@ -124,9 +136,27 @@ esp_err_t scenehub_control_validate_scenario(const char *source,
                                              const room_scenario_t *scenario,
                                              room_scenario_validation_report_t *out_report,
                                              scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_validate_scenario_payload(const char *source,
+                                                     const cJSON *payload,
+                                                     char *out_scenario_id,
+                                                     size_t out_scenario_id_size,
+                                                     room_scenario_validation_report_t *out_report,
+                                                     scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_validate_scenario_payload_into(
+    const char *source,
+    const cJSON *payload,
+    room_scenario_t *scratch_scenario,
+    char *out_scenario_id,
+    size_t out_scenario_id_size,
+    room_scenario_validation_report_t *out_report,
+    scenehub_control_result_t *out_result);
 esp_err_t scenehub_control_save_scenario(const char *source,
                                          const room_scenario_t *scenario,
                                          scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_save_scenario_payload(const char *source,
+                                                 const cJSON *payload,
+                                                 cJSON **out_scenario_json,
+                                                 scenehub_control_result_t *out_result);
 esp_err_t scenehub_control_delete_scenario(const char *source,
                                            const char *scenario_id,
                                            scenehub_control_result_t *out_result);
@@ -140,6 +170,10 @@ esp_err_t scenehub_control_save_scenarios_store(const char *source,
 esp_err_t scenehub_control_save_device(const char *source,
                                        const quest_device_t *device,
                                        scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_save_device_payload(const char *source,
+                                               const cJSON *payload,
+                                               cJSON **out_device_json,
+                                               scenehub_control_result_t *out_result);
 esp_err_t scenehub_control_delete_device(const char *source,
                                          const char *device_id,
                                          scenehub_control_result_t *out_result);
@@ -161,6 +195,14 @@ esp_err_t scenehub_control_load_devices(const char *source,
                                         scenehub_control_result_t *out_result);
 esp_err_t scenehub_control_save_devices_store(const char *source,
                                               scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_save_sidebar_presets_payload(const char *source,
+                                                        const cJSON *payload,
+                                                        scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_import_sidebar_presets(const char *source,
+                                                  cJSON *root,
+                                                  scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_load_sidebar_presets(const char *source,
+                                                scenehub_control_result_t *out_result);
 esp_err_t scenehub_control_save_room(const char *source,
                                      const char *room_id,
                                      const char *name,
@@ -172,6 +214,10 @@ esp_err_t scenehub_control_delete_room(const char *source,
                                        size_t *out_removed_profiles,
                                        size_t *out_removed_scenarios,
                                        scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_hardware_io_set_mode(const char *source,
+                                                uint8_t channel,
+                                                hardware_io_io_mode_t mode,
+                                                scenehub_control_result_t *out_result);
 
 #ifdef __cplusplus
 }

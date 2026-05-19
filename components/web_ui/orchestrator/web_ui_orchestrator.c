@@ -6,11 +6,17 @@
 #include "cJSON.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/portmacro.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "orch_device_view.h"
+#include "orch_registry_snapshot.h"
+#include "orch_scenario_view.h"
 #include "orchestrator/orchestrator_api_view.h"
+#include "orchestrator/orchestrator_scenario_layout_writer.h"
 #include "orchestrator_audit.h"
-#include "orchestrator_registry.h"
 #include "orchestrator_timeline.h"
 #include "quest_device.h"
 #include "room_catalog.h"
@@ -21,7 +27,38 @@
 #define ORCH_AUDIT_RECENT_DEFAULT 32
 #define ORCH_TIMELINE_RECENT_DEFAULT 64
 #define ORCH_ROOM_SCENARIOS_DEFAULT ORCH_REGISTRY_MAX_ROOM_SCENARIOS
+static const char *TAG = "web_ui_orch";
 EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_gm_state_snapshot;
+static EXT_RAM_BSS_ATTR orch_room_scenario_detail_t s_room_scenario_detail_scratch;
+static EXT_RAM_BSS_ATTR room_scenario_t s_room_scenario_layout_scratch;
+static SemaphoreHandle_t s_room_scenario_detail_scratch_mutex = NULL;
+static StaticSemaphore_t s_room_scenario_detail_scratch_mutex_storage;
+static portMUX_TYPE s_room_scenario_detail_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_err_t orch_room_scenario_detail_scratch_lock(void)
+{
+    if (!s_room_scenario_detail_scratch_mutex) {
+        portENTER_CRITICAL(&s_room_scenario_detail_scratch_mutex_init_lock);
+        if (!s_room_scenario_detail_scratch_mutex) {
+            s_room_scenario_detail_scratch_mutex =
+                xSemaphoreCreateMutexStatic(&s_room_scenario_detail_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_room_scenario_detail_scratch_mutex_init_lock);
+    }
+    if (!s_room_scenario_detail_scratch_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_room_scenario_detail_scratch_mutex, portMAX_DELAY) == pdTRUE
+               ? ESP_OK
+               : ESP_ERR_TIMEOUT;
+}
+
+static void orch_room_scenario_detail_scratch_unlock(void)
+{
+    if (s_room_scenario_detail_scratch_mutex) {
+        xSemaphoreGive(s_room_scenario_detail_scratch_mutex);
+    }
+}
 
 static void *orch_snapshot_alloc(size_t size)
 {
@@ -43,6 +80,23 @@ static bool orch_read_query_value(httpd_req_t *req, const char *key, char *out, 
         return false;
     }
     return httpd_query_key_value(query, key, out, out_size) == ESP_OK;
+}
+
+static esp_err_t orch_send_text_error(httpd_req_t *req, const char *status, const char *message)
+{
+    esp_err_t err = ESP_OK;
+    if (!req || !status || !message) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = web_ui_http_resp_set_status(req, status);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = web_ui_http_resp_set_type(req, "text/plain; charset=utf-8");
+    if (err != ESP_OK) {
+        return err;
+    }
+    return web_ui_http_resp_send(req, message, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t orch_read_json_body(httpd_req_t *req, size_t max_len, char **out_body)
@@ -78,20 +132,127 @@ static esp_err_t orch_read_json_body(httpd_req_t *req, size_t max_len, char **ou
 
 esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
 {
+    char raw_query[256] = {0};
     char room_id[ROOM_SCENARIO_ROOM_ID_MAX_LEN] = {0};
+    char scenario_id[ROOM_SCENARIO_ID_MAX_LEN] = {0};
+    char detail[16] = {0};
+    bool summary_only = false;
+    bool single_scenario = false;
+    bool layout_only = false;
+    bool full_detail_only = false;
     orch_room_scenario_detail_t *scenarios = NULL;
+    orch_room_scenario_entry_t *scenario_summaries = NULL;
     size_t scenario_count = 0;
     size_t emitted_count = 0;
     cJSON *root = NULL;
     esp_err_t err = ESP_OK;
 
+    esp_err_t query_err = web_ui_http_req_get_url_query_str(req, raw_query, sizeof(raw_query));
     if (!orch_read_query_value(req, "room_id", room_id, sizeof(room_id)) || !room_id[0]) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "room_id required");
+        ESP_LOGW(TAG,
+                 "room_scenarios missing room_id query_err=%s raw_query=%s",
+                 esp_err_to_name(query_err),
+                 query_err == ESP_OK ? raw_query : "");
+        return orch_send_text_error(req, "400 Bad Request", "room_id required");
+    }
+    if (orch_read_query_value(req, "detail", detail, sizeof(detail)) && detail[0]) {
+        summary_only = strcmp(detail, "summary") == 0;
+        layout_only = strcmp(detail, "layout") == 0;
+        full_detail_only = strcmp(detail, "detail") == 0 || strcmp(detail, "full") == 0;
+    }
+    if (orch_read_query_value(req, "scenario_id", scenario_id, sizeof(scenario_id)) && scenario_id[0]) {
+        single_scenario = true;
+        layout_only = !full_detail_only;
+    }
+    ESP_LOGD(TAG,
+             "room_scenarios room_id=%s detail=%s summary=%d single=%d scenario_id=%s",
+             room_id,
+             detail,
+             summary_only,
+             single_scenario,
+             scenario_id);
+
+    if (single_scenario) {
+        err = orch_room_scenario_detail_scratch_lock();
+        if (err != ESP_OK) {
+            return orch_send_text_error(req, "500 Internal Server Error", "scenario detail busy");
+        }
+        if (layout_only) {
+            memset(&s_room_scenario_layout_scratch, 0, sizeof(s_room_scenario_layout_scratch));
+            err = orchestrator_registry_get_room_scenario_layout(room_id,
+                                                                 scenario_id,
+                                                                 &s_room_scenario_layout_scratch);
+            if (err == ESP_ERR_NOT_FOUND) {
+                orch_room_scenario_detail_scratch_unlock();
+                return orch_send_text_error(req, "404 Not Found", "scenario not found");
+            }
+            if (err != ESP_OK) {
+                orch_room_scenario_detail_scratch_unlock();
+                return orch_send_text_error(req, "500 Internal Server Error", "room scenarios failed");
+            }
+            err = orchestrator_scenario_layout_writer_send(req, room_id, &s_room_scenario_layout_scratch);
+            orch_room_scenario_detail_scratch_unlock();
+            return err;
+        }
+        memset(&s_room_scenario_detail_scratch, 0, sizeof(s_room_scenario_detail_scratch));
+        err = orchestrator_registry_get_room_scenario_detail(room_id, scenario_id, &s_room_scenario_detail_scratch);
+        if (err == ESP_ERR_NOT_FOUND) {
+            orch_room_scenario_detail_scratch_unlock();
+            return orch_send_text_error(req, "404 Not Found", "scenario not found");
+        }
+        if (err != ESP_OK) {
+            orch_room_scenario_detail_scratch_unlock();
+            return orch_send_text_error(req, "500 Internal Server Error", "room scenarios failed");
+        }
+        root = orchestrator_api_view_room_scenarios(room_id, &s_room_scenario_detail_scratch, 1);
+        if (!root) {
+            orch_room_scenario_detail_scratch_unlock();
+            return orch_send_text_error(req, "500 Internal Server Error", "no memory");
+        }
+        cJSON_ReplaceItemInObject(root, "count", cJSON_CreateNumber(1));
+        err = web_ui_send_json(req, root);
+        orch_room_scenario_detail_scratch_unlock();
+        return err;
+    }
+
+    if (summary_only) {
+        scenario_summaries = orch_snapshot_alloc(sizeof(*scenario_summaries) * ORCH_ROOM_SCENARIOS_DEFAULT);
+        if (!scenario_summaries) {
+            return orch_send_text_error(req, "500 Internal Server Error", "no memory");
+        }
+        err = orchestrator_registry_list_room_scenarios(room_id,
+                                                        scenario_summaries,
+                                                        ORCH_ROOM_SCENARIOS_DEFAULT,
+                                                        &scenario_count);
+        if (err == ESP_ERR_NOT_FOUND) {
+            err = ESP_OK;
+        } else if (err == ESP_ERR_INVALID_ARG) {
+            heap_caps_free(scenario_summaries);
+            return orch_send_text_error(req, "400 Bad Request", "invalid room_id");
+        } else if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
+            heap_caps_free(scenario_summaries);
+            return orch_send_text_error(req, "500 Internal Server Error", "room scenarios failed");
+        }
+        emitted_count = scenario_count < ORCH_ROOM_SCENARIOS_DEFAULT ? scenario_count : ORCH_ROOM_SCENARIOS_DEFAULT;
+        root = orchestrator_api_view_room_scenario_summaries(room_id, scenario_summaries, emitted_count);
+        if (!root) {
+            heap_caps_free(scenario_summaries);
+            ESP_LOGE(TAG, "room_scenarios summary no memory room_id=%s", room_id);
+            return orch_send_text_error(req, "500 Internal Server Error", "no memory");
+        }
+        cJSON_ReplaceItemInObject(root, "count", cJSON_CreateNumber((double)scenario_count));
+        ESP_LOGD(TAG, "room_scenarios summary ready room_id=%s count=%u emitted=%u",
+                 room_id,
+                 (unsigned)scenario_count,
+                 (unsigned)emitted_count);
+        err = web_ui_send_json(req, root);
+        heap_caps_free(scenario_summaries);
+        return err;
     }
 
     scenarios = orch_snapshot_alloc(sizeof(*scenarios) * ORCH_ROOM_SCENARIOS_DEFAULT);
     if (!scenarios) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+        return orch_send_text_error(req, "500 Internal Server Error", "no memory");
     }
 
     err = orchestrator_registry_list_room_scenario_details(room_id,
@@ -102,16 +263,16 @@ esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
         err = ESP_OK;
     } else if (err == ESP_ERR_INVALID_ARG) {
         heap_caps_free(scenarios);
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid room_id");
+        return orch_send_text_error(req, "400 Bad Request", "invalid room_id");
     } else if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
         heap_caps_free(scenarios);
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "room scenarios failed");
+        return orch_send_text_error(req, "500 Internal Server Error", "room scenarios failed");
     }
     emitted_count = scenario_count < ORCH_ROOM_SCENARIOS_DEFAULT ? scenario_count : ORCH_ROOM_SCENARIOS_DEFAULT;
     root = orchestrator_api_view_room_scenarios(room_id, scenarios, emitted_count);
     if (!root) {
         heap_caps_free(scenarios);
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+        return orch_send_text_error(req, "500 Internal Server Error", "no memory");
     }
     cJSON_ReplaceItemInObject(root, "count", cJSON_CreateNumber((double)scenario_count));
 

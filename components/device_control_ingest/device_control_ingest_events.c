@@ -52,13 +52,11 @@ void dci_post_control_event(const dci_event_snapshot_t *state)
 {
     scenehub_event_t msg = {0};
     esp_err_t err = ESP_OK;
-    bool is_device_event = false;
-    if (!state || !state->device_id[0] || !state->has_result) {
+    if (!state || !state->device_id[0]) {
         return;
     }
 
-    is_device_event = strcmp(state->result_status, SCENEHUB_DEVICE_CONTROL_SOURCE_EVENT) == 0;
-    if (is_device_event) {
+    if (state->control_is_event) {
         if (!state->event_name[0]) {
             ESP_LOGW(TAG, "dropping device event without parsed action: device=%s args=%s",
                      state->device_id,
@@ -73,12 +71,15 @@ void dci_post_control_event(const dci_event_snapshot_t *state)
         if (err != ESP_OK) {
             return;
         }
-        ESP_LOGI(TAG,
+        ESP_LOGD(TAG,
                  "publish device event: device=%s action=%s args=%s",
                  state->device_id,
                  msg.data.device_control.action_id,
                  msg.data.device_control.args_json);
     } else {
+        if (!state->has_result) {
+            return;
+        }
         err = scenehub_event_make_device_control_result(&msg,
                                                         state->device_id,
                                                         state->result_request_id[0] ? state->result_request_id : state->result_command,
@@ -92,6 +93,7 @@ void dci_post_control_event(const dci_event_snapshot_t *state)
 }
 
 void dci_capture_event_snapshot(const device_control_ingest_device_t *state,
+                                bool control_is_event,
                                 dci_event_snapshot_t *out)
 {
     if (!state || !out) {
@@ -104,6 +106,7 @@ void dci_capture_event_snapshot(const device_control_ingest_device_t *state,
     quest_str_copy(out->status_state, sizeof(out->status_state), state->status_state);
     quest_str_copy(out->status_health, sizeof(out->status_health), state->status_health);
     out->status_runtime_active = state->status_runtime_active;
+    out->control_is_event = control_is_event;
     out->has_result = state->has_result;
     quest_str_copy(out->result_request_id,
                    sizeof(out->result_request_id),

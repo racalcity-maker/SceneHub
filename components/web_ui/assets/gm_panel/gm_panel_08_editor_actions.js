@@ -52,7 +52,9 @@ events.push(event);
 }
 });
 if(strict&&(!name||!clientId))throw new Error('Fill device name and physical client ID');
-return {id,name,client_id:clientId,enabled,commands,events};
+const out={id,name,client_id:clientId,enabled,commands,events};
+if(compactManifest(base))out.device_description=JSON.parse(JSON.stringify(base.device_description));
+return out;
 }
 
 function normalizeQuestParamSchema(items){
@@ -103,8 +105,13 @@ match:item&&item.match&&typeof item.match==='object'?item.match:undefined
 
 function questDeviceFromDiscoveredInterface(clientId,iface){
 const base=collectQuestDeviceEditor(false);
-const name=(base.name||iface&&iface.name||iface&&iface.label||clientId||'Quest device').trim();
+const manifest=iface&&Number(iface.manifest_version)===2&&iface.format==='compact_resources'&&iface.node_kind&&iface.capability_contract==='scenehub.node.compact.v1'?iface:null;
+const manifestDevice=manifest&&manifest.device&&typeof manifest.device==='object'?manifest.device:{};
+const name=(base.name||manifestDevice.name||iface&&iface.name||iface&&iface.label||clientId||'Quest device').trim();
 const id=(base.id||questDeviceEditor.device_id||slugifyId(name,'device')).trim();
+if(manifest){
+return {id,client_id:clientId,name,enabled:base.enabled!==false,device_description:JSON.parse(JSON.stringify(manifest)),commands:[],events:[]};
+}
 const commands=(Array.isArray(iface&&iface.commands)?iface.commands:[]).map(normalizeDiscoveredCommand).filter(c=>c.id&&c.command);
 const events=(Array.isArray(iface&&iface.events)?iface.events:[]).map(normalizeDiscoveredEvent).filter(ev=>ev.id&&ev.event);
 return {
@@ -142,7 +149,7 @@ render();
 function applyQuestDeviceDiscovery(){
 const discovery=questDeviceEditor.discovery;
 if(!discovery||!discovery.device)return;
-if(!confirm('Import discovered commands and events into this device?'))return;
+if(!confirm(compactManifest(discovery.device)?'Import compact node interface into this device?':'Import discovered commands and events into this device?'))return;
 questDeviceEditor.draft=JSON.parse(JSON.stringify(discovery.device));
 questDeviceEditor.discovery=null;
 questDeviceEditor.dirty=true;
@@ -192,7 +199,7 @@ render();
 async function saveQuestDeviceEditor(){
 if(!isAdmin())throw new Error('Admin role required');
 const device=collectQuestDeviceEditor(true);
-if(!device.commands.length&&!device.events.length)throw new Error('Add at least one command or event');
+if(!compactManifest(device)&&!device.commands.length&&!device.events.length)throw new Error('Add at least one command or event');
 setGMStatus('Saving device...');
 const res=await api.device.save(device);
 await gmExpectOk(res);
@@ -263,8 +270,11 @@ setGMStatus('Game mode deleted','gm-ok');
 
 function collectScenarioForSave(){
 let scenario=null;
-if(document.getElementById('scenario_id')){
-scenario=collectScenarioEditor();
+if(scenarioEditor.draft&&String(scenarioEditor.draft.room_id||'')===String(scenarioEditor.room_id||'')){
+scenario=scenarioClone(scenarioEditor.draft);
+}
+else if(document.getElementById('scenario_id')){
+throw new Error('Scenario draft is not ready. Reopen the editor and try again.');
 }
 else{
 const box=document.getElementById('scenario_json');
@@ -278,7 +288,9 @@ throw new Error('Scenario JSON is invalid');
 if(scenario&&!scenario.id&&scenario.name)scenario.id=slugifyId(scenario.name,'scenario');
 if(!scenario||!scenario.name)throw new Error('Scenario name is required');
 scenario.room_id=scenarioEditor.room_id;
-const existing=roomScenarios(scenario.room_id).find(item=>(item.id||'')===(scenario.id||''))||null;
+const existing=scenarioEditor.original_scenario&&String(scenarioEditor.original_scenario.id||'')===String(scenario.id||'')
+  ? scenarioEditor.original_scenario
+  : roomScenarioDetailById(scenario.room_id,scenario.id)||roomScenarioSummaryById(scenario.room_id,scenario.id)||null;
 if(existing&&Array.isArray(existing.branches)&&Array.isArray(scenario.branches)&&
 existing.branches.length>scenario.branches.length&&
 (!scenarioEditor.branch_count_shrink_allowed||(Number(scenarioEditor.branch_count_shrink_floor)||0)>scenario.branches.length)){
@@ -298,8 +310,10 @@ if(!isAdmin())throw new Error('Admin role required');
 const draft=scenario||collectScenarioForSave();
 const localReport=scenarioClientValidationReport(draft);
 if(!localReport.valid){
+localReport._session_key=scenarioEditorSessionKey(draft.room_id,draft.id);
 scenarioEditor.validation_report=localReport;
 scenarioEditor.draft=draft;
+scenarioEditor.validation_revision=Number(scenarioEditor.draft_revision)||0;
 if(showStatus){
 setGMStatus('Scenario has editor validation errors','state-fault');
 render();
@@ -310,8 +324,10 @@ setGMStatus('Validating scenario...');
 const res=await api.room.scenarioValidate(draft);
 await gmExpectOk(res);
 const report=await res.json();
+report._session_key=scenarioEditorSessionKey(draft.room_id,draft.id);
 scenarioEditor.validation_report=report;
 scenarioEditor.draft=draft;
+scenarioEditor.validation_revision=Number(scenarioEditor.draft_revision)||0;
 if(showStatus){
 const errors=Number(report.error_count)||0;
 const warnings=Number(report.warning_count)||0;
@@ -344,10 +360,13 @@ return;
 setGMStatus('Saving scenario...');
 const res=await api.room.scenarioSave(scenario);
 await gmExpectOk(res);
+const savedScenario=JSON.parse(JSON.stringify(scenario));
 scenarioEditor.scenario_id=scenario.id;
 scenarioEditor.open=true;
-clearScenarioDirty();
+invalidateRoomScenarioDetail(scenario.room_id,scenario.id);
 await refreshRoomScenariosAfterMutation(scenario.room_id);
+const refreshed=await ensureRoomScenarioDetail(scenario.room_id,scenario.id,true);
+scenarioSetLoadedDraft(refreshed||savedScenario,scenario.room_id);
 setGMStatus('Scenario saved','gm-ok');
 }
 
@@ -391,6 +410,10 @@ else if(url==='/api/gm/profiles/import'){
 await loadRoomProfiles(true);
 render();
 }
+else if(url==='/api/gm/sidebar-presets/import'){
+await loadSidebarPresets(true);
+render();
+}
 else{
 await loadGMFullSnapshot(true,true);
 }
@@ -422,6 +445,10 @@ else if(url===api.storage.commandUrl('profile','load')){
 await loadRoomProfiles(true);
 render();
 }
+else if(url===api.storage.commandUrl('preset','load')){
+await loadSidebarPresets(true);
+render();
+}
 else{
 await loadGMFullSnapshot(true,true);
 }
@@ -442,15 +469,21 @@ if(action==='profile_export'){
 window.location=api.storage.exportUrl('profile');
 return;
 }
+if(action==='preset_export'){
+window.location=api.storage.exportUrl('preset');
+return;
+}
 if(action==='device_import')return importStorageJson('storage_devices_file','/api/gm/devices/import','Devices');
 if(action==='scenario_import')return importStorageJson('storage_scenarios_file','/api/gm/room/scenarios/import','Scenarios');
 if(action==='profile_import')return importStorageJson('storage_profiles_file','/api/gm/profiles/import','Game modes');
+if(action==='preset_import')return importStorageJson('storage_presets_file','/api/gm/sidebar-presets/import','GM quick actions');
 if(action==='device_save')return postStorageCommand(api.storage.commandUrl('device','save'),'Save devices');
 if(action==='device_load')return postStorageCommand(api.storage.commandUrl('device','load'),'Load devices');
 if(action==='scenario_save')return postStorageCommand(api.storage.commandUrl('scenario','save'),'Save scenarios');
 if(action==='scenario_load')return postStorageCommand(api.storage.commandUrl('scenario','load'),'Load scenarios');
 if(action==='profile_save')return postStorageCommand(api.storage.commandUrl('profile','save'),'Save game modes');
 if(action==='profile_load')return postStorageCommand(api.storage.commandUrl('profile','load'),'Load game modes');
+if(action==='preset_load')return postStorageCommand(api.storage.commandUrl('preset','load'),'Load GM quick actions');
 throw new Error('Unsupported storage action');
 }
 

@@ -290,17 +290,19 @@ esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *paylo
         break;
     }
     if (err == ESP_OK) {
-        dci_capture_event_snapshot(&slot->state, &snapshot);
+        dci_capture_event_snapshot(&slot->state,
+                                   kind == DEVICE_CONTROL_TOPIC_EVENT,
+                                   &snapshot);
         quest_str_copy(dci_s_last_changed_device_id,
                        sizeof(dci_s_last_changed_device_id),
                        device_id);
+        dci_s_generation++;
     }
     xSemaphoreGive(dci_s_lock);
     if (err == ESP_ERR_INVALID_ARG) {
         ESP_LOGW(TAG, "invalid payload for topic %s", topic);
     }
     if (err == ESP_OK) {
-        dci_s_generation++;
         if (kind == DEVICE_CONTROL_TOPIC_HEARTBEAT || kind == DEVICE_CONTROL_TOPIC_STATUS ||
             kind == DEVICE_CONTROL_TOPIC_DIAG) {
             dci_post_status_event(&snapshot);
@@ -333,6 +335,43 @@ esp_err_t device_control_ingest_get_device(const char *device_id, device_control
         return ESP_ERR_NOT_FOUND;
     }
     *out = slot->state;
+    xSemaphoreGive(dci_s_lock);
+    return ESP_OK;
+}
+
+esp_err_t device_control_ingest_get_presence(const char *device_id,
+                                             uint64_t now_ms,
+                                             uint32_t timeout_ms,
+                                             uint64_t *out_last_seen_ms,
+                                             bool *out_online)
+{
+    dci_slot_t *slot = NULL;
+    if (!device_id || !device_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!dci_s_lock || !dci_s_slots) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (out_last_seen_ms) {
+        *out_last_seen_ms = 0;
+    }
+    if (out_online) {
+        *out_online = false;
+    }
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    slot = dci_find_slot_locked(device_id);
+    if (!slot) {
+        xSemaphoreGive(dci_s_lock);
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (out_last_seen_ms) {
+        *out_last_seen_ms = slot->state.last_seen_ms;
+    }
+    if (out_online) {
+        *out_online = device_control_ingest_is_online(&slot->state, now_ms, timeout_ms);
+    }
     xSemaphoreGive(dci_s_lock);
     return ESP_OK;
 }

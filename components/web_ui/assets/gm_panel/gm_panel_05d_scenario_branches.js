@@ -20,7 +20,8 @@ return `<div class='scenario-branch-settings ${type==='reactive'?'reactive':''}'
 
 function applyScenarioBranchAction(action,index){
 const wasDirty=!!scenarioEditor.dirty;
-const draft=collectScenarioEditor();
+const draft=scenarioWorkingDraft();
+if(!draft)return;
 draft.branches=Array.isArray(draft.branches)&&draft.branches.length?draft.branches:[defaultScenarioBranch(0,[])];
 if(action==='select'){
 scenarioEditor.active_branch=Number.isFinite(index)?index:0;

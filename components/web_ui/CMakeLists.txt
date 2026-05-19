@@ -22,6 +22,9 @@ set(GM_PANEL_PARTS
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_05_scenario_builder.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_06_storage_and_render.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_07_loaders_and_runtime_actions.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_07b_room_runtime_refresh.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_07c_versions_and_invalidations.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_07d_runtime_actions.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_08_editor_actions.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_09_scenario_change_events.js
     ${CMAKE_CURRENT_SOURCE_DIR}/assets/gm_panel/gm_panel_09_editor_events.js
@@ -70,6 +73,9 @@ idf_component_register(
         "gm/web_ui_gm_action.c"
         "gm/web_ui_gm_profile.c"
         "gm/web_ui_gm_quest_device.c"
+        "gm/web_ui_gm_quest_device_json.c"
+        "gm/web_ui_gm_sidebar_presets.c"
+        "gm/web_ui_gm_runtime_json_writer.c"
         "gm/web_ui_gm_scenario.c"
         "gm/web_ui_gm_scenario_catalog.c"
         "gm/web_ui_gm_scenario_store.c"
@@ -80,6 +86,7 @@ idf_component_register(
         "orchestrator/orchestrator_api_view_activity.c"
         "orchestrator/orchestrator_api_view_control_devices.c"
         "orchestrator/orchestrator_api_view_room_scenarios.c"
+        "orchestrator/orchestrator_scenario_layout_writer.c"
         "orchestrator/web_ui_orchestrator.c"
         # Remaining specialized endpoints and bootstrap.
         "web_ui_hardware_io.c"
@@ -89,7 +96,7 @@ idf_component_register(
     EMBED_TXTFILES
         "assets/gm_panel.css"
         ${GENERATED_GM_PANEL_JS}
-    REQUIRES esp_http_server event_bus config_store network audio_player mqtt_core ota_manager sd_storage service_status device_control_ingest orchestrator_core scenehub_read_model gm_core gm_control scenehub_control scenehub_state quest_common room_catalog room_scenario quest_device hardware_io ws_runtime
+    REQUIRES esp_http_server event_bus config_store network audio_player mqtt_core ota_manager sd_storage service_status device_control_ingest orchestrator_core scenehub_read_model gm_core scenehub_control scenehub_state quest_common room_catalog room_scenario quest_device hardware_io ws_runtime
 )
 
 if(TARGET gm_panel_bundle)

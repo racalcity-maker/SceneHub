@@ -6,6 +6,7 @@
 
 #include "esp_err.h"
 #include "quest_common_limits.h"
+#include "quest_device.h"
 #include "scenehub_events.h"
 
 #ifdef __cplusplus
@@ -42,6 +43,13 @@ esp_err_t command_executor_execute(const command_executor_request_t *request,
                                    command_executor_dispatch_t *out_dispatch,
                                    char *error,
                                    size_t error_size);
+
+esp_err_t command_executor_execute_resolved(const command_executor_request_t *request,
+                                            const char *client_id,
+                                            const quest_device_command_t *command,
+                                            command_executor_dispatch_t *out_dispatch,
+                                            char *error,
+                                            size_t error_size);
 
 esp_err_t command_executor_execute_device_command(const char *device_id,
                                                   const char *command_id,

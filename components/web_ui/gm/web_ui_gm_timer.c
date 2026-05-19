@@ -7,7 +7,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#include "orchestrator_registry.h"
 #include "scenehub_control.h"
 #include "web_ui_utils.h"
 

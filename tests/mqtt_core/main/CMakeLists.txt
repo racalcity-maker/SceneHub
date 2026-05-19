@@ -1,6 +1,6 @@
 set(TEST_SRCS
     "test_runner.c"
-    "../../../components/mqtt_core/test/test_mqtt_core.c"
+    "test_mqtt_core.c"
 )
 
 idf_component_register(

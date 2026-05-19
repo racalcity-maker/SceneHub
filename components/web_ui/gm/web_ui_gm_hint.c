@@ -9,7 +9,6 @@
 #include "esp_timer.h"
 
 #include "gm_api.h"
-#include "orchestrator_registry.h"
 #include "scenehub_control.h"
 #include "web_ui_utils.h"
 

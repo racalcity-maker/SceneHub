@@ -124,8 +124,7 @@ static esp_err_t api_add_related_issue_ids(cJSON *obj, const orch_room_entry_t *
 }
 
 static esp_err_t api_add_scenario_branches(cJSON *obj,
-                                           const orch_room_entry_t *room,
-                                           const orch_room_runtime_view_t *view)
+                                           const orch_room_entry_t *room)
 {
     cJSON *branches = cJSON_CreateArray();
     if (!obj || !room || !branches) {
@@ -173,43 +172,6 @@ static esp_err_t api_add_scenario_branches(cJSON *obj,
         cJSON_AddNumberToObject(item, "wait_started_at_ms", branch->wait_started_at_ms);
         cJSON_AddBoolToObject(item, "wait_operator_skip_allowed", branch->wait_operator_skip_allowed);
         cJSON_AddStringToObject(item, "wait_operator_skip_label", branch->wait_operator_skip_label);
-        if (view && i < ORCH_ROOM_SCENARIO_MAX_BRANCHES) {
-            cJSON *steps = cJSON_CreateArray();
-            if (!steps) {
-                cJSON_Delete(item);
-                cJSON_Delete(branches);
-                return ESP_ERR_NO_MEM;
-            }
-            for (uint8_t step_index = 0;
-                 step_index < view->scenario_branch_steps[i].step_count &&
-                 step_index < ORCH_ROOM_SCENARIO_MAX_STEPS;
-                 ++step_index) {
-                cJSON *step = cJSON_CreateObject();
-                if (!step) {
-                    cJSON_Delete(steps);
-                    cJSON_Delete(item);
-                    cJSON_Delete(branches);
-                    return ESP_ERR_NO_MEM;
-                }
-                cJSON_AddNumberToObject(step,
-                                        "index",
-                                        view->scenario_branch_steps[i].steps[step_index].index);
-                cJSON_AddNumberToObject(step,
-                                        "global_index",
-                                        view->scenario_branch_steps[i].steps[step_index].global_index);
-                cJSON_AddStringToObject(step,
-                                        "state",
-                                        view->scenario_branch_steps[i].steps[step_index].state_text);
-                cJSON_AddBoolToObject(step,
-                                      "enabled",
-                                      view->scenario_branch_steps[i].steps[step_index].enabled);
-                cJSON_AddStringToObject(step,
-                                        "text",
-                                        view->scenario_branch_steps[i].steps[step_index].text);
-                cJSON_AddItemToArray(steps, step);
-            }
-            cJSON_AddItemToObject(item, "steps", steps);
-        }
         cJSON_AddItemToArray(branches, item);
     }
     cJSON_AddItemToObject(obj, "scenario_branches", branches);
@@ -303,7 +265,7 @@ static cJSON *api_build_rooms_json(const orch_registry_snapshot_t *snapshot)
         if (api_add_scenario_flags(obj, room) != ESP_OK ||
             api_add_scenario_device_ids(obj, room) != ESP_OK ||
             api_add_related_issue_ids(obj, room) != ESP_OK ||
-            api_add_scenario_branches(obj, room, NULL) != ESP_OK) {
+            api_add_scenario_branches(obj, room) != ESP_OK) {
             cJSON_Delete(obj);
             cJSON_Delete(rooms);
             return NULL;
@@ -459,6 +421,16 @@ cJSON *orchestrator_api_view_gm_system_summary(const orch_gm_system_summary_t *s
     cJSON_AddNumberToObject(summary_obj, "active_hints", summary->active_hint_count);
     cJSON_AddNumberToObject(summary_obj, "degraded_count", summary->degraded_count);
     cJSON_AddNumberToObject(summary_obj, "fault_count", summary->fault_count);
+    cJSON_AddNumberToObject(summary_obj, "dropped_critical_events", summary->dropped_critical_events);
+    cJSON_AddNumberToObject(summary_obj,
+                            "dropped_noncritical_events",
+                            summary->dropped_noncritical_events);
+    cJSON_AddNumberToObject(summary_obj,
+                            "dropped_event_queue_events",
+                            summary->dropped_event_queue_events);
+    cJSON_AddNumberToObject(summary_obj,
+                            "dropped_runtime_queue_events",
+                            summary->dropped_runtime_queue_events);
     cJSON_AddBoolToObject(summary_obj, "has_degraded", summary->has_degraded);
     cJSON_AddBoolToObject(summary_obj, "has_fault", summary->has_fault);
     cJSON_AddItemToObject(root, "summary", summary_obj);

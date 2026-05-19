@@ -3,9 +3,14 @@ function formFieldId(scope,name){
 return `${scope||'form'}_${name||'field'}`.replace(/[^a-zA-Z0-9_:-]/g,'_');
 }
 
+function formFieldName(field){
+field=field||{};
+return field.name||field.field||field.key||'';
+}
+
 function renderFormField(field,model,scope){
 field=field||{};
-const name=field.name||field.field||'';
+const name=formFieldName(field);
 const type=field.type||'text';
 const value=model&&Object.prototype.hasOwnProperty.call(model,name)?model[name]:field.default;
 const dataset={field:name,scope:scope||''};
@@ -47,7 +52,7 @@ function collectFormFields(root,schema,scope){
 const out={};
 (Array.isArray(schema)?schema:[]).forEach(field=>{
 field=field||{};
-const name=field.name||field.field||'';
+const name=formFieldName(field);
 if(!name)return;
 const candidates=root&&root.querySelectorAll?Array.from(root.querySelectorAll('[data-field]')):[];
 const el=candidates.find(item=>(item.dataset.field||'')===name&&(!scope||(item.dataset.scope||'')===scope));
@@ -84,7 +89,7 @@ function validateFormFields(model,schema){
 const errors=[];
 (Array.isArray(schema)?schema:[]).forEach(field=>{
 field=field||{};
-const name=field.name||field.field||'';
+const name=formFieldName(field);
 if(!name)return;
 const value=model?model[name]:undefined;
 if(field.required&&(value===undefined||value===null||value==='')){

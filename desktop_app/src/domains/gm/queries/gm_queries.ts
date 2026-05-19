@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useControllerStore } from "@/domains/controller";
 import { httpGetJson } from "@/platform/http/client";
 import { GmState, gmStateSchema } from "@/domains/gm/model/gm_state_types";
@@ -25,6 +25,7 @@ export function useGmStateQuery() {
     queryKey: ["controller", activeController?.baseUrl ?? "none", "gm", "state"],
     enabled: !!activeController?.baseUrl && isReady,
     retry: 1,
+    placeholderData: keepPreviousData,
     queryFn: () =>
       httpGetJson<GmState>(activeController!.baseUrl, "/api/gm/state", gmStateSchema),
   });
@@ -40,10 +41,11 @@ export function useGmRoomRuntimeQuery(roomId?: string) {
     queryKey: ["controller", activeController?.baseUrl ?? "none", "gm", "room-runtime", roomId ?? "none"],
     enabled: !!activeController?.baseUrl && !!roomId && isReady,
     retry: 1,
+    placeholderData: keepPreviousData,
     queryFn: () =>
       httpGetJson<GmRoomRuntime>(
         activeController!.baseUrl,
-        `/api/gm/room/runtime?room_id=${encodeURIComponent(roomId!)}`,
+        `/api/gm/room/runtime?room_id=${encodeURIComponent(roomId!)}&include_assets=0`,
         gmRoomRuntimeSchema,
       ),
   });
@@ -59,6 +61,7 @@ export function useGmRoomProfilesQuery(roomId?: string) {
     queryKey: ["controller", activeController?.baseUrl ?? "none", "gm", "room-profiles", roomId ?? "none"],
     enabled: !!activeController?.baseUrl && !!roomId && isReady,
     retry: 1,
+    placeholderData: keepPreviousData,
     queryFn: () =>
       httpGetJson<GmRoomProfiles>(
         activeController!.baseUrl,
@@ -78,6 +81,7 @@ export function useGmRoomScenariosQuery(roomId?: string) {
     queryKey: ["controller", activeController?.baseUrl ?? "none", "gm", "room-scenarios", roomId ?? "none"],
     enabled: !!activeController?.baseUrl && !!roomId && isReady,
     retry: 1,
+    placeholderData: keepPreviousData,
     queryFn: () =>
       httpGetJson<GmRoomScenarios>(
         activeController!.baseUrl,

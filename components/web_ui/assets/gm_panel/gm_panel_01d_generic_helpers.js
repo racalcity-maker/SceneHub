@@ -55,13 +55,55 @@ function observedItems(){return (gmObserved&&Array.isArray(gmObserved.items))?gm
 function auditItems(){return (gmAudit&&Array.isArray(gmAudit.items))?gmAudit.items:[];}
 function timelineItems(){return (gmTimeline&&Array.isArray(gmTimeline.items))?gmTimeline.items:[];}
 function roomScenarios(id){return (gmRoomScenarios&&Array.isArray(gmRoomScenarios[id]))?gmRoomScenarios[id]:[];}
+function scenarioSummariesByRoom(roomId){return roomScenarios(roomId);}
+function roomScenarioDetailKey(roomId,scenarioId){return `${String(roomId||'')}::${String(scenarioId||'')}`;}
+function roomScenarioDetailById(roomId,scenarioId){const key=roomScenarioDetailKey(roomId,scenarioId);return key&&(gmRoomScenarioDetails&&gmRoomScenarioDetails[key])||null;}
+function roomScenarioSummaryById(roomId,scenarioId){return scenarioSummariesByRoom(roomId).find(x=>x.id===scenarioId)||null;}
+function roomScenarioRuntimeProjectionById(roomId,scenarioId){return roomScenarioDetailById(roomId,scenarioId)||roomScenarioSummaryById(roomId,scenarioId)||null;}
+function scenarioEditorSessionKey(roomId,scenarioId){
+return `${String(roomId||scenarioEditor.room_id||'')}::${String(scenarioId||scenarioEditor.scenario_id||'new')}`;
+}
+function scenarioValidationReportCurrent(){
+const report=scenarioEditor.validation_report;
+if(!report)return null;
+if(Number(scenarioEditor.validation_revision||0)!==Number(scenarioEditor.draft_revision||0))return null;
+if(String(report._session_key||'')!==scenarioEditorSessionKey())return null;
+return report;
+}
+function scenarioClientValidationReportCurrent(){
+const draft=scenarioEditor.draft;
+if(!draft)return null;
+if(String(draft.room_id||'')!==String(scenarioEditor.room_id||''))return null;
+if(String(draft.id||'')!==String(scenarioEditor.scenario_id||''))return null;
+const report=scenarioClientValidationReport(draft);
+report._session_key=scenarioEditorSessionKey(draft.room_id,draft.id);
+report._source='client';
+return report;
+}
+function scenarioDisplayValidationReport(savedIssues){
+return scenarioValidationReportCurrent()||scenarioClientValidationReportCurrent()||(Array.isArray(savedIssues)?{issues:savedIssues,error_count:0,warning_count:0,_source:'saved'}:null);
+}
 function roomProfiles(id){const data=gmRoomProfiles?gmRoomProfiles[id]:null;return data&&Array.isArray(data.profiles)?data.profiles:[];}
 function roomSelectedProfileId(id){return currentRoomProfileId[id]||(gmRoomProfiles[id]&&gmRoomProfiles[id].selected_profile_id)||'';}
-function scenarioName(roomId,scenarioId){const s=roomScenarios(roomId).find(x=>x.id===scenarioId);return s&&(s.name||s.id)||scenarioId||'none';}
+function scenarioName(roomId,scenarioId){const s=roomScenarioRuntimeProjectionById(roomId,scenarioId);return s&&(s.name||s.id)||scenarioId||'none';}
 function scenarioDisplayName(roomId,scenarioId,fallback){const s=scenarioById(roomId,scenarioId);return s&&(s.name||s.id)||fallback||scenarioId||'none';}
+function roomActiveScenarioId(roomId){
+const room=roomById(roomId);
+if(!room)return '';
+const profiles=roomProfiles(roomId);
+const profileId=roomSelectedProfileId(roomId)||room.selected_profile_id||'';
+const profile=profiles.find(p=>p.id===profileId)||null;
+return room.running_scenario_id||room.selected_profile_scenario_id||(profile&&profile.scenario_id)||room.selected_scenario_id||'';
+}
 function configDevices(){return gmDeviceConfig&&Array.isArray(gmDeviceConfig.devices)?gmDeviceConfig.devices:[];}
 function questDevices(){return gmQuestDevices&&Array.isArray(gmQuestDevices.devices)?gmQuestDevices.devices:[];}
 function observedByClientId(id){const key=String(id||'');if(!key)return null;return observedItems().find(o=>o.device_id===key)||null;}
 function questDeviceById(id){return questDevices().find(d=>(d.id||'')===id)||null;}
 function scenarioEditorCatalog(roomId){return gmScenarioEditorCatalogs[roomId]||{quest_devices:[],step_schemas:[]};}
 function optionList(items,selected,emptyLabel){let found=false;const opts=[];if(emptyLabel)opts.push(`<option value=''>${esc(emptyLabel)}</option>`);(Array.isArray(items)?items:[]).forEach(item=>{const id=item.id||'';if(id===selected)found=true;opts.push(`<option value='${esc(id)}' ${id===selected?'selected':''}>${esc(item.name||id)}</option>`);});if(selected&&!found)opts.push(`<option value='${esc(selected)}' selected>${esc(selected)} (missing)</option>`);return opts.join('');}
+function commandSupportsScenarioParams(command){
+const schema=Array.isArray(command&&command.args_schema)?command.args_schema:[];
+return !!(schema.length||(command&&command.default_args&&typeof command.default_args==='object'));
+}
+function questDeviceCommandName(deviceId,commandId){return typeof scenarioCommandName==='function'?scenarioCommandName(deviceId,commandId):(commandId||'command');}
+function questDeviceEventName(deviceId,eventId){return typeof scenarioDeviceEventName==='function'?scenarioDeviceEventName(deviceId,eventId):(eventId||'event');}

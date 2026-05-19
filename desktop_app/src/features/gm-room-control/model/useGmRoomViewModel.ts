@@ -28,7 +28,11 @@ export function useGmRoomViewModel(roomId: string | undefined) {
   const selectedProfileId = roomProfilesQuery.data?.selected_profile_id || runtime?.selected_profile_id || "";
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
   const selectedScenarioId =
-    runtime?.selected_scenario_id || selectedProfile?.scenario_id || runtime?.selected_profile_scenario_id || "";
+    runtime?.running_scenario_id ||
+    runtime?.selected_scenario_id ||
+    selectedProfile?.scenario_id ||
+    runtime?.selected_profile_scenario_id ||
+    "";
   const selectedScenario = scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? null;
   const selectedProfileScenarioName =
     scenarios.find((scenario) => scenario.id === (runtime?.selected_profile_scenario_id || selectedProfile?.scenario_id))

@@ -64,6 +64,12 @@ static const cJSON *qd_json_policy(const cJSON *json)
     return cJSON_IsObject(policy) ? policy : NULL;
 }
 
+static const char *qd_json_string_value(const cJSON *json, const char *name)
+{
+    const cJSON *item = json ? cJSON_GetObjectItemCaseSensitive(json, name) : NULL;
+    return cJSON_IsString(item) && item->valuestring ? item->valuestring : "";
+}
+
 static void qd_default_capability_from_name(char *dst, size_t dst_len, const char *name)
 {
     const char *dot = NULL;
@@ -150,6 +156,134 @@ static esp_err_t qd_json_add_raw_object(cJSON *obj, const char *name, const char
     return ESP_OK;
 }
 
+static bool qd_json_array_has_duplicate_string_field(const cJSON *array, const char *field_name)
+{
+    if (!cJSON_IsArray(array) || !field_name) {
+        return true;
+    }
+    int count = cJSON_GetArraySize(array);
+    for (int i = 0; i < count; ++i) {
+        const cJSON *left = cJSON_GetArrayItem(array, i);
+        const char *left_value = qd_json_string_value(left, field_name);
+        if (!left_value[0]) {
+            return true;
+        }
+        for (int j = i + 1; j < count; ++j) {
+            const cJSON *right = cJSON_GetArrayItem(array, j);
+            const char *right_value = qd_json_string_value(right, field_name);
+            if (strcmp(left_value, right_value) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool qd_json_object_has_key(const cJSON *obj, const char *key)
+{
+    return cJSON_IsObject(obj) && key && key[0] &&
+           cJSON_GetObjectItemCaseSensitive(obj, key) != NULL;
+}
+
+static bool qd_compact_manifest_schema_ref_valid(const cJSON *schemas, const char *ref)
+{
+    return ref && ref[0] && cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(schemas, ref));
+}
+
+static bool qd_compact_manifest_template_array_valid(const cJSON *array,
+                                                     const cJSON *schemas,
+                                                     bool command_templates)
+{
+    if (!cJSON_IsArray(array) || qd_json_array_has_duplicate_string_field(array, "id")) {
+        return false;
+    }
+    int count = cJSON_GetArraySize(array);
+    for (int i = 0; i < count; ++i) {
+        const cJSON *item = cJSON_GetArrayItem(array, i);
+        const char *id = qd_json_string_value(item, "id");
+        const char *schema_ref = qd_json_string_value(item, "args_schema_ref");
+        if (!cJSON_IsObject(item) || !id[0] ||
+            !qd_compact_manifest_schema_ref_valid(schemas, schema_ref)) {
+            return false;
+        }
+        if (command_templates) {
+            if (!qd_json_string_value(item, "command")[0] ||
+                !qd_json_string_value(item, "target")[0]) {
+                return false;
+            }
+        } else {
+            if (!qd_json_string_value(item, "event")[0] ||
+                !qd_json_string_value(item, "source")[0]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool qd_compact_manifest_resources_valid(const cJSON *resources)
+{
+    static const char *resource_keys[] = {
+        "relays",
+        "mosfets",
+        "inputs",
+        "outputs",
+        "led_strips",
+    };
+    if (!cJSON_IsObject(resources)) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(resource_keys) / sizeof(resource_keys[0]); ++i) {
+        const cJSON *array = cJSON_GetObjectItemCaseSensitive(resources, resource_keys[i]);
+        if (!cJSON_IsArray(array)) {
+            return false;
+        }
+        int count = cJSON_GetArraySize(array);
+        for (int j = 0; j < count; ++j) {
+            const cJSON *item = cJSON_GetArrayItem(array, j);
+            if (!cJSON_IsObject(item) || qd_json_object_has_key(item, "gpio")) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool qd_compact_manifest_valid(const cJSON *manifest)
+{
+    const cJSON *manifest_version = cJSON_GetObjectItemCaseSensitive(manifest, "manifest_version");
+    const cJSON *device = cJSON_GetObjectItemCaseSensitive(manifest, "device");
+    const cJSON *resources = cJSON_GetObjectItemCaseSensitive(manifest, "resources");
+    const cJSON *commands = cJSON_GetObjectItemCaseSensitive(manifest, "command_templates");
+    const cJSON *events = cJSON_GetObjectItemCaseSensitive(manifest, "event_templates");
+    const cJSON *schemas = cJSON_GetObjectItemCaseSensitive(manifest, "schemas");
+    const char *format = qd_json_string_value(manifest, "format");
+    const char *node_kind = qd_json_string_value(manifest, "node_kind");
+    const char *contract = qd_json_string_value(manifest, "capability_contract");
+
+    if (!cJSON_IsObject(manifest) ||
+        !cJSON_IsNumber(manifest_version) ||
+        manifest_version->valueint != 2 ||
+        strcmp(format, "compact_resources") != 0 ||
+        !node_kind[0] ||
+        strcmp(contract, "scenehub.node.compact.v1") != 0 ||
+        !cJSON_IsObject(device) ||
+        !qd_json_string_value(device, "id")[0] ||
+        !qd_json_string_value(device, "name")[0] ||
+        !qd_json_string_value(device, "kind")[0] ||
+        !cJSON_IsObject(schemas)) {
+        return false;
+    }
+    if (qd_json_object_has_key(manifest, "version") ||
+        qd_json_object_has_key(manifest, "commands") ||
+        qd_json_object_has_key(manifest, "events")) {
+        return false;
+    }
+    return qd_compact_manifest_resources_valid(resources) &&
+           qd_compact_manifest_template_array_valid(commands, schemas, true) &&
+           qd_compact_manifest_template_array_valid(events, schemas, false);
+}
+
 static bool qd_commands_have_duplicate_ids(const quest_device_t *device)
 {
     if (!device) {
@@ -198,6 +332,14 @@ static bool qd_json_device_valid(const quest_device_t *device)
     }
     if (qd_commands_have_duplicate_ids(device) || qd_events_have_duplicate_ids(device)) {
         return false;
+    }
+    if (device->device_description_json[0]) {
+        cJSON *manifest = cJSON_Parse(device->device_description_json);
+        bool valid = qd_compact_manifest_valid(manifest);
+        cJSON_Delete(manifest);
+        if (!valid || device->command_count != 0 || device->event_count != 0) {
+            return false;
+        }
     }
     for (uint8_t i = 0; i < device->command_count; ++i) {
         const quest_device_command_t *cmd = &device->commands[i];
@@ -371,6 +513,12 @@ esp_err_t quest_device_to_json(const quest_device_t *device, cJSON *out)
     cJSON_AddStringToObject(out, "name", device->name);
     cJSON_AddBoolToObject(out, "enabled", device->enabled);
     cJSON_AddBoolToObject(out, "system_device", device->system_device);
+    esp_err_t description_err = qd_json_add_raw_object(out,
+                                                       "device_description",
+                                                       device->device_description_json);
+    if (description_err != ESP_OK) {
+        return description_err;
+    }
     commands = cJSON_AddArrayToObject(out, "commands");
     events = cJSON_AddArrayToObject(out, "events");
     if (!commands || !events) {
@@ -569,6 +717,13 @@ esp_err_t quest_device_from_json(const cJSON *json, quest_device_t *out)
     }
     out->enabled = qd_json_bool(json, "enabled", true);
     out->system_device = false;
+    err = qd_json_object_to_string(json,
+                                   "device_description",
+                                   out->device_description_json,
+                                   sizeof(out->device_description_json));
+    if (err != ESP_OK) {
+        return err;
+    }
 
     commands = cJSON_GetObjectItemCaseSensitive(json, "commands");
     if (!cJSON_IsArray(commands)) {

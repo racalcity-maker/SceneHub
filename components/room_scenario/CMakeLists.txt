@@ -5,6 +5,7 @@ idf_component_register(
         "json/room_scenario_json_export.c"
         "json/room_scenario_json_import_reactive.c"
         "storage/room_scenario_persistence.c"
+        "room_scenario_device_refs.c"
         "room_scenario_types.c"
         "room_scenario_validation.c"
     INCLUDE_DIRS "include"

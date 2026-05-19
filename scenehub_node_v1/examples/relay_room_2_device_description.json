@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "device": {
+    "id": "relay_room_2",
+    "name": "Relay room 2",
+    "kind": "relay_node"
+  },
+  "commands": [
+    {
+      "id": "open_room_2_door",
+      "label": "Open room 2 door",
+      "capability": "relay",
+      "command": "relay.pulse",
+      "default_args": {
+        "channel": 1,
+        "duration_ms": 1000
+      },
+      "policy": {
+        "manual_allowed": true,
+        "scenario_allowed": true,
+        "requires_confirmation": true,
+        "result_required": true,
+        "timeout_ms": 3000,
+        "danger_level": "danger"
+      },
+      "args_schema": [
+        {
+          "key": "channel",
+          "label": "Channel",
+          "type": "number",
+          "optional": false
+        },
+        {
+          "key": "duration_ms",
+          "label": "Duration ms",
+          "type": "number",
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "close_room_2_door",
+      "label": "Close room 2 door",
+      "capability": "relay",
+      "command": "relay.pulse",
+      "default_args": {
+        "channel": 2,
+        "duration_ms": 1000
+      },
+      "policy": {
+        "manual_allowed": true,
+        "scenario_allowed": true,
+        "requires_confirmation": true,
+        "result_required": true,
+        "timeout_ms": 3000,
+        "danger_level": "danger"
+      },
+      "args_schema": [
+        {
+          "key": "channel",
+          "label": "Channel",
+          "type": "number",
+          "optional": false
+        },
+        {
+          "key": "duration_ms",
+          "label": "Duration ms",
+          "type": "number",
+          "optional": false
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "id": "drawer_1_opened",
+      "label": "Drawer 1 opened",
+      "capability": "input",
+      "event": "drawer_1_opened"
+    },
+    {
+      "id": "drawer_2_opened",
+      "label": "Drawer 2 opened",
+      "capability": "input",
+      "event": "drawer_2_opened"
+    }
+  ]
+}

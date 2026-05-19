@@ -307,6 +307,7 @@ esp_err_t publish_handler(httpd_req_t *req)
     if (scenehub_event_make_text(&msg, SCENEHUB_EVENT_WEB_COMMAND, topic, payload) != ESP_OK) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "event build failed"));
     }
+    msg.origin = SCENEHUB_EVENT_ORIGIN_WEB;
     esp_err_t err = event_bus_post(&msg, pdMS_TO_TICKS(50));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "publish event dispatch failed: %s", esp_err_to_name(err));

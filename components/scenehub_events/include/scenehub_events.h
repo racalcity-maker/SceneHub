@@ -17,6 +17,8 @@ extern "C" {
 #define SCENEHUB_EVENT_RUNTIME_TYPE_MAX_LEN             32
 #define SCENEHUB_EVENT_ACTION_ID_MAX_LEN                96
 #define SCENEHUB_EVENT_DEVICE_CONTROL_SOURCE_MAX_LEN    16
+// Text payloads in scenehub_event_t are bounded compatibility/diagnostic fields.
+// Large upstream payloads, including generic MQTT_MESSAGE payloads, may be truncated.
 #define SCENEHUB_EVENT_TEXT_PAYLOAD_MAX_LEN             256
 
 #define SCENEHUB_DEVICE_CONTROL_SOURCE_EVENT            "event"
@@ -46,6 +48,13 @@ typedef enum {
     EVENT_BUS_PRIORITY_NORMAL = 0,
     EVENT_BUS_PRIORITY_HIGH,
 } event_bus_priority_t;
+
+typedef enum {
+    SCENEHUB_EVENT_ORIGIN_INTERNAL = 0,
+    SCENEHUB_EVENT_ORIGIN_MQTT,
+    SCENEHUB_EVENT_ORIGIN_WEB,
+    SCENEHUB_EVENT_ORIGIN_SCENARIO,
+} scenehub_event_origin_t;
 
 typedef enum {
     SCENEHUB_EVENT_PAYLOAD_TEXT = 0,
@@ -82,6 +91,7 @@ typedef struct {
     scenehub_event_type_t type;
     // Transport-owned compatibility field; delivery policy stays in event_bus.
     event_bus_priority_t priority;
+    scenehub_event_origin_t origin;
     scenehub_event_payload_type_t payload_type;
     char topic[QUEST_TOPIC_MAX_LEN];
     char payload[SCENEHUB_EVENT_TEXT_PAYLOAD_MAX_LEN];

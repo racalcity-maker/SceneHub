@@ -7,13 +7,16 @@
 #include "cJSON.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 
 #include "gm_game_profile.h"
-#include "orchestrator_registry.h"
+#include "orch_profile_view.h"
+#include "orch_room_view.h"
 #include "scenehub_control.h"
 #include "web_ui_utils.h"
 
 #define GM_GAME_PROFILE_BODY_MAX_BYTES (128 * 1024)
+static const char *TAG = "web_ui_profile";
 
 EXT_RAM_BSS_ATTR static orch_room_entry_t s_gm_profile_room;
 
@@ -98,15 +101,6 @@ static esp_err_t gm_profile_send_store_ok(httpd_req_t *req, const char *operatio
                                             gm_game_profile_generation());
 }
 
-static const cJSON *gm_profile_payload_object(const cJSON *root)
-{
-    const cJSON *profile = cJSON_GetObjectItemCaseSensitive(root, "profile");
-    if (cJSON_IsObject(profile)) {
-        return profile;
-    }
-    return root;
-}
-
 static esp_err_t gm_profile_read_json(httpd_req_t *req,
                                       size_t max_len,
                                       cJSON **out_root,
@@ -163,8 +157,10 @@ esp_err_t gm_room_profiles_handler(httpd_req_t *req)
     esp_err_t err = ESP_OK;
 
     if (!gm_profile_read_query_value(req, "room_id", room_id, sizeof(room_id)) || !room_id[0]) {
+        ESP_LOGW(TAG, "room_profiles missing room_id");
         return gm_profile_send_error(req, ESP_ERR_INVALID_ARG);
     }
+    ESP_LOGD(TAG, "room_profiles room_id=%s", room_id);
     profiles = gm_profile_alloc(sizeof(*profiles) * GM_GAME_PROFILE_MAX_PROFILES);
     if (!profiles) {
         return gm_profile_send_error(req, ESP_ERR_NO_MEM);
@@ -215,6 +211,7 @@ esp_err_t gm_room_profiles_handler(httpd_req_t *req)
     }
     cJSON_AddItemToObject(root, "profiles", items);
     heap_caps_free(profiles);
+    ESP_LOGD(TAG, "room_profiles ready room_id=%s count=%u", room_id, (unsigned)count);
     return web_ui_send_json(req, root);
 }
 
@@ -257,31 +254,20 @@ esp_err_t gm_room_profile_save_handler(httpd_req_t *req)
 {
     cJSON *root = NULL;
     cJSON *profile_json = NULL;
-    gm_game_profile_t profile = {0};
     esp_err_t err = gm_profile_read_json(req, 2048, &root, NULL);
     if (err != ESP_OK) {
         return gm_profile_send_error(req, err);
     }
     scenehub_control_result_t result = {0};
-    err = gm_game_profile_from_json(gm_profile_payload_object(root), &profile);
-    if (err == ESP_OK) {
-        err = scenehub_control_save_profile("http", &profile, &result);
-    }
+    err = scenehub_control_save_profile_payload("http", root, &profile_json, &result);
     if (!web_ui_scenehub_control_is_done(err, &result)) {
         cJSON_Delete(root);
+        cJSON_Delete(profile_json);
         return gm_profile_send_control_error(req, err, &result);
     }
-    profile_json = cJSON_CreateObject();
     if (!profile_json) {
         cJSON_Delete(root);
-        cJSON_Delete(profile_json);
         return gm_profile_send_error(req, ESP_ERR_NO_MEM);
-    }
-    err = gm_game_profile_to_json(&profile, profile_json);
-    if (err != ESP_OK) {
-        cJSON_Delete(root);
-        cJSON_Delete(profile_json);
-        return gm_profile_send_error(req, err);
     }
     cJSON_Delete(root);
     return web_ui_send_generation_item_json(req,

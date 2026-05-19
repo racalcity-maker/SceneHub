@@ -1,0 +1,219 @@
+menu "SceneHub Node board profile"
+
+config SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    bool "Enable factory pin profile"
+    default n
+    help
+        Enable compile-time factory pin configuration for boxed hardware.
+        When disabled, functional pins stay disabled by default and can be
+        configured through provisioning/runtime config.
+
+config SCENEHUB_NODE_FACTORY_PIN_LOCKED
+    bool "Lock pin configuration in UI/API"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default y
+    help
+        Mark pin configuration as factory-owned. Provisioning UI should hide or
+        disable pin editing when this option is enabled.
+
+config SCENEHUB_NODE_FACTORY_RELAY1_GPIO
+    int "Factory relay 1 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_RELAY2_GPIO
+    int "Factory relay 2 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_RELAY3_GPIO
+    int "Factory relay 3 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_RELAY4_GPIO
+    int "Factory relay 4 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_RELAY5_GPIO
+    int "Factory relay 5 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_RELAY6_GPIO
+    int "Factory relay 6 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_RELAY7_GPIO
+    int "Factory relay 7 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_RELAY8_GPIO
+    int "Factory relay 8 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_RELAY_ACTIVE_LOW
+    bool "Factory relays are active-low"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default y
+
+config SCENEHUB_NODE_FACTORY_MOSFET1_GPIO
+    int "Factory MOSFET 1 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_MOSFET2_GPIO
+    int "Factory MOSFET 2 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_MOSFET3_GPIO
+    int "Factory MOSFET 3 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_MOSFET4_GPIO
+    int "Factory MOSFET 4 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_MOSFET5_GPIO
+    int "Factory MOSFET 5 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_MOSFET6_GPIO
+    int "Factory MOSFET 6 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_MOSFET7_GPIO
+    int "Factory MOSFET 7 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_MOSFET8_GPIO
+    int "Factory MOSFET 8 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_MOSFET_ACTIVE_LOW
+    bool "Factory MOSFET outputs are active-low"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default n
+
+config SCENEHUB_NODE_FACTORY_IO1_GPIO
+    int "Factory universal IO 1 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_IO1_ROLE
+    int "Factory universal IO 1 role: 0 disabled, 1 input, 2 output"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 0 2
+    default 0
+
+config SCENEHUB_NODE_FACTORY_IO2_GPIO
+    int "Factory universal IO 2 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_IO2_ROLE
+    int "Factory universal IO 2 role: 0 disabled, 1 input, 2 output"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 0 2
+    default 0
+
+config SCENEHUB_NODE_FACTORY_IO3_GPIO
+    int "Factory universal IO 3 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_IO3_ROLE
+    int "Factory universal IO 3 role: 0 disabled, 1 input, 2 output"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 0 2
+    default 0
+
+config SCENEHUB_NODE_FACTORY_IO4_GPIO
+    int "Factory universal IO 4 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_IO4_ROLE
+    int "Factory universal IO 4 role: 0 disabled, 1 input, 2 output"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 0 2
+    default 0
+
+config SCENEHUB_NODE_FACTORY_IO5_GPIO
+    int "Factory universal IO 5 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_IO5_ROLE
+    int "Factory universal IO 5 role: 0 disabled, 1 input, 2 output"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 0 2
+    default 0
+
+config SCENEHUB_NODE_FACTORY_IO6_GPIO
+    int "Factory universal IO 6 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_IO6_ROLE
+    int "Factory universal IO 6 role: 0 disabled, 1 input, 2 output"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 0 2
+    default 0
+
+config SCENEHUB_NODE_FACTORY_IO7_GPIO
+    int "Factory universal IO 7 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_IO7_ROLE
+    int "Factory universal IO 7 role: 0 disabled, 1 input, 2 output"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 0 2
+    default 0
+
+config SCENEHUB_NODE_FACTORY_IO8_GPIO
+    int "Factory universal IO 8 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_IO8_ROLE
+    int "Factory universal IO 8 role: 0 disabled, 1 input, 2 output"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 0 2
+    default 0
+
+config SCENEHUB_NODE_FACTORY_LED1_GPIO
+    int "Factory LED strip 1 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_LED1_PIXELS
+    int "Factory LED strip 1 pixel count"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 1 1024
+    default 30
+
+config SCENEHUB_NODE_FACTORY_LED2_GPIO
+    int "Factory LED strip 2 GPIO"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    default -1
+
+config SCENEHUB_NODE_FACTORY_LED2_PIXELS
+    int "Factory LED strip 2 pixel count"
+    depends on SCENEHUB_NODE_FACTORY_PIN_PROFILE
+    range 1 1024
+    default 30
+
+endmenu

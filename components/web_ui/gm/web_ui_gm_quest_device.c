@@ -6,35 +6,17 @@
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
-#include "esp_log.h"
-#include "esp_timer.h"
+#include "orch_device_view.h"
 #include "orchestrator_registry.h"
 #include "quest_device.h"
 #include "room_scenario.h"
 #include "scenehub_control.h"
+#include "gm/web_ui_gm_quest_device_json.h"
 #include "web_ui_utils.h"
 
 #define GM_QUEST_DEVICE_BODY_MAX_BYTES (160 * 1024)
 #define GM_QUEST_DEVICE_LIST_MAX (QUEST_DEVICE_MAX_DEVICES + 4)
 #define GM_QUEST_DEVICE_ISSUES_MAX 8
-
-static const char *TAG = "web_ui_gm_quest_device";
-
-static int64_t gm_qd_perf_start(void)
-{
-    return esp_timer_get_time();
-}
-
-static void gm_qd_perf_log(const char *label, int64_t start_us, const char *device_id, const char *command_id)
-{
-    int64_t dt_ms = (esp_timer_get_time() - start_us) / 1000;
-    ESP_LOGW(TAG,
-             "PERF %s device=%s command=%s took %lld ms",
-             label ? label : "quest device",
-             device_id ? device_id : "",
-             command_id ? command_id : "",
-             dt_ms);
-}
 
 static void *gm_qd_alloc(size_t size)
 {
@@ -133,15 +115,6 @@ static esp_err_t gm_qd_read_json(httpd_req_t *req,
     return ESP_OK;
 }
 
-static const cJSON *gm_qd_payload_device(const cJSON *root)
-{
-    const cJSON *device = cJSON_GetObjectItemCaseSensitive(root, "device");
-    if (cJSON_IsObject(device)) {
-        return device;
-    }
-    return root;
-}
-
 static esp_err_t gm_qd_send_error(httpd_req_t *req, esp_err_t err)
 {
     return web_ui_send_scenehub_control_error(req, err, NULL, "quest device operation failed");
@@ -206,7 +179,8 @@ static esp_err_t gm_qd_add_backend_issues(cJSON *item, const char *device_id)
     return ESP_OK;
 }
 
-static esp_err_t gm_qd_add_backend_presentation(cJSON *item, const quest_device_t *device)
+static esp_err_t gm_qd_add_backend_presentation(cJSON *item,
+                                                const orch_quest_device_catalog_entry_t *device)
 {
     orch_device_entry_t live = {0};
     cJSON *issues = NULL;
@@ -245,7 +219,7 @@ static esp_err_t gm_qd_add_backend_presentation(cJSON *item, const quest_device_
 esp_err_t gm_quest_devices_handler(httpd_req_t *req)
 {
     bool include_system = gm_qd_query_bool(req, "include_system", true);
-    quest_device_t *devices = NULL;
+    orch_quest_device_catalog_entry_t *devices = NULL;
     size_t count = 0;
     cJSON *root = NULL;
     cJSON *items = NULL;
@@ -255,10 +229,10 @@ esp_err_t gm_quest_devices_handler(httpd_req_t *req)
     if (!devices) {
         return gm_qd_send_error(req, ESP_ERR_NO_MEM);
     }
-    err = orchestrator_registry_list_quest_devices(devices,
-                                                   GM_QUEST_DEVICE_LIST_MAX,
-                                                   &count,
-                                                   include_system);
+    err = orchestrator_registry_list_quest_device_catalog(devices,
+                                                          GM_QUEST_DEVICE_LIST_MAX,
+                                                          &count,
+                                                          include_system);
     if (err != ESP_OK) {
         heap_caps_free(devices);
         return gm_qd_send_error(req, err);
@@ -283,7 +257,7 @@ esp_err_t gm_quest_devices_handler(httpd_req_t *req)
             heap_caps_free(devices);
             return gm_qd_send_error(req, ESP_ERR_NO_MEM);
         }
-        err = quest_device_to_json(&devices[i], item);
+        err = gm_quest_device_catalog_entry_to_json(&devices[i], item);
         if (err != ESP_OK) {
             cJSON_Delete(item);
             cJSON_Delete(root);
@@ -311,31 +285,20 @@ esp_err_t gm_quest_device_save_handler(httpd_req_t *req)
 {
     cJSON *root = NULL;
     cJSON *device_json = NULL;
-    quest_device_t device = {0};
     esp_err_t err = gm_qd_read_json(req, 8192, &root);
     if (err != ESP_OK) {
         return gm_qd_send_error(req, err);
     }
     scenehub_control_result_t result = {0};
-    err = quest_device_from_json(gm_qd_payload_device(root), &device);
-    if (err == ESP_OK) {
-        err = scenehub_control_save_device("http", &device, &result);
-    }
+    err = scenehub_control_save_device_payload("http", root, &device_json, &result);
     if (!web_ui_scenehub_control_is_done(err, &result)) {
         cJSON_Delete(root);
+        cJSON_Delete(device_json);
         return gm_qd_send_control_error(req, err, &result);
     }
-    device_json = cJSON_CreateObject();
     if (!device_json) {
         cJSON_Delete(root);
-        cJSON_Delete(device_json);
         return gm_qd_send_error(req, ESP_ERR_NO_MEM);
-    }
-    err = quest_device_to_json(&device, device_json);
-    if (err != ESP_OK) {
-        cJSON_Delete(root);
-        cJSON_Delete(device_json);
-        return gm_qd_send_error(req, err);
     }
     cJSON_Delete(root);
     return web_ui_send_generation_item_json(req,
@@ -411,9 +374,10 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
     const cJSON *command_id_item = NULL;
     const char *device_id = NULL;
     const char *command_id = NULL;
+    char device_id_buf[QUEST_DEVICE_ID_MAX_LEN] = {0};
+    char command_id_buf[QUEST_DEVICE_COMMAND_ID_MAX_LEN] = {0};
     char params_json[ROOM_SCENARIO_COMMAND_PARAMS_JSON_MAX_LEN] = {0};
     scenehub_control_device_command_info_t info = {0};
-    int64_t t0 = gm_qd_perf_start();
     scenehub_control_result_t result = {0};
     esp_err_t err = gm_qd_read_json(req, 2048, &root);
     if (err != ESP_OK) {
@@ -427,14 +391,16 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
         cJSON_Delete(root);
         return gm_qd_send_error(req, ESP_ERR_INVALID_ARG);
     }
+    snprintf(device_id_buf, sizeof(device_id_buf), "%s", device_id);
+    snprintf(command_id_buf, sizeof(command_id_buf), "%s", command_id);
     err = gm_qd_params_to_json_string(root, params_json, sizeof(params_json));
     if (err != ESP_OK) {
         cJSON_Delete(root);
         return gm_qd_send_error(req, err);
     }
     err = scenehub_control_device_command_run("http",
-                                              device_id,
-                                              command_id,
+                                              device_id_buf,
+                                              command_id_buf,
                                               params_json,
                                               &info,
                                               &result);
@@ -443,12 +409,11 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
         return gm_qd_send_control_error(req, err, &result);
     }
 
-    gm_qd_perf_log("POST device command", t0, device_id, command_id);
     cJSON_Delete(root);
     return web_ui_send_device_command_result_json(req,
-                                                  device_id,
+                                                  device_id_buf,
                                                   info.device_name,
-                                                  command_id,
+                                                  command_id_buf,
                                                   info.command_label);
 }
 

@@ -22,6 +22,7 @@ typedef struct {
     char status_state[DEVICE_CONTROL_INGEST_STATE_MAX_LEN];
     char status_health[DEVICE_CONTROL_INGEST_HEALTH_MAX_LEN];
     bool status_runtime_active;
+    bool control_is_event;
     bool has_result;
     char result_request_id[DEVICE_CONTROL_INGEST_REQUEST_ID_MAX_LEN];
     char result_command[DEVICE_CONTROL_INGEST_COMMAND_MAX_LEN];
@@ -42,6 +43,7 @@ dci_slot_t *dci_find_slot_locked(const char *device_id);
 dci_slot_t *dci_alloc_slot_locked(const char *device_id);
 
 void dci_capture_event_snapshot(const device_control_ingest_device_t *state,
+                                bool control_is_event,
                                 dci_event_snapshot_t *out);
 void dci_post_status_event(const dci_event_snapshot_t *state);
 void dci_post_runtime_event(const dci_event_snapshot_t *state);

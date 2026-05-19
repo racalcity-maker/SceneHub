@@ -9,11 +9,13 @@
   "defaults": {
     "heartbeat_interval_ms": 2000,
     "status_interval_ms": 5000,
-    "diag_interval_ms": 0
+    "diag_interval_ms": 0,
+    "result_qos": 0
   },
   "devices": [
     {
       "device_id": "uid_gate_1",
+      "node_id": "uid_gate_1",
       "client_id": "dcc-uid-gate-1",
       "profile": "sensor_beam",
       "fw_version": "1.0.3",
@@ -24,14 +26,33 @@
       "simulate_degraded": false,
       "fake_reboot_ms": 3500,
       "device_description": {
-        "version": 1,
-        "commands": [
+        "manifest_version": 2,
+        "format": "compact_resources",
+        "node_kind": "virtual_uid_gate",
+        "capability_contract": "scenehub.node.compact.v1",
+        "compatibility": { "flat_commands": false },
+        "device": {
+          "id": "uid_gate_1",
+          "name": "UID Gate 1",
+          "kind": "virtual_uid_gate",
+          "fw_version": "1.0.3"
+        },
+        "resources": {
+          "relays": [],
+          "mosfets": [],
+          "inputs": [
+            { "channel": 1, "label": "UID reader", "event": "uid.sequence_valid" }
+          ],
+          "outputs": [],
+          "led_strips": []
+        },
+        "command_templates": [
           {
-            "id": "reset_order",
+            "id": "uid.reset_order",
             "label": "Reset UID order",
-            "capability": "uid",
+            "target": "inputs",
             "command": "uid.reset_order",
-            "default_args": {},
+            "args_schema_ref": "empty",
             "policy": {
               "manual_allowed": true,
               "scenario_allowed": true,
@@ -39,15 +60,16 @@
               "result_required": true,
               "timeout_ms": 3000,
               "danger_level": "normal"
-            },
-            "args_schema": []
+            }
           },
           {
-            "id": "force_success",
+            "id": "uid.force_success",
             "label": "Force success",
-            "capability": "uid",
+            "target": "inputs",
             "command": "uid.force_success",
-            "default_args": {},
+            "args_schema_ref": "empty",
+            "emit_event_id": "uid.sequence_valid",
+            "emit_delay_ms": 250,
             "policy": {
               "manual_allowed": true,
               "scenario_allowed": true,
@@ -55,17 +77,16 @@
               "result_required": true,
               "timeout_ms": 3000,
               "danger_level": "normal"
-            },
-            "args_schema": [],
-            "emit_event_id": "sequence_valid",
-            "emit_delay_ms": 250
+            }
           },
           {
-            "id": "force_fail",
+            "id": "uid.force_fail",
             "label": "Force fail",
-            "capability": "uid",
+            "target": "inputs",
             "command": "uid.force_fail",
-            "default_args": {},
+            "args_schema_ref": "empty",
+            "emit_event_id": "uid.sequence_invalid",
+            "emit_delay_ms": 250,
             "policy": {
               "manual_allowed": true,
               "scenario_allowed": true,
@@ -73,32 +94,33 @@
               "result_required": true,
               "timeout_ms": 3000,
               "danger_level": "normal"
-            },
-            "args_schema": [],
-            "emit_event_id": "sequence_invalid",
-            "emit_delay_ms": 250
+            }
           }
         ],
-        "events": [
+        "event_templates": [
           {
-            "id": "sequence_valid",
+            "id": "uid.sequence_valid",
             "label": "UID sequence valid",
-            "capability": "uid",
+            "source": "inputs",
             "event": "uid.sequence_valid",
-            "match": {}
+            "args_schema_ref": "empty"
           },
           {
-            "id": "sequence_invalid",
+            "id": "uid.sequence_invalid",
             "label": "UID sequence invalid",
-            "capability": "uid",
+            "source": "inputs",
             "event": "uid.sequence_invalid",
-            "match": {}
+            "args_schema_ref": "empty"
           }
-        ]
+        ],
+        "schemas": {
+          "empty": []
+        }
       }
     },
     {
       "device_id": "relay_room_2",
+      "node_id": "relay_room_2",
       "client_id": "dcc-relay-room-2",
       "profile": "relay_node",
       "fw_version": "1.0.3",
@@ -112,65 +134,67 @@
       "diag_interval_ms": 15000,
       "fake_reboot_ms": 4500,
       "device_description": {
-        "version": 1,
-        "commands": [
+        "manifest_version": 2,
+        "format": "compact_resources",
+        "node_kind": "virtual_relay_node",
+        "capability_contract": "scenehub.node.compact.v1",
+        "compatibility": { "flat_commands": false },
+        "device": {
+          "id": "relay_room_2",
+          "name": "Relay Room 2",
+          "kind": "virtual_relay_node",
+          "fw_version": "1.0.3"
+        },
+        "resources": {
+          "relays": [
+            { "channel": 1, "label": "Room 2 door" },
+            { "channel": 2, "label": "Drawer 1" },
+            { "channel": 3, "label": "Drawer 2" },
+            { "channel": 4, "label": "TV power" }
+          ],
+          "mosfets": [],
+          "inputs": [
+            { "channel": 1, "label": "Door sensor", "event": "input.changed" },
+            { "channel": 2, "label": "Drawer 1 sensor", "event": "input.changed" },
+            { "channel": 3, "label": "Drawer 2 sensor", "event": "input.changed" },
+            { "channel": 4, "label": "TV sensor", "event": "input.changed" }
+          ],
+          "outputs": [],
+          "led_strips": []
+        },
+        "command_templates": [
           {
-            "id": "open_door",
-            "label": "Open room 2 door",
-            "capability": "relay",
-            "command": "relay.pulse",
-            "default_args": {
-              "channel": 1,
-              "duration_ms": 1000
-            },
-            "policy": {
-              "manual_allowed": true,
-              "scenario_allowed": true,
-              "requires_confirmation": true,
-              "result_required": true,
-              "timeout_ms": 3000,
-              "danger_level": "warning"
-            },
-            "args_schema": [
-              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
-              { "key": "duration_ms", "label": "Duration ms", "type": "number", "optional": true }
-            ],
-            "emit_event_id": "door_opened",
-            "emit_delay_ms": 300
-          },
-          {
-            "id": "close_door",
-            "label": "Close room 2 door",
-            "capability": "relay",
+            "id": "relay.set",
+            "label": "Relay set",
+            "target": "relays",
             "command": "relay.set",
-            "default_args": {
-              "channel": 1,
-              "on": false
+            "args_schema_ref": "output_set",
+            "emit_event_id_by_channel": {
+              "1": "door_closed",
+              "4": "tv_started"
             },
+            "emit_delay_ms": 300,
             "policy": {
               "manual_allowed": true,
               "scenario_allowed": true,
-              "requires_confirmation": true,
+              "requires_confirmation": false,
               "result_required": true,
               "timeout_ms": 3000,
-              "danger_level": "warning"
-            },
-            "args_schema": [
-              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
-              { "key": "on", "label": "On", "type": "checkbox", "optional": false }
-            ],
-            "emit_event_id": "door_closed",
-            "emit_delay_ms": 300
+              "danger_level": "normal"
+            }
           },
           {
-            "id": "open_drawer_1",
-            "label": "Open drawer 1",
-            "capability": "relay",
+            "id": "relay.pulse",
+            "label": "Relay pulse",
+            "target": "relays",
             "command": "relay.pulse",
-            "default_args": {
-              "channel": 2,
-              "duration_ms": 1000
+            "args_schema_ref": "pulse",
+            "emit_event_id_by_channel": {
+              "1": "door_opened",
+              "2": "drawer_1_opened",
+              "3": "drawer_2_opened"
             },
+            "emit_delay_ms": 300,
             "policy": {
               "manual_allowed": true,
               "scenario_allowed": true,
@@ -178,23 +202,14 @@
               "result_required": true,
               "timeout_ms": 3000,
               "danger_level": "normal"
-            },
-            "args_schema": [
-              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
-              { "key": "duration_ms", "label": "Duration ms", "type": "number", "optional": true }
-            ],
-            "emit_event_id": "drawer_1_opened",
-            "emit_delay_ms": 300
+            }
           },
           {
-            "id": "open_drawer_2",
-            "label": "Open drawer 2",
-            "capability": "relay",
-            "command": "relay.pulse",
-            "default_args": {
-              "channel": 3,
-              "duration_ms": 1000
-            },
+            "id": "relay.blink",
+            "label": "Relay blink",
+            "target": "relays",
+            "command": "relay.blink",
+            "args_schema_ref": "blink",
             "policy": {
               "manual_allowed": true,
               "scenario_allowed": true,
@@ -202,23 +217,14 @@
               "result_required": true,
               "timeout_ms": 3000,
               "danger_level": "normal"
-            },
-            "args_schema": [
-              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
-              { "key": "duration_ms", "label": "Duration ms", "type": "number", "optional": true }
-            ],
-            "emit_event_id": "drawer_2_opened",
-            "emit_delay_ms": 300
+            }
           },
           {
-            "id": "tv_on",
-            "label": "Turn TV on",
-            "capability": "relay",
-            "command": "relay.set",
-            "default_args": {
-              "channel": 4,
-              "on": true
-            },
+            "id": "relay.toggle",
+            "label": "Relay toggle",
+            "target": "relays",
+            "command": "relay.toggle",
+            "args_schema_ref": "channel",
             "policy": {
               "manual_allowed": true,
               "scenario_allowed": true,
@@ -226,52 +232,74 @@
               "result_required": true,
               "timeout_ms": 3000,
               "danger_level": "normal"
-            },
-            "args_schema": [
-              { "key": "channel", "label": "Channel", "type": "number", "optional": false },
-              { "key": "on", "label": "On", "type": "checkbox", "optional": false }
-            ],
-            "emit_event_id": "tv_started",
-            "emit_delay_ms": 500
+            }
           }
         ],
-        "events": [
+        "event_templates": [
           {
             "id": "door_opened",
             "label": "Door opened",
-            "capability": "input",
+            "source": "inputs",
             "event": "input.pressed",
+            "args_schema_ref": "input_event",
             "match": { "channel": 1 }
           },
           {
             "id": "door_closed",
             "label": "Door closed",
-            "capability": "input",
+            "source": "inputs",
             "event": "input.released",
+            "args_schema_ref": "input_event",
             "match": { "channel": 1 }
           },
           {
             "id": "drawer_1_opened",
             "label": "Drawer 1 opened",
-            "capability": "input",
+            "source": "inputs",
             "event": "input.pressed",
+            "args_schema_ref": "input_event",
             "match": { "channel": 2 }
           },
           {
             "id": "drawer_2_opened",
             "label": "Drawer 2 opened",
-            "capability": "input",
+            "source": "inputs",
             "event": "input.pressed",
+            "args_schema_ref": "input_event",
             "match": { "channel": 3 }
           },
           {
             "id": "tv_started",
             "label": "TV started",
-            "capability": "input",
+            "source": "inputs",
             "event": "input.pressed",
+            "args_schema_ref": "input_event",
             "match": { "channel": 4 }
           }
-        ]
+        ],
+        "schemas": {
+          "output_set": [
+            { "key": "channel", "label": "Channel", "type": "resource_channel", "optional": false },
+            { "key": "on", "label": "On", "type": "checkbox", "optional": false }
+          ],
+          "pulse": [
+            { "key": "channel", "label": "Channel", "type": "resource_channel", "optional": false },
+            { "key": "duration_ms", "label": "Duration ms", "type": "number", "optional": false }
+          ],
+          "blink": [
+            { "key": "channel", "label": "Channel", "type": "resource_channel", "optional": false },
+            { "key": "on_ms", "label": "On ms", "type": "number", "optional": false },
+            { "key": "off_ms", "label": "Off ms", "type": "number", "optional": false },
+            { "key": "count", "label": "Count", "type": "number", "optional": false }
+          ],
+          "channel": [
+            { "key": "channel", "label": "Channel", "type": "resource_channel", "optional": false }
+          ],
+          "input_event": [
+            { "key": "channel", "label": "Channel", "type": "resource_channel", "optional": false },
+            { "key": "value", "label": "Value", "type": "number", "optional": true }
+          ]
+        }
       }
     }
   ]

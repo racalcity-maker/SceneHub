@@ -1,5 +1,6 @@
 #include "mqtt_core_internal.h"
 
+#include <stdio.h>
 #include <string.h>
 
 typedef struct {
@@ -14,10 +15,14 @@ static const acl_entry_t k_acl[] = {
     {"relay",  "relay/",  "relay/"},
     {"puppet", "puppet/", "puppet/"},
     {"webui",  "web/",    "web/"},
-    {"*",      "*",       "*"},
 };
 
-static bool prefix_match(const char *prefix, const char *topic)
+static bool client_id_exact_match(const char *expected, const char *client_id)
+{
+    return expected && client_id && strcmp(expected, client_id) == 0;
+}
+
+static bool topic_prefix_match(const char *prefix, const char *topic)
 {
     if (!prefix || !topic) {
         return false;
@@ -29,23 +34,126 @@ static bool prefix_match(const char *prefix, const char *topic)
     return strncmp(topic, prefix, len) == 0;
 }
 
-bool acl_can_publish(const char *client_id, const char *topic)
+static bool valid_client_id(const char *client_id)
+{
+    return client_id && client_id[0];
+}
+
+static bool extract_contract_device_id(const char *topic,
+                                       char *out_device_id,
+                                       size_t out_device_id_size)
+{
+    const char *prefix = "cp/v1/dev/";
+    const char *segment = NULL;
+    const char *tail = NULL;
+    size_t len = 0;
+
+    if (!topic || !out_device_id || out_device_id_size == 0) {
+        return false;
+    }
+    out_device_id[0] = '\0';
+    if (strncmp(topic, prefix, strlen(prefix)) != 0) {
+        return false;
+    }
+    segment = topic + strlen(prefix);
+    tail = strchr(segment, '/');
+    if (!tail) {
+        return false;
+    }
+    len = (size_t)(tail - segment);
+    if (len == 0 || len >= out_device_id_size) {
+        return false;
+    }
+    memcpy(out_device_id, segment, len);
+    out_device_id[len] = '\0';
+    return true;
+}
+
+static bool client_id_maps_to_contract_device_id(const char *client_id, const char *device_id)
+{
+    const char *dcc_prefix = "dcc-";
+    char normalized[MQTT_MAX_TOPIC] = {0};
+    size_t out = 0;
+
+    if (!valid_client_id(client_id) || !device_id || !device_id[0]) {
+        return false;
+    }
+    if (strcmp(client_id, device_id) == 0) {
+        return true;
+    }
+    if (strncmp(client_id, dcc_prefix, strlen(dcc_prefix)) != 0) {
+        return false;
+    }
+
+    client_id += strlen(dcc_prefix);
+    while (*client_id && out + 1 < sizeof(normalized)) {
+        normalized[out++] = (*client_id == '-') ? '_' : *client_id;
+        client_id++;
+    }
+    normalized[out] = '\0';
+    return normalized[0] && strcmp(normalized, device_id) == 0;
+}
+
+static const acl_entry_t *find_static_acl_entry(const char *client_id)
 {
     for (size_t i = 0; i < sizeof(k_acl) / sizeof(k_acl[0]); ++i) {
-        if (prefix_match(k_acl[i].client_id, client_id)) {
-            return prefix_match(k_acl[i].pub_prefix, topic);
+        if (client_id_exact_match(k_acl[i].client_id, client_id)) {
+            return &k_acl[i];
         }
     }
+    return NULL;
+}
+
+static bool acl_can_access_self_contract(const char *client_id, const char *topic)
+{
+    char device_id[MQTT_MAX_TOPIC] = {0};
+
+    if (!valid_client_id(client_id) || !topic) {
+        return false;
+    }
+    if (!extract_contract_device_id(topic, device_id, sizeof(device_id))) {
+        return false;
+    }
+    return client_id_maps_to_contract_device_id(client_id, device_id);
+}
+
+static bool acl_can_subscribe_broadcast_contract(const char *topic)
+{
+    return topic && strcmp(topic, "cp/v1/dev/all/control/command") == 0;
+}
+
+bool acl_can_publish(const char *client_id, const char *topic)
+{
+    const acl_entry_t *entry = NULL;
+
+    if (acl_can_access_self_contract(client_id, topic)) {
+        return true;
+    }
+
+    entry = find_static_acl_entry(client_id);
+    if (entry) {
+        return topic_prefix_match(entry->pub_prefix, topic);
+    }
+
     return false;
 }
 
 bool acl_can_subscribe(const char *client_id, const char *topic)
 {
-    for (size_t i = 0; i < sizeof(k_acl) / sizeof(k_acl[0]); ++i) {
-        if (prefix_match(k_acl[i].client_id, client_id)) {
-            return prefix_match(k_acl[i].sub_prefix, topic);
-        }
+    const acl_entry_t *entry = NULL;
+
+    if (acl_can_access_self_contract(client_id, topic)) {
+        return true;
     }
+    if (acl_can_subscribe_broadcast_contract(topic)) {
+        return valid_client_id(client_id);
+    }
+
+    entry = find_static_acl_entry(client_id);
+    if (entry) {
+        return topic_prefix_match(entry->sub_prefix, topic);
+    }
+
     return false;
 }
 

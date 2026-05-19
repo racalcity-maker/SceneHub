@@ -14,6 +14,7 @@
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
+#include "scenehub_device_command_resolver.h"
 
 static const char *TAG = "gm_api";
 
@@ -798,12 +799,18 @@ esp_err_t gm_api_device_command_run(const char *device_id,
                                     const char *command_id,
                                     const char *params_json)
 {
-    quest_device_command_t command = {0};
-    esp_err_t err = quest_device_get_command(device_id, command_id, &command);
+    scenehub_resolved_device_command_t resolved = {0};
+    esp_err_t err = scenehub_device_command_resolve(device_id,
+                                                    command_id,
+                                                    params_json,
+                                                    true,
+                                                    &resolved,
+                                                    NULL,
+                                                    0);
     if (err != ESP_OK) {
         return err;
     }
-    if (!command.manual_allowed) {
+    if (!resolved.command.manual_allowed) {
         return ESP_ERR_INVALID_STATE;
     }
     return gm_room_session_execute_device_command(device_id, command_id, params_json);

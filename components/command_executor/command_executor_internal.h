@@ -13,6 +13,7 @@ esp_err_t command_executor_fail(char *error,
                                 esp_err_t err,
                                 const char *message);
 uint64_t command_executor_now_ms(void);
+esp_err_t command_executor_make_request_id(char *out, size_t out_size, uint64_t now_ms);
 
 esp_err_t command_executor_params_get_string(const char *params_json,
                                              const char *key,

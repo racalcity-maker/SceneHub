@@ -206,6 +206,7 @@ esp_err_t gm_room_session_game_start(const char *room_id, uint64_t now_ms)
     gm_game_profile_t profile = {0};
     room_scenario_t *scenario = &s_game_scenario;
     room_scenario_validation_report_t *report = &s_game_report;
+    gm_room_session_t *session = NULL;
     char profile_id[GM_GAME_PROFILE_ID_MAX_LEN] = {0};
     uint32_t duration_ms = 0;
     esp_err_t err = ESP_OK;
@@ -242,6 +243,15 @@ esp_err_t gm_room_session_game_start(const char *room_id, uint64_t now_ms)
     }
     err = scenehub_scenario_validate(scenario, report);
     if (err != ESP_OK || !report->valid) {
+        esp_err_t lock_err = gm_room_session_sessions_lock();
+        if (lock_err == ESP_OK) {
+            session = find_session_mutable_locked(room_id);
+            if (session) {
+                scenario_clear_running_snapshot_locked(session);
+                scenario_set_error_locked(session, scenario_validation_error_message(report));
+            }
+            gm_room_session_sessions_unlock();
+        }
         err = err != ESP_OK ? err : ESP_ERR_INVALID_ARG;
         goto cleanup;
     }

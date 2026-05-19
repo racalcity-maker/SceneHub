@@ -3,11 +3,16 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "device_control_ingest.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 #include "mqtt_core.h"
 #include "quest_common_utils.h"
 
 #define COMMAND_EXECUTOR_MQTT_PAYLOAD_MAX_LEN 512
+
+static uint32_t s_request_seq = 0;
+static portMUX_TYPE s_request_seq_lock = portMUX_INITIALIZER_UNLOCKED;
 
 typedef struct {
     char *buf;
@@ -156,6 +161,32 @@ static esp_err_t json_next_pair(const char **cursor, mqtt_json_pair_t *out)
         return ESP_OK;
     }
     return ESP_ERR_INVALID_ARG;
+}
+
+esp_err_t command_executor_make_request_id(char *out, size_t out_size, uint64_t now_ms)
+{
+    uint32_t seq = 0;
+    int written = 0;
+
+    if (!out || out_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    portENTER_CRITICAL(&s_request_seq_lock);
+    seq = s_request_seq++;
+    portEXIT_CRITICAL(&s_request_seq_lock);
+
+    written = snprintf(out,
+                       out_size,
+                       "req-%08llx-%08lx",
+                       (unsigned long long)now_ms,
+                       (unsigned long)seq);
+    if (written <= 0 || (size_t)written >= out_size) {
+        out[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
 }
 
 static bool json_object_has_key(const char *json, const char *key, size_t key_len)
@@ -327,6 +358,7 @@ esp_err_t command_executor_execute_mqtt(const char *client_id,
     char topic[96] = {0};
     char request_id[COMMAND_EXECUTOR_REQUEST_ID_MAX_LEN] = {0};
     char mqtt_payload[COMMAND_EXECUTOR_MQTT_PAYLOAD_MAX_LEN] = {0};
+    bool device_online = false;
     esp_err_t err = ESP_OK;
     int64_t now_ms = esp_timer_get_time() / 1000;
 
@@ -339,7 +371,18 @@ esp_err_t command_executor_execute_mqtt(const char *client_id,
                                      ESP_ERR_INVALID_SIZE,
                                      "device_command_topic_too_long");
     }
-    snprintf(request_id, sizeof(request_id), "req-%08llx", (unsigned long long)now_ms);
+    if (device_control_ingest_get_presence(client_id,
+                                           (uint64_t)now_ms,
+                                           DEVICE_CONTROL_INGEST_DEFAULT_ONLINE_TIMEOUT_MS,
+                                           NULL,
+                                           &device_online) == ESP_OK &&
+        !device_online) {
+        return command_executor_fail(error, error_size, ESP_ERR_INVALID_STATE, "device_offline");
+    }
+    err = command_executor_make_request_id(request_id, sizeof(request_id), (uint64_t)now_ms);
+    if (err != ESP_OK) {
+        return command_executor_fail(error, error_size, err, "device_command_request_id_failed");
+    }
 
     err = build_command_payload(mqtt_payload,
                                 sizeof(mqtt_payload),
@@ -349,12 +392,9 @@ esp_err_t command_executor_execute_mqtt(const char *client_id,
                                 request->params_json,
                                 now_ms);
     if (err != ESP_OK) {
-        return command_executor_fail(error, error_size, err, "device_command_args_invalid");
+        return command_executor_fail(error, error_size, err, "device_command_payload_too_large");
     }
-    err = mqtt_core_publish(topic, mqtt_payload);
-    if (err != ESP_OK) {
-        return command_executor_fail(error, error_size, err, "device_command_publish_failed");
-    }
+
     if (command->result_required) {
         err = command_executor_track_pending(request_id,
                                              client_id,
@@ -365,6 +405,15 @@ esp_err_t command_executor_execute_mqtt(const char *client_id,
             return command_executor_fail(error, error_size, err, "device_command_result_track_failed");
         }
     }
+
+    err = mqtt_core_publish(topic, mqtt_payload);
+    if (err != ESP_OK) {
+        if (command->result_required) {
+            command_executor_clear_pending(request_id);
+        }
+        return command_executor_fail(error, error_size, err, "device_command_publish_failed");
+    }
+
     if (out_dispatch) {
         memset(out_dispatch, 0, sizeof(*out_dispatch));
         out_dispatch->result_required = command->result_required;

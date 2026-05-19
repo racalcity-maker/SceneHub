@@ -40,30 +40,32 @@ export function useRoomCommands(roomId?: string, runtime?: GmRoomRuntime) {
     message: "",
   });
 
-  async function invalidateRoomData(scopes: RoomInvalidationScope[]) {
+  function invalidateRoomData(scopes: RoomInvalidationScope[]) {
     const baseUrl = activeController?.baseUrl ?? "none";
-    await Promise.all(
-      scopes.map((scope) => {
-        switch (scope) {
-          case "runtime":
-            return queryClient.invalidateQueries({
-              queryKey: ["controller", baseUrl, "gm", "room-runtime", roomId ?? "none"],
-            });
-          case "profiles":
-            return queryClient.invalidateQueries({
-              queryKey: ["controller", baseUrl, "gm", "room-profiles", roomId ?? "none"],
-            });
-          case "scenarios":
-            return queryClient.invalidateQueries({
-              queryKey: ["controller", baseUrl, "gm", "room-scenarios", roomId ?? "none"],
-            });
-          case "state":
-            return queryClient.invalidateQueries({
-              queryKey: ["controller", baseUrl, "gm", "state"],
-            });
-        }
-      }),
-    );
+    scopes.forEach((scope) => {
+      switch (scope) {
+        case "runtime":
+          queryClient.invalidateQueries({
+            queryKey: ["controller", baseUrl, "gm", "room-runtime", roomId ?? "none"],
+          });
+          return;
+        case "profiles":
+          queryClient.invalidateQueries({
+            queryKey: ["controller", baseUrl, "gm", "room-profiles", roomId ?? "none"],
+          });
+          return;
+        case "scenarios":
+          queryClient.invalidateQueries({
+            queryKey: ["controller", baseUrl, "gm", "room-scenarios", roomId ?? "none"],
+          });
+          return;
+        case "state":
+          queryClient.invalidateQueries({
+            queryKey: ["controller", baseUrl, "gm", "state"],
+          });
+          return;
+      }
+    });
   }
 
   const commandMutation = useMutation({
@@ -95,12 +97,12 @@ export function useRoomCommands(roomId?: string, runtime?: GmRoomRuntime) {
         message: `Sending command: ${successMessage}...`,
       });
     },
-    onSuccess: async ({ successMessage, invalidateScopes }) => {
+    onSuccess: ({ successMessage, invalidateScopes }) => {
       setCommandFeedback({
         status: "success",
         message: successMessage,
       });
-      await invalidateRoomData(invalidateScopes);
+      invalidateRoomData(invalidateScopes);
     },
     onError: (error) => {
       setCommandFeedback({

@@ -11,6 +11,15 @@ static const char *web_ui_scenehub_control_status_text(esp_err_t err,
         if (strcmp(result->error_code, "invalid_request") == 0) {
             return "400 Bad Request";
         }
+        if (strcmp(result->error_code, "invalid_device_manifest") == 0 ||
+            strcmp(result->error_code, "invalid_device_manifest_identity") == 0 ||
+            strcmp(result->error_code, "invalid_device_manifest_shape") == 0 ||
+            strcmp(result->error_code, "invalid_device_manifest_gpio") == 0) {
+            return "400 Bad Request";
+        }
+        if (strcmp(result->error_code, "scenario_invalid") == 0) {
+            return "409 Conflict";
+        }
         if (strcmp(result->error_code, "room_not_found") == 0 ||
             strcmp(result->error_code, "action_not_found") == 0 ||
             strcmp(result->error_code, "profile_not_found") == 0 ||
@@ -20,7 +29,8 @@ static const char *web_ui_scenehub_control_status_text(esp_err_t err,
             return "404 Not Found";
         }
         if (strcmp(result->error_code, "action_disabled") == 0 ||
-            strcmp(result->error_code, "invalid_state") == 0) {
+            strcmp(result->error_code, "invalid_state") == 0 ||
+            strcmp(result->error_code, "room_unhealthy") == 0) {
             return "409 Conflict";
         }
         if (strcmp(result->error_code, "not_supported") == 0) {
@@ -135,6 +145,7 @@ esp_err_t web_ui_send_scenehub_control_error_json(httpd_req_t *req,
     const char *status_text = web_ui_scenehub_control_status_text(err, status, result);
     const char *error_code =
         web_ui_scenehub_control_error_code(err, result, fallback_error_code);
+    const char *message = web_ui_scenehub_control_message(err, result, NULL);
     cJSON *root = cJSON_CreateObject();
 
     if (!root) {
@@ -142,6 +153,7 @@ esp_err_t web_ui_send_scenehub_control_error_json(httpd_req_t *req,
     }
     cJSON_AddBoolToObject(root, "ok", false);
     cJSON_AddStringToObject(root, "error", error_code);
+    cJSON_AddStringToObject(root, "message", message ? message : "");
     cJSON_AddStringToObject(root, "room_id", room_id ? room_id : "");
     cJSON_AddStringToObject(root, "action_id", action_id ? action_id : "");
     web_ui_http_resp_set_status(req, status_text);

@@ -26,13 +26,20 @@ static uint32_t s_generation = 0;
 /* Coalesce repeated per-session invalidations within one sessions-lock transaction. */
 static uint32_t s_sessions_lock_epoch = 0;
 static char s_last_changed_room_id[QUEST_ROOM_ID_MAX_LEN] = {0};
+static gm_room_session_event_queue_stats_t s_event_queue_stats = {0};
 static SemaphoreHandle_t s_sessions_mutex = NULL;
 static StaticSemaphore_t s_sessions_mutex_storage;
 static portMUX_TYPE s_sessions_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_event_queue_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 QueueHandle_t s_event_queue = NULL;
 QueueHandle_t s_runtime_queue = NULL;
 static TaskHandle_t s_event_task = NULL;
 static TaskHandle_t s_runtime_task = NULL;
+static StaticTask_t s_event_task_tcb;
+static StaticTask_t s_runtime_task_tcb;
+EXT_RAM_BSS_ATTR static StackType_t s_event_task_stack[GM_ROOM_SESSION_EVENT_TASK_STACK];
+EXT_RAM_BSS_ATTR static StackType_t s_runtime_task_stack[GM_ROOM_SESSION_RUNTIME_TASK_STACK];
+static bool s_async_workers_enabled = true;
 
 #define GM_ROOM_SESSION_DEFERRED_CANCEL_MAX (ROOM_SCENARIO_MAX_BRANCHES + 1)
 
@@ -55,6 +62,9 @@ void gm_room_session_runtime_wake(void)
     gm_room_runtime_cause_t cause = {
         .kind = GM_ROOM_RUNTIME_CAUSE_WAKE,
     };
+    if (!s_async_workers_enabled) {
+        return;
+    }
     if (!s_runtime_queue) {
         return;
     }
@@ -63,9 +73,35 @@ void gm_room_session_runtime_wake(void)
 
 esp_err_t gm_room_session_runtime_post_event(const scenehub_event_t *message)
 {
+    return gm_room_session_runtime_post_event_with_wait(message,
+                                                        GM_ROOM_SESSION_RUNTIME_QUEUE_WAIT_TICKS);
+}
+
+void gm_room_session_record_event_drop(bool critical, bool runtime_queue)
+{
+    portENTER_CRITICAL(&s_event_queue_stats_lock);
+    if (critical) {
+        s_event_queue_stats.dropped_critical_events++;
+    } else {
+        s_event_queue_stats.dropped_noncritical_events++;
+    }
+    if (runtime_queue) {
+        s_event_queue_stats.dropped_runtime_queue_events++;
+    } else {
+        s_event_queue_stats.dropped_event_queue_events++;
+    }
+    portEXIT_CRITICAL(&s_event_queue_stats_lock);
+}
+
+esp_err_t gm_room_session_runtime_post_event_with_wait(const scenehub_event_t *message,
+                                                       TickType_t wait_ticks)
+{
     gm_room_runtime_cause_t cause = {0};
     if (!message) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_async_workers_enabled) {
+        return ESP_ERR_INVALID_STATE;
     }
     if (!s_runtime_queue) {
         return ESP_ERR_INVALID_STATE;
@@ -73,7 +109,7 @@ esp_err_t gm_room_session_runtime_post_event(const scenehub_event_t *message)
 
     cause.kind = GM_ROOM_RUNTIME_CAUSE_EVENT;
     cause.event = *message;
-    return xQueueSend(s_runtime_queue, &cause, pdMS_TO_TICKS(5)) == pdTRUE
+    return xQueueSend(s_runtime_queue, &cause, wait_ticks) == pdTRUE
                ? ESP_OK
                : ESP_ERR_TIMEOUT;
 }
@@ -102,6 +138,9 @@ static esp_err_t sessions_ensure_mutex(void)
 
 static esp_err_t gm_room_session_ensure_event_worker(void)
 {
+    if (!s_async_workers_enabled) {
+        return ESP_OK;
+    }
     if (s_event_queue && s_event_task) {
         return ESP_OK;
     }
@@ -117,14 +156,14 @@ static esp_err_t gm_room_session_ensure_event_worker(void)
         }
     }
     if (!s_event_task) {
-        BaseType_t ok = xTaskCreate(gm_room_session_event_task,
-                                    "gm_room_event",
-                                    GM_ROOM_SESSION_EVENT_TASK_STACK,
-                                    NULL,
-                                    7,
-                                    &s_event_task);
-        if (ok != pdPASS) {
-            s_event_task = NULL;
+        s_event_task = xTaskCreateStatic(gm_room_session_event_task,
+                                         "gm_room_event",
+                                         GM_ROOM_SESSION_EVENT_TASK_STACK,
+                                         NULL,
+                                         7,
+                                         s_event_task_stack,
+                                         &s_event_task_tcb);
+        if (!s_event_task) {
             return ESP_ERR_NO_MEM;
         }
     }
@@ -133,6 +172,9 @@ static esp_err_t gm_room_session_ensure_event_worker(void)
 
 static esp_err_t gm_room_session_ensure_runtime_worker(void)
 {
+    if (!s_async_workers_enabled) {
+        return ESP_OK;
+    }
     if (s_runtime_queue && s_runtime_task) {
         return ESP_OK;
     }
@@ -148,14 +190,16 @@ static esp_err_t gm_room_session_ensure_runtime_worker(void)
             return ESP_ERR_NO_MEM;
         }
     }
-    BaseType_t ok = xTaskCreate(gm_room_session_runtime_task,
-                                "gm_room_runtime",
-                                GM_ROOM_SESSION_RUNTIME_TASK_STACK,
-                                NULL,
-                                5,
-                                &s_runtime_task);
-    if (ok != pdPASS) {
-        s_runtime_task = NULL;
+    if (!s_runtime_task) {
+        s_runtime_task = xTaskCreateStatic(gm_room_session_runtime_task,
+                                           "gm_room_runtime",
+                                           GM_ROOM_SESSION_RUNTIME_TASK_STACK,
+                                           NULL,
+                                           5,
+                                           s_runtime_task_stack,
+                                           &s_runtime_task_tcb);
+    }
+    if (!s_runtime_task) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
@@ -217,6 +261,14 @@ void gm_room_session_sessions_unlock(void)
         }
         (void)event_bus_post_priority(&message, EVENT_BUS_PRIORITY_HIGH, 0);
     }
+}
+
+void gm_room_session_set_async_workers_enabled_for_test(bool enabled)
+{
+    if (s_event_task || s_runtime_task) {
+        return;
+    }
+    s_async_workers_enabled = enabled;
 }
 
 void gm_room_session_mark_session_changed_locked(gm_room_session_t *session)
@@ -852,6 +904,17 @@ void gm_room_session_reset_all(void)
     memset(g_gm_room_sessions, 0, sizeof(g_gm_room_sessions));
     s_last_changed_room_id[0] = '\0';
     s_generation++;
+}
+
+esp_err_t gm_room_session_get_event_queue_stats(gm_room_session_event_queue_stats_t *out)
+{
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    portENTER_CRITICAL(&s_event_queue_stats_lock);
+    *out = s_event_queue_stats;
+    portEXIT_CRITICAL(&s_event_queue_stats_lock);
+    return ESP_OK;
 }
 
 uint32_t gm_room_session_generation(void)

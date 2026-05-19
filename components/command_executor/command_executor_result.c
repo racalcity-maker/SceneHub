@@ -22,15 +22,19 @@ EXT_RAM_BSS_ATTR static command_executor_pending_t s_pending[COMMAND_EXECUTOR_MA
 static SemaphoreHandle_t s_pending_lock = NULL;
 static StaticSemaphore_t s_pending_lock_storage;
 
+static portMUX_TYPE s_pending_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
 static esp_err_t ce_pending_lock_init(void)
 {
+    if (s_pending_lock) {
+        return ESP_OK;
+    }
+    portENTER_CRITICAL(&s_pending_init_lock);
     if (!s_pending_lock) {
         s_pending_lock = xSemaphoreCreateMutexStatic(&s_pending_lock_storage);
-        if (!s_pending_lock) {
-            return ESP_ERR_NO_MEM;
-        }
     }
-    return ESP_OK;
+    portEXIT_CRITICAL(&s_pending_init_lock);
+    return s_pending_lock ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 static bool ce_time_reached(uint64_t now_ms, uint64_t deadline_ms)
@@ -58,8 +62,8 @@ esp_err_t command_executor_track_pending(const char *request_id,
     for (size_t i = 0; i < COMMAND_EXECUTOR_MAX_PENDING; ++i) {
         command_executor_pending_t *slot = &s_pending[i];
         if (slot->in_use && strcmp(slot->request_id, request_id) == 0) {
-            free_slot = slot;
-            break;
+            xSemaphoreGive(s_pending_lock);
+            return ESP_ERR_INVALID_STATE;
         }
         if (!slot->in_use && !free_slot) {
             free_slot = slot;
@@ -114,6 +118,9 @@ void command_executor_on_event(const scenehub_event_t *message)
 
 size_t command_executor_poll_timeouts(scenehub_event_t *out_events, size_t max_events)
 {
+    typedef struct { char source_id[QUEST_EVENT_SOURCE_ID_MAX_LEN];
+                     char request_id[COMMAND_EXECUTOR_REQUEST_ID_MAX_LEN]; } expired_t;
+    expired_t expired[COMMAND_EXECUTOR_MAX_PENDING];
     size_t expired_count = 0;
     uint64_t now_ms = command_executor_now_ms();
 
@@ -127,17 +134,27 @@ size_t command_executor_poll_timeouts(scenehub_event_t *out_events, size_t max_e
         if (!s_pending[i].in_use || !ce_time_reached(now_ms, s_pending[i].deadline_ms)) {
             continue;
         }
-        scenehub_event_t *msg = &out_events[expired_count++];
+        quest_str_copy(expired[expired_count].source_id,
+                       sizeof(expired[expired_count].source_id),
+                       s_pending[i].source_id);
+        quest_str_copy(expired[expired_count].request_id,
+                       sizeof(expired[expired_count].request_id),
+                       s_pending[i].request_id);
+        expired_count++;
+        memset(&s_pending[i], 0, sizeof(s_pending[i]));
+    }
+    xSemaphoreGive(s_pending_lock);
+
+    for (size_t i = 0; i < expired_count; ++i) {
+        scenehub_event_t *msg = &out_events[i];
         if (scenehub_event_make_device_control_result(msg,
-                                                      s_pending[i].source_id,
-                                                      s_pending[i].request_id,
+                                                      expired[i].source_id,
+                                                      expired[i].request_id,
                                                       SCENEHUB_COMMAND_RESULT_TIMEOUT,
                                                       now_ms) != ESP_OK) {
             memset(msg, 0, sizeof(*msg));
         }
-        memset(&s_pending[i], 0, sizeof(s_pending[i]));
     }
-    xSemaphoreGive(s_pending_lock);
     return expired_count;
 }
 

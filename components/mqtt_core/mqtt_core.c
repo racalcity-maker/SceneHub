@@ -38,6 +38,11 @@ StackType_t *s_accept_stack = NULL;
 StaticTask_t *s_accept_tcb = NULL;
 esp_timer_handle_t s_sweep_timer = NULL;
 bool s_event_handler_registered = false;
+static uint16_t s_next_packet_id = 0;
+static portMUX_TYPE s_packet_id_lock = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_inject_scratch_lock = NULL;
+static portMUX_TYPE s_inject_scratch_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static EXT_RAM_BSS_ATTR mqtt_session_t s_session_storage[MQTT_MAX_CLIENTS];
 static EXT_RAM_BSS_ATTR retain_entry_t s_retain_storage[MQTT_RETAIN_MAX];
@@ -48,6 +53,8 @@ static EXT_RAM_BSS_ATTR uint8_t s_session_tx_storage[MQTT_MAX_CLIENTS][MQTT_MAX_
 static EXT_RAM_BSS_ATTR StackType_t s_accept_stack_storage[MQTT_ACCEPT_STACK];
 static StaticTask_t s_accept_tcb_storage;
 static StaticSemaphore_t s_lock_storage;
+static StaticSemaphore_t s_inject_scratch_lock_storage;
+static EXT_RAM_BSS_ATTR scenehub_event_t s_inject_event_scratch;
 static bool s_storage_ready = false;
 
 static void mqtt_core_bind_static_storage(void)
@@ -68,6 +75,28 @@ static void mqtt_core_bind_static_storage(void)
     s_accept_stack = s_accept_stack_storage;
     s_accept_tcb = &s_accept_tcb_storage;
     s_storage_ready = true;
+}
+
+static esp_err_t mqtt_core_inject_scratch_lock(void)
+{
+    if (!s_inject_scratch_lock) {
+        portENTER_CRITICAL(&s_inject_scratch_lock_init_lock);
+        if (!s_inject_scratch_lock) {
+            s_inject_scratch_lock = xSemaphoreCreateMutexStatic(&s_inject_scratch_lock_storage);
+        }
+        portEXIT_CRITICAL(&s_inject_scratch_lock_init_lock);
+    }
+    if (!s_inject_scratch_lock) {
+        return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_inject_scratch_lock, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void mqtt_core_inject_scratch_unlock(void)
+{
+    if (s_inject_scratch_lock) {
+        xSemaphoreGive(s_inject_scratch_lock);
+    }
 }
 
 size_t session_index(const mqtt_session_t *sess)
@@ -155,20 +184,43 @@ void unlock(void)
     }
 }
 
-void request_session_close(mqtt_session_t *sess, const char *reason, int err)
+int request_session_prepare_close_locked(mqtt_session_t *sess,
+                                         const char *reason,
+                                         int err)
 {
+    int close_sock = -1;
+
     if (!sess) {
-        return;
+        return -1;
     }
     const char *cid = sess->client_id[0] ? sess->client_id : "<unknown>";
     ESP_LOGW(TAG, "%s for %s (err=%d)", reason ? reason : "session closing", cid, err);
     sess->closing = true;
     if (sess->sock >= 0) {
-        int sock = sess->sock;
+        close_sock = sess->sock;
         sess->sock = -1;
-        shutdown(sock, SHUT_RDWR);
-        closesocket(sock);
     }
+    return close_sock;
+}
+
+void request_session_close_socket(int sock)
+{
+    if (sock < 0) {
+        return;
+    }
+    shutdown(sock, SHUT_RDWR);
+    closesocket(sock);
+}
+
+void request_session_close(mqtt_session_t *sess, const char *reason, int err)
+{
+    int close_sock = -1;
+
+    lock();
+    close_sock = request_session_prepare_close_locked(sess, reason, err);
+    unlock();
+
+    request_session_close_socket(close_sock);
 }
 
 void request_session_close_if_current(size_t slot,
@@ -198,20 +250,57 @@ void request_session_close_if_current(size_t slot,
     }
     unlock();
     if (close_sock >= 0) {
-        shutdown(close_sock, SHUT_RDWR);
-        closesocket(close_sock);
+        request_session_close_socket(close_sock);
     }
+}
+
+uint16_t mqtt_next_packet_id(void)
+{
+    uint16_t pid = 0;
+
+    portENTER_CRITICAL(&s_packet_id_lock);
+    s_next_packet_id++;
+    if (s_next_packet_id == 0) {
+        s_next_packet_id = 1;
+    }
+    pid = s_next_packet_id;
+    portEXIT_CRITICAL(&s_packet_id_lock);
+
+    return pid;
+}
+
+uint8_t mqtt_effective_delivery_qos(uint8_t publish_qos, uint8_t subscription_qos)
+{
+    uint8_t clamped_publish = publish_qos > 1 ? 1 : publish_qos;
+    uint8_t clamped_subscription = subscription_qos > 1 ? 1 : subscription_qos;
+
+    return clamped_publish < clamped_subscription ? clamped_publish : clamped_subscription;
 }
 
 esp_err_t mqtt_core_init(void)
 {
     mqtt_core_bind_static_storage();
     if (!s_lock) {
-        s_lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
+        portENTER_CRITICAL(&s_lock_init_lock);
         if (!s_lock) {
-            return ESP_ERR_NO_MEM;
+            s_lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
         }
+        portEXIT_CRITICAL(&s_lock_init_lock);
     }
+    if (!s_lock) {
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t retain_err = retain_init();
+    if (retain_err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to init retained delivery: %s", esp_err_to_name(retain_err));
+        return retain_err;
+    }
+    esp_err_t inject_lock_err = mqtt_core_inject_scratch_lock();
+    if (inject_lock_err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to init inject scratch: %s", esp_err_to_name(inject_lock_err));
+        return inject_lock_err;
+    }
+    mqtt_core_inject_scratch_unlock();
     esp_err_t ingest_err = device_control_ingest_init();
     if (ingest_err != ESP_OK) {
         ESP_LOGE(TAG, "failed to init control ingest: %s", esp_err_to_name(ingest_err));
@@ -248,6 +337,7 @@ esp_err_t mqtt_core_publish(const char *topic, const char *payload)
 
 esp_err_t mqtt_core_inject_message(const char *topic, const char *payload)
 {
+    esp_err_t err = ESP_OK;
     if (!topic || !payload) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -256,20 +346,36 @@ esp_err_t mqtt_core_inject_message(const char *topic, const char *payload)
         ESP_LOGW(TAG, "control ingest failed for %s: %s", topic, esp_err_to_name(ingest_err));
     }
 
+    err = mqtt_core_inject_scratch_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+
     scenehub_event_type_t type = find_type_by_topic(topic);
     if (type != SCENEHUB_EVENT_NONE) {
-        scenehub_event_t typed = {0};
-        if (scenehub_event_make_text(&typed, type, topic, payload) == ESP_OK) {
+        memset(&s_inject_event_scratch, 0, sizeof(s_inject_event_scratch));
+        if (scenehub_event_make_text(&s_inject_event_scratch, type, topic, payload) == ESP_OK) {
+            s_inject_event_scratch.origin = SCENEHUB_EVENT_ORIGIN_MQTT;
 #if MQTT_CORE_DEBUG
             ESP_LOGI(TAG, "[MQTT IN] %s -> event %d", topic, type);
 #endif
-            event_bus_post(&typed, pdMS_TO_TICKS(100));
+            err = event_bus_post(&s_inject_event_scratch, pdMS_TO_TICKS(100));
+            if (err != ESP_OK) {
+                mqtt_core_inject_scratch_unlock();
+                return err;
+            }
         }
     }
 
-    scenehub_event_t generic = {0};
-    if (scenehub_event_make_text(&generic, SCENEHUB_EVENT_MQTT_MESSAGE, topic, payload) != ESP_OK) {
+    // Generic MQTT_MESSAGE is a bounded compatibility/diagnostic event.
+    // Large MQTT payloads may be truncated to scenehub_event_t.payload.
+    memset(&s_inject_event_scratch, 0, sizeof(s_inject_event_scratch));
+    if (scenehub_event_make_text(&s_inject_event_scratch, SCENEHUB_EVENT_MQTT_MESSAGE, topic, payload) != ESP_OK) {
+        mqtt_core_inject_scratch_unlock();
         return ESP_ERR_INVALID_ARG;
     }
-    return event_bus_post(&generic, pdMS_TO_TICKS(100));
+    s_inject_event_scratch.origin = SCENEHUB_EVENT_ORIGIN_MQTT;
+    err = event_bus_post(&s_inject_event_scratch, pdMS_TO_TICKS(100));
+    mqtt_core_inject_scratch_unlock();
+    return err;
 }

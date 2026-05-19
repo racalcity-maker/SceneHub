@@ -19,7 +19,7 @@ static int64_t gm_action_perf_start(void)
 static void gm_action_perf_log(const char *label, int64_t start_us, const char *room_id, const char *action_id)
 {
     int64_t dt_ms = (esp_timer_get_time() - start_us) / 1000;
-    ESP_LOGW(TAG,
+    ESP_LOGD(TAG,
              "PERF %s room=%s action=%s took %lld ms",
              label ? label : "room action",
              room_id ? room_id : "",

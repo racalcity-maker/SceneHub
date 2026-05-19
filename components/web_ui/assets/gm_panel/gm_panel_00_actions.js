@@ -28,7 +28,16 @@ return true;
 }
 
 gmRegisterAction('manual.device.command',async el=>{
-await runManualDeviceCommand(el.dataset.deviceId||'',el.dataset.commandId||'');
+let params=undefined;
+if(el.dataset.params){
+try{
+params=JSON.parse(el.dataset.params);
+}
+catch(err){
+throw new Error('Invalid preset parameters');
+}
+}
+await runManualDeviceCommand(el.dataset.deviceId||'',el.dataset.commandId||'',params);
 });
 
 gmRegisterAction('room.game',async el=>{
@@ -120,13 +129,16 @@ await loadGMAudioFiles(true);
 gmRegisterAction('scenario.edit',async el=>{
 if(!confirmDiscardScenario())return;
 scenarioEditor.scenario_id=el.dataset.scenarioId||'';
+if(scenarioEditor.room_id&&scenarioEditor.scenario_id){
+await ensureRoomScenarioDetail(scenarioEditor.room_id,scenarioEditor.scenario_id);
+}
 scenarioEditor.open=true;
 scenarioEditor.expanded_step=-1;
 scenarioEditor.expanded_v2_action='';
 scenarioEditor.active_branch=0;
 clearScenarioDirty();
-const original=roomScenarios(scenarioEditor.room_id).find(s=>s.id===scenarioEditor.scenario_id)||null;
-scenarioEditor.original_scenario=original?scenarioEditableJson(original,scenarioEditor.room_id):null;
+const original=roomScenarioDetailById(scenarioEditor.room_id,scenarioEditor.scenario_id)||null;
+if(original)scenarioSetLoadedDraft(original,scenarioEditor.room_id);
 render();
 });
 
@@ -139,6 +151,7 @@ scenarioEditor.expanded_v2_action='';
 scenarioEditor.active_branch=0;
 clearScenarioDirty();
 scenarioEditor.draft={id:'',name:'',room_id:scenarioEditor.room_id,branches:[defaultScenarioBranch(0,[])]};
+scenarioEditor.original_scenario=null;
 skipNextScenarioDomSync();
 render();
 });
@@ -159,7 +172,7 @@ await saveScenarioEditor();
 gmRegisterAction('scenario.create_game_mode',async el=>{
 if(!confirmDiscardEditorChanges())return;
 const scenarioId=el.dataset.scenarioId||'';
-const scenario=roomScenarios(scenarioEditor.room_id).find(s=>s.id===scenarioId)||null;
+const scenario=roomScenarioDetailById(scenarioEditor.room_id,scenarioId)||roomScenarioSummaryById(scenarioEditor.room_id,scenarioId)||null;
 profileEditor.room_id=scenarioEditor.room_id;
 profileEditor.profile_id='';
 profileEditor.open=true;
@@ -257,6 +270,47 @@ await discoverQuestDeviceInterface();
 
 gmRegisterAction('quest.discovery.apply',async()=>{
 applyQuestDeviceDiscovery();
+});
+
+gmRegisterAction('sidebar.preset.new',async()=>{
+if(!isAdmin())return;
+resetSidebarPresetWizard();
+render();
+});
+
+gmRegisterAction('sidebar.preset.cancel',async()=>{
+if(!isAdmin())return;
+cancelSidebarPresetWizard();
+});
+
+gmRegisterAction('sidebar.preset.save',async()=>{
+if(!isAdmin())return;
+await saveSidebarPresetWizard();
+});
+
+gmRegisterAction('sidebar.preset.edit',async el=>{
+if(!isAdmin())return;
+editSidebarPreset(el.dataset.presetId||'');
+});
+
+gmRegisterAction('sidebar.preset.delete',async el=>{
+if(!isAdmin())return;
+await deleteSidebarPreset(el.dataset.presetId||'');
+});
+
+gmRegisterAction('sidebar.preset.move',async el=>{
+if(!isAdmin())return;
+await moveSidebarPreset(el.dataset.presetId||'',el.dataset.direction||'down');
+});
+
+gmRegisterAction('sidebar.preset.run',async el=>{
+if(!isAdmin())return;
+await runSidebarPreset(el.dataset.presetId||'');
+});
+
+gmRegisterAction('sidebar.preset.import_legacy',async()=>{
+if(!isAdmin())return;
+await importLegacySidebarPresets();
 });
 
 gmRegisterAction('quest.discovery.discard',async()=>{

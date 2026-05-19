@@ -6,6 +6,22 @@ All notable project changes are documented in this file.
 
 ### Added
 
+- Added a temporary checked migration plan for moving SceneHub device import,
+  scenario editing and runtime dispatch to compact Node manifest v2 without
+  expanding node resources into per-channel commands.
+- Added dedicated GM session runtime-chaos tests for noisy wait/event flows,
+  shuffled `WAIT_ALL_DEVICE_EVENTS`, duplicate command results, and late
+  timeout/result ordering, plus a Python stress harness for noisy runtime
+  polling and MQTT event survival checks.
+- Added the first compact Node manifest v2 intake slice: Quest Device storage
+  preserves `device_description`, interface discovery returns v2 manifests
+  directly, Device Setup renders compact summaries instead of expanded command
+  rows, and the scenario editor can render resource/effect dropdowns from
+  compact templates.
+- Tightened compact Node manifest identity and validation: node manifests now
+  use `manifest_version`, `node_kind` and `capability_contract`, while
+  SceneHub rejects expanded legacy node manifests and raw GPIO metadata at the
+  device import boundary.
 - Added planning docs for local hardware IO, Universal IO Node, and the P2.2 command executor/runtime split.
 - Added a `command_executor` component as the first P2.2 extraction step, routing SceneHub-native MQTT and system audio command side effects behind one executor API.
 - Added a `scenehub_scenario_validation` component so product/runtime-aware scenario checks can live outside the `room_scenario` model layer.
@@ -31,6 +47,20 @@ All notable project changes are documented in this file.
 ### Changed
 
 - Renamed product-facing project/configuration identifiers to `SceneHub`.
+- Moved GM room runtime HTTP refresh paths off shared web scratch buffers:
+  runtime summary/detail DTOs and JSON chunk buffers are now request-local, so
+  slow HTTP chunked sends no longer hold shared runtime-read state during
+  socket I/O.
+- Hardened read-side/runtime concurrency around scratch and event flow:
+  `scenehub_state` now broadcasts websocket invalidations after unlocking,
+  lazy static mutex creation paths use critical sections, and
+  `scenehub_read_model` scratch access now enforces lock ownership in debug
+  builds.
+- Lowered expected high-volume device-event matching logs from
+  `INFO`/`WARN` to `DEBUG`, added critical-event fast-path routing plus drop
+  counters for GM runtime queues, and fixed the scenario editor so
+  `allow_operator_skip` persists as a real boolean instead of causing
+  `invalid request` on save/validate.
 - Replaced broad project settings with `CONFIG_SCENEHUB_*` settings while keeping MQTT broker terminology for the MQTT module itself.
 - Updated setup AP, mDNS, Web UI titles, default hostname, and tooling documentation to use SceneHub naming.
 - Removed archived project cleanup references and old transition-plan documentation from the active project tree.

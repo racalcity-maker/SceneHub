@@ -358,20 +358,19 @@ static const char s_web_ui_gm[] =
 "<title>SceneHub GM</title>"
 "<link rel='stylesheet' href='/ui/gm_panel.css?v=22'></head><body>"
 "<div class='app'><aside class='sidebar'><div class='brand'><h1>GM Panel</h1><p>Quest control</p></div><nav class='nav' id='gm_nav'>"
-"<button class='nav-btn active' data-view='dashboard'><span class='nav-dot'></span>Dashboard</button>"
-"<button class='nav-btn' data-view='rooms'><span class='nav-dot'></span>Rooms</button>"
-"<button class='nav-btn' data-view='devices'><span class='nav-dot'></span>Devices</button>"
+"<button class='nav-btn active' data-view='rooms'><span class='nav-dot'></span>Rooms</button>"
 "<button class='nav-btn' data-view='timeline'><span class='nav-dot'></span>Timeline</button>"
 "<button class='nav-btn' data-view='audit'><span class='nav-dot'></span>Audit</button>"
 "<div class='nav-divider admin-only'></div>"
+"<button class='nav-btn admin-only' data-view='devices'><span class='nav-dot'></span>Device Controls</button>"
 "<button class='nav-btn admin-only' data-view='profiles'><span class='nav-dot'></span>Game Modes</button>"
 "<button class='nav-btn admin-only' data-view='scenarios'><span class='nav-dot'></span>Scenarios</button>"
 "<button class='nav-btn admin-only' data-view='device_setup'><span class='nav-dot'></span>Device Setup</button>"
 "<button class='nav-btn admin-only' data-view='hardware_io'><span class='nav-dot'></span>Hardware IO</button>"
 "<button class='nav-btn admin-only' data-view='observed'><span class='nav-dot'></span>Observed</button>"
 "<button class='nav-btn admin-only' data-view='storage'><span class='nav-dot'></span>Storage</button>"
-"</nav></aside><main class='main'><header class='topbar'><div><div id='page_title' class='page-title'>Dashboard</div><div id='page_sub' class='page-sub'>Loading state</div></div><div class='top-actions'><span id='gm_role_badge' class='role-badge'>role</span><span id='system_status' class='status state-unknown'>unknown</span><a id='gm_admin_home' class='top-link admin-only' href='/'>Admin</a><button id='gm_refresh'>Refresh</button><button id='gm_logout'>Logout</button></div></header><section id='gm_content' class='content'></section></main><aside class='right-sidebar' id='gm_right_sidebar'><div class='manual-empty'>Loading buttons...</div></aside></div>"
-"<script src='/ui/gm_panel.js?v=54'></script></body></html>";
+"</nav></aside><main class='main'><header class='topbar'><div><div id='page_title' class='page-title'>Rooms</div><div id='page_sub' class='page-sub'>Loading state</div></div><div class='top-actions'><span id='gm_role_badge' class='role-badge'>role</span><span id='system_status' class='status state-unknown'>unknown</span><a id='gm_admin_home' class='top-link admin-only' href='/'>Admin</a><button id='gm_refresh'>Refresh</button><button id='gm_logout'>Logout</button></div></header><section id='gm_content' class='content'></section></main><aside class='right-sidebar' id='gm_right_sidebar'><div class='manual-empty'>Loading buttons...</div></aside></div>"
+"<script src='/ui/gm_panel.js?v=68'></script></body></html>";
 
 const char *web_ui_get_gm_html(void)
 {

@@ -311,7 +311,7 @@ static bool device_control_event_payload_matches(const gm_room_scenario_wait_eve
         return true;
     }
     if (!message->data.device_control.args_json[0]) {
-        ESP_LOGW(TAG,
+        ESP_LOGD(TAG,
                  "device event args missing: device=%s event=%s action=%s source=%s",
                  expected->device_id,
                  expected->event_id,
@@ -320,7 +320,7 @@ static bool device_control_event_payload_matches(const gm_room_scenario_wait_eve
         return false;
     }
     if (!gm_json_object_contains_expected(expected->match_json, message->data.device_control.args_json)) {
-        ESP_LOGW(TAG,
+        ESP_LOGD(TAG,
                  "device event args mismatch: device=%s event=%s expected=%s actual=%s",
                  expected->device_id,
                  expected->event_id,
@@ -369,7 +369,7 @@ static int wait_event_match_index(const gm_room_session_t *session, const sceneh
                             i < ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS; ++i) {
             if (gm_room_session_wait_event_matches_message(&session->wait_events[i], message)) {
                 if (scenehub_event_is_device_control_event(message)) {
-                    ESP_LOGI(TAG,
+                    ESP_LOGD(TAG,
                              "wait event matched: room=%s device=%s event=%s action=%s args=%s",
                              session->room_id,
                              session->wait_events[i].device_id,
@@ -403,7 +403,7 @@ bool gm_room_session_wait_event_matches_message(const gm_room_scenario_wait_even
     if (!wait_event_type_matches(expected->event_type, message)) {
         if (scenehub_event_is_device_control_event(message) &&
             source_matches) {
-            ESP_LOGW(TAG,
+            ESP_LOGD(TAG,
                      "device event type mismatch: device=%s event=%s expected_type=%s action=%s source=%s",
                      expected->device_id,
                      expected->event_id,
@@ -415,7 +415,7 @@ bool gm_room_session_wait_event_matches_message(const gm_room_scenario_wait_even
     }
     if (!source_matches) {
         if (scenehub_event_is_device_control_event(message)) {
-            ESP_LOGW(TAG,
+            ESP_LOGD(TAG,
                      "device event source mismatch: expected_source=%s expected_device=%s actual_source=%s action=%s",
                      expected->source_id,
                      expected->device_id,
@@ -457,6 +457,72 @@ static bool command_result_is_failure(const scenehub_event_t *message)
 static bool command_result_is_pending(const scenehub_event_t *message)
 {
     return message && scenehub_command_result_is_pending(message->payload);
+}
+
+static bool gm_room_session_event_is_critical(const scenehub_event_t *message)
+{
+    if (!message) {
+        return false;
+    }
+    if (scenehub_event_is_device_control(message)) {
+        return true;
+    }
+    switch (message->type) {
+    case SCENEHUB_EVENT_FLAG_CHANGED:
+    case SCENEHUB_EVENT_RUNTIME_CONTROL:
+    case SCENEHUB_EVENT_WEB_COMMAND:
+        return true;
+    case SCENEHUB_EVENT_NONE:
+    case SCENEHUB_EVENT_CARD_OK:
+    case SCENEHUB_EVENT_CARD_BAD:
+    case SCENEHUB_EVENT_RELAY_CMD:
+    case SCENEHUB_EVENT_AUDIO_PLAY:
+    case SCENEHUB_EVENT_AUDIO_FINISHED:
+    case SCENEHUB_EVENT_VOLUME_SET:
+    case SCENEHUB_EVENT_SYSTEM_STATUS:
+    case SCENEHUB_EVENT_SCENARIO_TRIGGER:
+    case SCENEHUB_EVENT_DEVICE_CONFIG_CHANGED:
+    case SCENEHUB_EVENT_MQTT_MESSAGE:
+    case SCENEHUB_EVENT_DEVICE_STATUS:
+    case SCENEHUB_EVENT_DEVICE_RUNTIME:
+    default:
+        return false;
+    }
+}
+
+static void gm_room_session_log_event_drop(const char *queue_name,
+                                           const scenehub_event_t *message,
+                                           bool critical)
+{
+    if (!queue_name || !message) {
+        return;
+    }
+    if (scenehub_event_is_device_control(message)) {
+        ESP_LOGE(TAG,
+                 "%s full, dropped %s event: type=%s device=%s action=%s source=%s",
+                 queue_name,
+                 critical ? "critical" : "non-critical",
+                 scenehub_event_type_to_string(message->type),
+                 message->data.device_control.device_id,
+                 message->data.device_control.action_id,
+                 message->data.device_control.source);
+        return;
+    }
+    if (critical) {
+        ESP_LOGE(TAG,
+                 "%s full, dropped critical event: type=%s topic=%s payload=%s",
+                 queue_name,
+                 scenehub_event_type_to_string(message->type),
+                 message->topic,
+                 message->payload);
+        return;
+    }
+    ESP_LOGW(TAG,
+             "%s full, dropped non-critical event: type=%s topic=%s payload=%s",
+             queue_name,
+             scenehub_event_type_to_string(message->type),
+             message->topic,
+             message->payload);
 }
 
 static int command_result_wait_branch_index(const gm_room_session_t *session,
@@ -698,34 +764,37 @@ dispatch_planned_command:
 void gm_room_session_event_handler(const scenehub_event_t *message)
 {
     scenehub_event_t copy = {0};
-    BaseType_t queued = pdFALSE;
+    bool critical = false;
+    esp_err_t err = ESP_OK;
 
     if (!message) {
         return;
     }
 
     copy = *message;
+    critical = gm_room_session_event_is_critical(&copy);
+
+    if (critical) {
+        if (!s_runtime_queue) {
+            return;
+        }
+        err = gm_room_session_runtime_post_event_with_wait(
+            &copy,
+            GM_ROOM_SESSION_RUNTIME_QUEUE_CRITICAL_WAIT_TICKS);
+        if (err != ESP_OK) {
+            gm_room_session_record_event_drop(true, true);
+            gm_room_session_log_event_drop("runtime queue", &copy, true);
+        }
+        return;
+    }
 
     if (!s_event_queue) {
         return;
     }
 
-    queued = xQueueSend(s_event_queue, &copy, pdMS_TO_TICKS(5));
-    if (queued != pdTRUE) {
-        if (scenehub_event_is_device_control(message)) {
-            ESP_LOGW(TAG,
-                     "event queue full, dropped: type=%s device=%s action=%s source=%s",
-                     scenehub_event_type_to_string(message->type),
-                     message->data.device_control.device_id,
-                     message->data.device_control.action_id,
-                     message->data.device_control.source);
-        } else {
-            ESP_LOGW(TAG,
-                     "event queue full, dropped: type=%s topic=%s payload=%s",
-                     scenehub_event_type_to_string(message->type),
-                     message->topic,
-                     message->payload);
-        }
+    if (xQueueSend(s_event_queue, &copy, GM_ROOM_SESSION_EVENT_QUEUE_WAIT_TICKS) != pdTRUE) {
+        gm_room_session_record_event_drop(false, false);
+        gm_room_session_log_event_drop("event queue", &copy, false);
     }
 }
 
@@ -740,20 +809,8 @@ void gm_room_session_event_task(void *ctx)
         if (xQueueReceive(s_event_queue, &message, portMAX_DELAY) == pdTRUE) {
             esp_err_t err = gm_room_session_runtime_post_event(&message);
             if (err != ESP_OK) {
-                if (scenehub_event_is_device_control(&message)) {
-                    ESP_LOGW(TAG,
-                             "runtime queue full, dropped: type=%s device=%s action=%s source=%s",
-                             scenehub_event_type_to_string(message.type),
-                             message.data.device_control.device_id,
-                             message.data.device_control.action_id,
-                             message.data.device_control.source);
-                } else {
-                    ESP_LOGW(TAG,
-                             "runtime queue full, dropped: type=%s topic=%s payload=%s",
-                             scenehub_event_type_to_string(message.type),
-                             message.topic,
-                             message.payload);
-                }
+                gm_room_session_record_event_drop(false, true);
+                gm_room_session_log_event_drop("runtime queue", &message, false);
             }
         }
     }

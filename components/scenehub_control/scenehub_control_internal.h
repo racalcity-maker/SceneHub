@@ -4,6 +4,7 @@
 #include "scenehub_state.h"
 
 void scenehub_control_copy(char *dst, size_t dst_size, const char *src);
+bool scenehub_control_persistence_enabled(void);
 esp_err_t scenehub_control_prepare_result(const char *room_id,
                                           const char *action_id,
                                           scenehub_control_result_t *out_result);

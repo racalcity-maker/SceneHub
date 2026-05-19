@@ -9,6 +9,8 @@
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #define WS_RUNTIME_URI "/api/ws"
 #define WS_RUNTIME_MAX_CLIENTS 2
@@ -38,6 +40,31 @@ static httpd_handle_t s_server = NULL;
 static ws_runtime_client_t s_clients[WS_RUNTIME_MAX_CLIENTS];
 static uint32_t s_ws_seq = 0;
 static uint32_t s_snapshot_generation = 1;
+static SemaphoreHandle_t s_state_mutex = NULL;
+static StaticSemaphore_t s_state_mutex_storage;
+static portMUX_TYPE s_state_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_err_t ws_runtime_state_lock(void)
+{
+    if (!s_state_mutex) {
+        portENTER_CRITICAL(&s_state_mutex_init_lock);
+        if (!s_state_mutex) {
+            s_state_mutex = xSemaphoreCreateMutexStatic(&s_state_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_state_mutex_init_lock);
+        if (!s_state_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return xSemaphoreTake(s_state_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void ws_runtime_state_unlock(void)
+{
+    if (s_state_mutex) {
+        xSemaphoreGive(s_state_mutex);
+    }
+}
 
 static ws_runtime_client_t *find_client_by_fd(int fd)
 {
@@ -144,13 +171,17 @@ static esp_err_t broadcast_envelope(const char *type, const char *payload_json)
     }
 
     esp_err_t last_err = ESP_OK;
+    esp_err_t err = ws_runtime_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
 
     for (int i = 0; i < WS_RUNTIME_MAX_CLIENTS; ++i) {
         if (!s_clients[i].active || !s_clients[i].subscribed) {
             continue;
         }
 
-        esp_err_t err = send_envelope_to_fd(s_clients[i].fd, type, payload_json);
+        err = send_envelope_to_fd(s_clients[i].fd, type, payload_json);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "broadcast failed fd=%d: %s", s_clients[i].fd, esp_err_to_name(err));
             remove_client(s_clients[i].fd);
@@ -158,6 +189,7 @@ static esp_err_t broadcast_envelope(const char *type, const char *payload_json)
         }
     }
 
+    ws_runtime_state_unlock();
     return last_err;
 }
 
@@ -208,11 +240,6 @@ static esp_err_t send_pong_to_fd(int fd)
 
 static esp_err_t handle_text_message(int fd, const char *text)
 {
-    ws_runtime_client_t *client = find_client_by_fd(fd);
-    if (client == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
     ESP_LOGI(TAG, "ws recv fd=%d: %s", fd, text);
 
     cJSON *root = cJSON_Parse(text);
@@ -227,7 +254,17 @@ static esp_err_t handle_text_message(int fd, const char *text)
         return send_error_to_fd(fd, "missing type");
     }
 
-    esp_err_t result = ESP_OK;
+    esp_err_t result = ws_runtime_state_lock();
+    if (result != ESP_OK) {
+        cJSON_Delete(root);
+        return result;
+    }
+    ws_runtime_client_t *client = find_client_by_fd(fd);
+    if (client == NULL) {
+        ws_runtime_state_unlock();
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     if (strcmp(type->valuestring, "subscribe") == 0) {
         client->subscribed = true;
@@ -248,6 +285,7 @@ static esp_err_t handle_text_message(int fd, const char *text)
         result = send_error_to_fd(fd, "unknown message type");
     }
 
+    ws_runtime_state_unlock();
     cJSON_Delete(root);
     return result;
 }
@@ -256,8 +294,12 @@ static esp_err_t ws_runtime_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
         int fd = httpd_req_to_sockfd(req);
-
+        esp_err_t err = ws_runtime_state_lock();
+        if (err != ESP_OK) {
+            return err;
+        }
         ws_runtime_client_t *client = alloc_client_slot(fd);
+        ws_runtime_state_unlock();
         if (client == NULL) {
             ESP_LOGW(TAG, "too many ws clients, fd=%d", fd);
             return ESP_FAIL;
@@ -268,8 +310,12 @@ static esp_err_t ws_runtime_handler(httpd_req_t *req)
     }
 
     int fd = httpd_req_to_sockfd(req);
-
+    esp_err_t lock_err = ws_runtime_state_lock();
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
     ws_runtime_client_t *client = alloc_client_slot(fd);
+    ws_runtime_state_unlock();
     if (client == NULL) {
         ESP_LOGW(TAG, "too many ws clients while receiving, fd=%d", fd);
         return ESP_FAIL;
@@ -284,12 +330,18 @@ static esp_err_t ws_runtime_handler(httpd_req_t *req)
     esp_err_t err = httpd_ws_recv_frame(req, &frame, 0);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "failed to get ws frame length: %s", esp_err_to_name(err));
-        remove_client(fd);
+        if (ws_runtime_state_lock() == ESP_OK) {
+            remove_client(fd);
+            ws_runtime_state_unlock();
+        }
         return err;
     }
 
     if (frame.type == HTTPD_WS_TYPE_CLOSE) {
-        remove_client(fd);
+        if (ws_runtime_state_lock() == ESP_OK) {
+            remove_client(fd);
+            ws_runtime_state_unlock();
+        }
         return ESP_OK;
     }
 
@@ -311,7 +363,10 @@ static esp_err_t ws_runtime_handler(httpd_req_t *req)
     err = httpd_ws_recv_frame(req, &frame, frame.len);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "failed to receive ws frame: %s", esp_err_to_name(err));
-        remove_client(fd);
+        if (ws_runtime_state_lock() == ESP_OK) {
+            remove_client(fd);
+            ws_runtime_state_unlock();
+        }
         return err;
     }
 
@@ -322,11 +377,17 @@ static esp_err_t ws_runtime_handler(httpd_req_t *req)
 
 esp_err_t ws_runtime_register_httpd(httpd_handle_t server)
 {
+    esp_err_t err = ESP_OK;
+
     if (server == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-
+    err = ws_runtime_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
     s_server = server;
+    ws_runtime_state_unlock();
 
     httpd_uri_t ws_uri = {
         .uri = WS_RUNTIME_URI,
@@ -336,7 +397,7 @@ esp_err_t ws_runtime_register_httpd(httpd_handle_t server)
         .is_websocket = true,
     };
 
-    esp_err_t err = httpd_register_uri_handler(server, &ws_uri);
+    err = httpd_register_uri_handler(server, &ws_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "failed to register %s: %s", WS_RUNTIME_URI, esp_err_to_name(err));
         return err;
@@ -353,13 +414,17 @@ esp_err_t ws_runtime_broadcast_json(const char *json)
     }
 
     esp_err_t last_err = ESP_OK;
+    esp_err_t err = ws_runtime_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
 
     for (int i = 0; i < WS_RUNTIME_MAX_CLIENTS; ++i) {
         if (!s_clients[i].active || !s_clients[i].subscribed) {
             continue;
         }
 
-        esp_err_t err = send_text_to_fd(s_clients[i].fd, json);
+        err = send_text_to_fd(s_clients[i].fd, json);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "broadcast failed fd=%d: %s", s_clients[i].fd, esp_err_to_name(err));
             remove_client(s_clients[i].fd);
@@ -367,6 +432,7 @@ esp_err_t ws_runtime_broadcast_json(const char *json)
         }
     }
 
+    ws_runtime_state_unlock();
     return last_err;
 }
 

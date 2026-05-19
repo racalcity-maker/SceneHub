@@ -1,10 +1,10 @@
 idf_component_register(
-    SRCS "scenehub_control.c" "scenehub_control_rooms.c" "scenehub_control_devices.c" "scenehub_control_scenarios.c" "scenehub_control_profiles.c"
+    SRCS "scenehub_control.c" "scenehub_control_rooms.c" "scenehub_control_devices.c" "scenehub_control_scenarios.c" "scenehub_control_profiles.c" "scenehub_control_sidebar_presets.c" "scenehub_control_hardware_io.c"
     INCLUDE_DIRS "include"
     REQUIRES
         device_control_ingest
-        gm_control
         gm_core
+        hardware_io
         json
         mqtt_core
         orchestrator_core
@@ -12,6 +12,8 @@ idf_component_register(
         quest_device
         room_catalog
         room_scenario
+        scenehub_read_model
+        scenehub_device_command_resolver
         scenehub_scenario_validation
         scenehub_state
 )

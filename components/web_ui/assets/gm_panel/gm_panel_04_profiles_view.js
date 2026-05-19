@@ -8,7 +8,7 @@ profileEditor.room_id=rooms[0].room_id;
 }
 const roomId=profileEditor.room_id;
 const profiles=roomProfiles(roomId);
-const scenarios=roomScenarios(roomId);
+const scenarios=scenarioSummariesByRoom(roomId);
 const editing=profiles.find(p=>p.id===profileEditor.profile_id)||null;
 const prefill=(!editing&&profileEditor.prefill&&profileEditor.prefill.room_id===roomId)?profileEditor.prefill:null;
 const editorOpen=!!(profileEditor.open||editing||profileEditor.dirty);

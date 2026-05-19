@@ -8,6 +8,7 @@
 
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "freertos/semphr.h"
 #include "quest_common_utils.h"
 #include "quest_device.h"
@@ -253,7 +254,7 @@ static uint8_t reactive_v2_select_variant(gm_room_scenario_branch_runtime_t *bra
             return selected;
         }
     case ROOM_SCENARIO_REACTIVE_POLICY_RANDOM:
-        return (uint8_t)(gm_room_session_scenario_now_ms() % count);
+        return (uint8_t)(esp_random() % count);
     case ROOM_SCENARIO_REACTIVE_POLICY_SINGLE:
     default:
         return 0;

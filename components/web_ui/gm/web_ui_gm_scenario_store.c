@@ -1,6 +1,7 @@
 #include "web_ui_handlers.h"
 
 #include <stddef.h>
+#include <string.h>
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
@@ -113,55 +114,46 @@ static esp_err_t gm_scenario_store_send_ok(httpd_req_t *req, const char *operati
                                             room_scenario_generation());
 }
 
-static const cJSON *gm_scenario_payload_object(const cJSON *root)
-{
-    const cJSON *scenario = cJSON_GetObjectItemCaseSensitive(root, "scenario");
-    if (cJSON_IsObject(scenario)) {
-        return scenario;
-    }
-    return root;
-}
-
 esp_err_t gm_room_scenario_validate_handler(httpd_req_t *req)
 {
     char *body = NULL;
     size_t body_len = 0;
     cJSON *root = NULL;
-    room_scenario_t *scratch_scenario = NULL;
-    room_scenario_validation_report_t *scratch_report = NULL;
+    char scenario_id[ROOM_SCENARIO_ID_MAX_LEN] = {0};
+    room_scenario_t *scenario = NULL;
+    room_scenario_validation_report_t *report = NULL;
     esp_err_t err = gm_scenario_store_read_body_limit(req, 32768, &body, &body_len);
     if (err != ESP_OK) {
         return gm_scenario_store_send_error(req, err);
     }
-    err = room_scenario_acquire_scratch(&scratch_scenario, &scratch_report);
+    err = room_scenario_acquire_scratch(&scenario, &report);
     if (err != ESP_OK) {
         heap_caps_free(body);
         return gm_scenario_store_send_error(req, err);
     }
+    memset(report, 0, sizeof(*report));
     root = cJSON_ParseWithLength(body, body_len);
     heap_caps_free(body);
     if (!root) {
         room_scenario_release_scratch();
         return gm_scenario_store_send_error(req, ESP_ERR_INVALID_ARG);
     }
-    memset(scratch_scenario, 0, sizeof(*scratch_scenario));
-    memset(scratch_report, 0, sizeof(*scratch_report));
     scenehub_control_result_t result = {0};
-    err = room_scenario_from_json(gm_scenario_payload_object(root), scratch_scenario);
-    if (err == ESP_OK) {
-         err = scenehub_control_validate_scenario("http",
-                                                 scratch_scenario,
-                                                 scratch_report,
-                                                 &result);
-    }
+    err = scenehub_control_validate_scenario_payload_into("http",
+                                                          root,
+                                                          scenario,
+                                                          scenario_id,
+                                                          sizeof(scenario_id),
+                                                          report,
+                                                          &result);
     cJSON_Delete(root);
     if (!web_ui_scenehub_control_is_done(err, &result)) {
         room_scenario_release_scratch();
         return gm_scenario_store_send_control_error(req, err, &result, "room scenarios operation failed");
     }
     err = web_ui_send_scenario_validation_result_json(req,
-                                                      scratch_scenario->id,
-                                                      scratch_report);
+                                                      scenario_id,
+                                                      report);
     room_scenario_release_scratch();
     return err;
 }
@@ -172,53 +164,31 @@ esp_err_t gm_room_scenario_save_handler(httpd_req_t *req)
     size_t body_len = 0;
     cJSON *root = NULL;
     cJSON *scenario_json = NULL;
-    room_scenario_t *scratch_scenario = NULL;
     esp_err_t err = gm_scenario_store_read_body_limit(req, 32768, &body, &body_len);
     if (err != ESP_OK) {
-        return gm_scenario_store_send_error(req, err);
-    }
-    err = room_scenario_acquire_scratch(&scratch_scenario, NULL);
-    if (err != ESP_OK) {
-        heap_caps_free(body);
         return gm_scenario_store_send_error(req, err);
     }
     root = cJSON_ParseWithLength(body, body_len);
     heap_caps_free(body);
     if (!root) {
-        room_scenario_release_scratch();
         return gm_scenario_store_send_error(req, ESP_ERR_INVALID_ARG);
     }
-    memset(scratch_scenario, 0, sizeof(*scratch_scenario));
     scenehub_control_result_t result = {0};
-    err = room_scenario_from_json(gm_scenario_payload_object(root), scratch_scenario);
-    if (err == ESP_OK) {
-        err = scenehub_control_save_scenario("http", scratch_scenario, &result);
-    }
+    err = scenehub_control_save_scenario_payload("http", root, &scenario_json, &result);
     if (!web_ui_scenehub_control_is_done(err, &result)) {
         cJSON_Delete(root);
-        room_scenario_release_scratch();
+        cJSON_Delete(scenario_json);
         return gm_scenario_store_send_control_error(req, err, &result, "room scenarios operation failed");
     }
-    scenario_json = cJSON_CreateObject();
     if (!scenario_json) {
         cJSON_Delete(root);
-        cJSON_Delete(scenario_json);
-        room_scenario_release_scratch();
         return gm_scenario_store_send_error(req, ESP_ERR_NO_MEM);
-    }
-    err = room_scenario_to_json(scratch_scenario, scenario_json);
-    if (err != ESP_OK) {
-        cJSON_Delete(root);
-        cJSON_Delete(scenario_json);
-        room_scenario_release_scratch();
-        return gm_scenario_store_send_error(req, err);
     }
     cJSON_Delete(root);
     err = web_ui_send_generation_item_json(req,
                                            room_scenario_generation(),
                                            "scenario",
                                            scenario_json);
-    room_scenario_release_scratch();
     return err;
 }
 
