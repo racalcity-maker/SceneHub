@@ -51,6 +51,8 @@ esp_err_t node_mqtt_publish_result_fields_locked(const char *request_id,
 esp_err_t node_mqtt_publish_result_locked(const char *request_id,
                                           const char *command,
                                           const node_control_result_t *result);
+esp_err_t node_mqtt_publish_status_locked(void);
+esp_err_t node_mqtt_publish_event_locked(const char *event_name, const char *args_json);
 void node_mqtt_publish_heartbeat_and_status(bool include_status);
 
 void node_mqtt_handle_command_payload(const char *payload);

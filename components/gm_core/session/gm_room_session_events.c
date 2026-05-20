@@ -350,8 +350,7 @@ static bool wait_event_type_matches(const char *expected, const scenehub_event_t
         return match_field(expected, message->data.device_runtime.runtime_type) ||
                match_field(expected, message->data.device_runtime.state);
     case SCENEHUB_EVENT_PAYLOAD_DEVICE_CONTROL:
-        return match_field(expected, message->data.device_control.action_id) ||
-               match_field(expected, message->data.device_control.source);
+        return match_field(expected, message->data.device_control.action_id);
     case SCENEHUB_EVENT_PAYLOAD_TEXT:
     default:
         return false;

@@ -38,3 +38,20 @@ esp_err_t node_hw_universal_output_set(uint8_t channel, bool on)
     }
     return node_hw_output_slot_set(&g_node_hw.universal_outputs[channel - 1], on);
 }
+
+esp_err_t node_hw_universal_output_all_off(void)
+{
+    esp_err_t first_err = ESP_OK;
+
+    for (size_t i = 0; i < NODE_UNIVERSAL_IO_MAX; ++i) {
+        if (!g_node_hw.universal_outputs[i].configured) {
+            continue;
+        }
+        esp_err_t err = node_hw_output_slot_set(&g_node_hw.universal_outputs[i], false);
+        if (first_err == ESP_OK && err != ESP_OK) {
+            first_err = err;
+        }
+    }
+
+    return first_err;
+}

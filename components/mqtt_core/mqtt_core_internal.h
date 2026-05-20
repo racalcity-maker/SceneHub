@@ -16,8 +16,8 @@
 #define MQTT_MAX_CLIENTS       CONFIG_SCENEHUB_MQTT_MAX_CLIENTS
 #define MQTT_MAX_SUBS          16
 #define MQTT_MAX_TOPIC         96
-#define MQTT_MAX_PAYLOAD       4096
-#define MQTT_MAX_PACKET        6144
+#define MQTT_MAX_PAYLOAD       12288
+#define MQTT_MAX_PACKET        14336
 #define MQTT_RETAIN_MAX        32
 #define MQTT_CLIENT_STACK      8192
 #define MQTT_ACCEPT_STACK      4096

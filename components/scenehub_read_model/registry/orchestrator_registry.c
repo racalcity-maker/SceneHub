@@ -350,7 +350,7 @@ esp_err_t orchestrator_registry_get_system_summary(orch_gm_system_summary_t *out
         out->device_count = (uint8_t)(device_count > UINT8_MAX ? UINT8_MAX : device_count);
         for (size_t i = 0; i < device_count; ++i) {
             orch_device_entry_t device = {0};
-            device_control_ingest_device_t ingest = {0};
+            device_control_ingest_device_t *ingest = NULL;
             orch_device_view_fill_device(&devices[i], services_degraded, &device);
             if (device.connectivity == ORCH_CONNECTIVITY_ONLINE) {
                 out->online_device_count++;
@@ -365,14 +365,16 @@ esp_err_t orchestrator_registry_get_system_summary(orch_gm_system_summary_t *out
             if (device.connectivity == ORCH_CONNECTIVITY_OFFLINE) {
                 out->issue_count++;
             }
-            if (device_control_ingest_get_device(device.client_id[0] ? device.client_id : device.device_id,
-                                                 &ingest) == ESP_OK) {
-                orch_health_t diag_health = orch_health_from_diag_level(ingest.diag_level);
-                if (ingest.has_diag && diag_health != ORCH_HEALTH_OK) {
+            ingest = orch_scratch_ingest();
+            if (ingest &&
+                device_control_ingest_get_device(device.client_id[0] ? device.client_id : device.device_id,
+                                                 ingest) == ESP_OK) {
+                orch_health_t diag_health = orch_health_from_diag_level(ingest->diag_level);
+                if (ingest->has_diag && diag_health != ORCH_HEALTH_OK) {
                     out->issue_count++;
                 }
-                if (ingest.has_result &&
-                    scenehub_command_result_is_failure(ingest.result_status)) {
+                if (ingest->has_result &&
+                    scenehub_command_result_is_failure(ingest->result_status)) {
                     out->issue_count++;
                 }
             }

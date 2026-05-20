@@ -186,7 +186,20 @@ Deferred execution order for the `gm_core` decomposition:
   paths instead of repeating wide fixed arrays in `httpd` call stacks.
 - Keep admin/storage-heavy paths clearly separated from runtime-hot rules.
 
-### P8 - Deferred Product Work
+### P8 - Node Describe Interface Size Budget
+
+- Compact node `describe_interface` payloads are already close to or above the
+  old `8 KB` transport budget once richer command schemas, LED metadata and
+  future effect catalogs are included. Current limits were raised to restore
+  operation, but this should be treated as a temporary budget extension rather
+  than a final architecture.
+- If node channel counts grow toward `16` relays / MOSFETs / IO or richer LED
+  effect metadata is added, a single monolithic `device_description` will
+  likely pressure even the raised transport sizes.
+- Detailed refactor plan is tracked in
+  `docs/NODE_DESCRIBE_INTERFACE_REFACTOR_PLAN.md`.
+
+### P9 - Deferred Product Work
 
 - Universal Node remains future work. Keep it aligned with the same Quest
   Device/device-control contract instead of creating a separate scenario model.

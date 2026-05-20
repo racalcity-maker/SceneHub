@@ -367,7 +367,7 @@ esp_err_t scenehub_control_device_describe_interface(
     scenehub_control_device_interface_info_t *out_info,
     scenehub_control_result_t *out_result)
 {
-    device_control_ingest_device_t device = {0};
+    device_control_ingest_device_t *device = NULL;
     uint64_t start_ms = (uint64_t)(esp_timer_get_time() / 1000);
     uint64_t deadline_ms = start_ms + SCENEHUB_CONTROL_INTERFACE_DISCOVERY_TIMEOUT_MS;
     esp_err_t err = scenehub_control_prepare_result("", "device_describe_interface", out_result);
@@ -381,6 +381,15 @@ esp_err_t scenehub_control_device_describe_interface(
     }
     if (!client_id || !client_id[0] || !out_info) {
         scenehub_control_fill_common_error(out_result, ESP_ERR_INVALID_ARG);
+        return ESP_OK;
+    }
+
+    device = heap_caps_calloc(1, sizeof(*device), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!device) {
+        device = heap_caps_calloc(1, sizeof(*device), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!device) {
+        scenehub_control_fill_common_error(out_result, ESP_ERR_NO_MEM);
         return ESP_OK;
     }
 
@@ -402,37 +411,39 @@ esp_err_t scenehub_control_device_describe_interface(
                                     false,
                                     "publish_failed",
                                     "Describe interface publish failed");
+        heap_caps_free(device);
         return ESP_OK;
     }
 
     while ((uint64_t)(esp_timer_get_time() / 1000) < deadline_ms) {
-        memset(&device, 0, sizeof(device));
-        if (device_control_ingest_get_device(client_id, &device) == ESP_OK &&
-            device.has_result &&
-            strcmp(device.result_request_id, out_info->request_id) == 0 &&
-            strcmp(device.result_command, "describe_interface") == 0) {
-            if (strcmp(device.result_status, "accepted") == 0) {
+        memset(device, 0, sizeof(*device));
+        if (device_control_ingest_get_device(client_id, device) == ESP_OK &&
+            device->has_result &&
+            strcmp(device->result_request_id, out_info->request_id) == 0 &&
+            strcmp(device->result_command, "describe_interface") == 0) {
+            if (strcmp(device->result_status, "accepted") == 0) {
                 vTaskDelay(pdMS_TO_TICKS(SCENEHUB_CONTROL_INTERFACE_DISCOVERY_POLL_MS));
                 continue;
             }
-            if (strcmp(device.result_status, "ok") != 0 &&
-                strcmp(device.result_status, "done") != 0) {
+            if (strcmp(device->result_status, "ok") != 0 &&
+                strcmp(device->result_status, "done") != 0) {
                 ESP_LOGW(TAG, "describe_interface device error client=%s request_id=%s status=%s code=%s",
                          client_id,
                          out_info->request_id,
-                         device.result_status,
-                         device.result_error_code);
+                         device->result_status,
+                         device->result_error_code);
                 scenehub_control_set_result(out_result,
                                             SCENEHUB_CONTROL_STATUS_REJECTED,
                                             ESP_ERR_INVALID_RESPONSE,
                                             false,
-                                            device.result_error_code[0] ? device.result_error_code
-                                                                        : "device_error",
+                                            device->result_error_code[0] ? device->result_error_code
+                                                                         : "device_error",
                                             "Device rejected interface description");
+                heap_caps_free(device);
                 return ESP_OK;
             }
             out_info->device_description =
-                scenehub_control_extract_device_description(device.result_data_json);
+                scenehub_control_extract_device_description(device->result_data_json);
             if (!out_info->device_description) {
                 scenehub_control_set_result(out_result,
                                             SCENEHUB_CONTROL_STATUS_FAILED,
@@ -440,10 +451,12 @@ esp_err_t scenehub_control_device_describe_interface(
                                             false,
                                             "missing_device_description",
                                             "Device returned no device_description");
+                heap_caps_free(device);
                 return ESP_OK;
             }
             ESP_LOGI(TAG, "describe_interface success client=%s request_id=%s", client_id, out_info->request_id);
             scenehub_control_finish_success_no_state_change(out_result);
+            heap_caps_free(device);
             return ESP_OK;
         }
         vTaskDelay(pdMS_TO_TICKS(SCENEHUB_CONTROL_INTERFACE_DISCOVERY_POLL_MS));
@@ -456,6 +469,7 @@ esp_err_t scenehub_control_device_describe_interface(
                                 false,
                                 "timeout",
                                 "Describe interface timed out");
+    heap_caps_free(device);
     return ESP_OK;
 }
 

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "node_hardware_io.h"
 #include "node_mqtt_internal.h"
 #include "node_protocol.h"
 
@@ -23,6 +24,9 @@ static char s_command_topic[NODE_MQTT_TOPIC_MAX];
 static StaticTask_t s_heartbeat_task_storage;
 static StackType_t s_heartbeat_task_stack[3072];
 static bool s_heartbeat_task_started;
+static StaticTask_t s_input_task_storage;
+static StackType_t s_input_task_stack[3072];
+static bool s_input_task_started;
 
 static void mqtt_event_handler(void *handler_args,
                                esp_event_base_t base,
@@ -75,6 +79,44 @@ static void heartbeat_task(void *arg)
     }
 }
 
+static void input_task(void *arg)
+{
+    (void)arg;
+    while (true) {
+        if (g_node_mqtt_connected && node_mqtt_publish_lock(pdMS_TO_TICKS(100))) {
+            for (uint8_t channel = 1; channel <= NODE_UNIVERSAL_IO_MAX; ++channel) {
+                bool active = false;
+                esp_err_t err = node_hardware_io_read_input(channel, &active);
+                if (err == ESP_ERR_NOT_FOUND) {
+                    continue;
+                }
+                if (err != ESP_OK) {
+                    continue;
+                }
+                bool changed = false;
+                err = node_hardware_io_observe_input_change(channel, active, &changed);
+                if (err != ESP_OK) {
+                    continue;
+                }
+                if (changed) {
+                    char args_json[64];
+                    int n = snprintf(args_json,
+                                     sizeof(args_json),
+                                     "{\"channel\":%u,\"value\":%u}",
+                                     (unsigned)channel,
+                                     active ? 1U : 0U);
+                    if (n > 0 && n < (int)sizeof(args_json)) {
+                        node_mqtt_publish_event_locked("input.changed", args_json);
+                        node_mqtt_publish_status_locked();
+                    }
+                }
+            }
+            node_mqtt_publish_unlock();
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
 esp_err_t node_mqtt_transport_start(const node_config_t *config)
 {
     if (!config || config->node_id[0] == '\0' || config->controller_host[0] == '\0') {
@@ -122,6 +164,19 @@ esp_err_t node_mqtt_transport_start(const node_config_t *config)
             return ESP_ERR_NO_MEM;
         }
         s_heartbeat_task_started = true;
+    }
+    if (!s_input_task_started) {
+        TaskHandle_t handle = xTaskCreateStatic(input_task,
+                                                "node_mqtt_in",
+                                                sizeof(s_input_task_stack) / sizeof(s_input_task_stack[0]),
+                                                NULL,
+                                                tskIDLE_PRIORITY + 1,
+                                                s_input_task_stack,
+                                                &s_input_task_storage);
+        if (!handle) {
+            return ESP_ERR_NO_MEM;
+        }
+        s_input_task_started = true;
     }
 
     ESP_LOGI(TAG, "mqtt start uri=%s client_id=%s", s_uri, client_id);

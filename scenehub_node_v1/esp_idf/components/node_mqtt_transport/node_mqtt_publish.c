@@ -105,33 +105,61 @@ esp_err_t node_mqtt_publish_result_locked(const char *request_id,
                                                   result ? result->data_json : NULL);
 }
 
+esp_err_t node_mqtt_publish_status_locked(void)
+{
+    ++s_status_seq;
+    if (node_protocol_status_topic(s_topic, sizeof(s_topic), g_node_mqtt_config.node_id) != ESP_OK) {
+        return ESP_ERR_NO_MEM;
+    }
+    int n = snprintf(s_tx_payload,
+                     sizeof(s_tx_payload),
+                     "{\"ts_ms\":%lld,\"fw_version\":\"0.1.0\",\"mode\":\"normal\","
+                     "\"state\":\"idle\",\"health\":\"ok\","
+                     "\"capabilities\":[\"heartbeat\",\"status\",\"describe_interface\",\"node.identify\",\"node.get_status\",\"relay.set\",\"relay.pulse\",\"relay.all_off\",\"mosfet.set\",\"mosfet.fade\",\"mosfet.pulse\",\"mosfet.blink\",\"mosfet.breathe\",\"mosfet.all_off\",\"mosfet.effect\",\"io.set\",\"io.all_off\",\"node.all_off\",\"led.off\",\"led.solid\",\"led.effect\",\"input.changed\"],"
+                     "\"runtime\":{\"active\":false},\"status_seq\":%u}",
+                     (long long)node_mqtt_now_ms(),
+                     (unsigned)s_status_seq);
+    if (n < 0 || n >= (int)sizeof(s_tx_payload)) {
+        return ESP_ERR_NO_MEM;
+    }
+    return publish_locked(s_topic, s_tx_payload, 0, false);
+}
+
+esp_err_t node_mqtt_publish_event_locked(const char *event_name, const char *args_json)
+{
+    if (node_protocol_event_topic(s_topic, sizeof(s_topic), g_node_mqtt_config.node_id) != ESP_OK) {
+        return ESP_ERR_NO_MEM;
+    }
+    int n = snprintf(s_tx_payload,
+                     sizeof(s_tx_payload),
+                     "{\"event\":\"%s\",\"args\":%s,\"ts_ms\":%lld}",
+                     event_name ? event_name : "",
+                     (args_json && args_json[0]) ? args_json : "{}",
+                     (long long)node_mqtt_now_ms());
+    if (n < 0 || n >= (int)sizeof(s_tx_payload)) {
+        return ESP_ERR_NO_MEM;
+    }
+    return publish_locked(s_topic, s_tx_payload, 0, false);
+}
+
 void node_mqtt_publish_heartbeat_and_status(bool include_status)
 {
     if (!g_node_mqtt_connected || !node_mqtt_publish_lock(pdMS_TO_TICKS(500))) {
         return;
     }
 
-    ++s_status_seq;
     if (node_protocol_heartbeat_topic(s_topic, sizeof(s_topic), g_node_mqtt_config.node_id) == ESP_OK) {
         snprintf(s_tx_payload,
                  sizeof(s_tx_payload),
                  "{\"ts_ms\":%lld,\"uptime_ms\":%lld,\"status_seq\":%u}",
                  (long long)node_mqtt_now_ms(),
                  (long long)(esp_timer_get_time() / 1000),
-                 (unsigned)s_status_seq);
+                 (unsigned)(s_status_seq + 1U));
         publish_locked(s_topic, s_tx_payload, 0, false);
     }
 
-    if (include_status && node_protocol_status_topic(s_topic, sizeof(s_topic), g_node_mqtt_config.node_id) == ESP_OK) {
-        snprintf(s_tx_payload,
-                 sizeof(s_tx_payload),
-                 "{\"ts_ms\":%lld,\"fw_version\":\"0.1.0\",\"mode\":\"normal\","
-                 "\"state\":\"idle\",\"health\":\"ok\","
-                 "\"capabilities\":[\"heartbeat\",\"status\",\"describe_interface\",\"node.identify\",\"node.get_status\"],"
-                 "\"runtime\":{\"active\":false},\"status_seq\":%u}",
-                 (long long)node_mqtt_now_ms(),
-                 (unsigned)s_status_seq);
-        publish_locked(s_topic, s_tx_payload, 0, false);
+    if (include_status) {
+        node_mqtt_publish_status_locked();
     }
     node_mqtt_publish_unlock();
 }

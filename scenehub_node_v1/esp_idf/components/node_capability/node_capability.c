@@ -36,6 +36,40 @@ static const char *safe_text(const char *text)
     return text ? text : "";
 }
 
+static const char *led_chipset_text(node_led_chipset_t chipset)
+{
+    switch (chipset) {
+    case NODE_LED_CHIPSET_WS2812:
+        return "ws2812";
+    case NODE_LED_CHIPSET_WS2815:
+        return "ws2815";
+    case NODE_LED_CHIPSET_SK6812:
+        return "sk6812";
+    default:
+        return "ws2812";
+    }
+}
+
+static const char *led_color_order_text(node_led_color_order_t color_order)
+{
+    switch (color_order) {
+    case NODE_LED_COLOR_ORDER_RGB:
+        return "rgb";
+    case NODE_LED_COLOR_ORDER_RBG:
+        return "rbg";
+    case NODE_LED_COLOR_ORDER_GRB:
+        return "grb";
+    case NODE_LED_COLOR_ORDER_GBR:
+        return "gbr";
+    case NODE_LED_COLOR_ORDER_BRG:
+        return "brg";
+    case NODE_LED_COLOR_ORDER_BGR:
+        return "bgr";
+    default:
+        return "grb";
+    }
+}
+
 static void append_policy(json_writer_t *w, bool manual, bool scenario, bool confirm, bool result_required)
 {
     jw_append(w,
@@ -61,11 +95,10 @@ static void append_output_resource_array(json_writer_t *w,
             continue;
         }
         jw_append(w,
-                  "%s{\"channel\":%u,\"label\":\"%s\",\"active_low\":%s}",
+                  "%s{\"channel\":%u,\"label\":\"%s\"}",
                   first ? "" : ",",
                   (unsigned)pin->channel,
-                  safe_text(pin->label),
-                  pin->active_low ? "true" : "false");
+                  safe_text(pin->label));
         first = false;
     }
     jw_append(w, "]");
@@ -81,11 +114,10 @@ static void append_io_resource_arrays(json_writer_t *w, const node_config_t *con
             continue;
         }
         jw_append(w,
-                  "%s{\"channel\":%u,\"label\":\"%s\",\"active_low\":%s,\"event\":\"input.changed\"}",
+                  "%s{\"channel\":%u,\"label\":\"%s\",\"event\":\"input.changed\"}",
                   first ? "" : ",",
                   (unsigned)pin->channel,
-                  safe_text(pin->label),
-                  pin->active_low ? "true" : "false");
+                  safe_text(pin->label));
         first = false;
     }
     jw_append(w, "],");
@@ -98,11 +130,10 @@ static void append_io_resource_arrays(json_writer_t *w, const node_config_t *con
             continue;
         }
         jw_append(w,
-                  "%s{\"channel\":%u,\"label\":\"%s\",\"active_low\":%s}",
+                  "%s{\"channel\":%u,\"label\":\"%s\"}",
                   first ? "" : ",",
                   (unsigned)pin->channel,
-                  safe_text(pin->label),
-                  pin->active_low ? "true" : "false");
+                  safe_text(pin->label));
         first = false;
     }
     jw_append(w, "]");
@@ -118,10 +149,13 @@ static void append_led_resources(json_writer_t *w, const node_config_t *config)
             continue;
         }
         jw_append(w,
-                  "%s{\"strip\":%u,\"pixels\":%u,\"label\":\"%s\"}",
+                  "%s{\"strip\":%u,\"pixels\":%u,\"chipset\":\"%s\",\"color_order\":\"%s\",\"rgbw\":%s,\"label\":\"%s\"}",
                   first ? "" : ",",
                   (unsigned)pin->channel,
                   (unsigned)pin->pixel_count,
+                  led_chipset_text(pin->chipset),
+                  led_color_order_text(pin->color_order),
+                  pin->rgbw ? "true" : "false",
                   safe_text(pin->label));
         first = false;
     }
@@ -132,27 +166,67 @@ static void append_command_templates(json_writer_t *w)
 {
     jw_append(w, "\"command_templates\":[");
 
-    jw_append(w, "{\"id\":\"relay.set\",\"label\":\"Relay set\",\"target\":\"relays\",\"command\":\"relay.set\",\"args_schema_ref\":\"output_set\",");
+    jw_append(w, "{\"id\":\"relay.set\",\"label\":\"Relay set\",\"target\":\"relays\",\"command\":\"relay.set\",\"args_schema_ref\":\"output_set\",\"default_args\":{\"on\":true},");
     append_policy(w, true, true, false, false);
     jw_append(w, "},");
 
-    jw_append(w, "{\"id\":\"relay.pulse\",\"label\":\"Relay pulse\",\"target\":\"relays\",\"command\":\"relay.pulse\",\"args_schema_ref\":\"pulse\",");
+    jw_append(w, "{\"id\":\"relay.pulse\",\"label\":\"Relay pulse\",\"target\":\"relays\",\"command\":\"relay.pulse\",\"args_schema_ref\":\"pulse\",\"default_args\":{\"duration_ms\":300},");
     append_policy(w, true, true, false, true);
     jw_append(w, "},");
 
-    jw_append(w, "{\"id\":\"mosfet.set\",\"label\":\"MOSFET set\",\"target\":\"mosfets\",\"command\":\"mosfet.set\",\"args_schema_ref\":\"output_set\",");
+    jw_append(w, "{\"id\":\"relay.all_off\",\"label\":\"Relay all off\",\"target\":\"relays\",\"command\":\"relay.all_off\",\"args_schema_ref\":\"none\",");
     append_policy(w, true, true, false, false);
     jw_append(w, "},");
 
-    jw_append(w, "{\"id\":\"mosfet.effect\",\"label\":\"MOSFET effect\",\"target\":\"mosfets\",\"command\":\"mosfet.effect\",\"args_schema_ref\":\"effect\",");
+    jw_append(w, "{\"id\":\"mosfet.set\",\"label\":\"MOSFET set\",\"target\":\"mosfets\",\"command\":\"mosfet.set\",\"args_schema_ref\":\"mosfet_set\",\"default_args\":{\"value\":255},");
     append_policy(w, true, true, false, false);
     jw_append(w, "},");
 
-    jw_append(w, "{\"id\":\"io.set\",\"label\":\"Output set\",\"target\":\"outputs\",\"command\":\"io.set\",\"args_schema_ref\":\"output_set\",");
+    jw_append(w, "{\"id\":\"mosfet.fade\",\"label\":\"MOSFET fade\",\"target\":\"mosfets\",\"command\":\"mosfet.fade\",\"args_schema_ref\":\"mosfet_fade\",\"default_args\":{\"target\":255,\"duration_ms\":500},");
     append_policy(w, true, true, false, false);
     jw_append(w, "},");
 
-    jw_append(w, "{\"id\":\"led.effect\",\"label\":\"LED effect\",\"target\":\"led_strips\",\"command\":\"led.effect\",\"args_schema_ref\":\"led_effect\",");
+    jw_append(w, "{\"id\":\"mosfet.pulse\",\"label\":\"MOSFET pulse\",\"target\":\"mosfets\",\"command\":\"mosfet.pulse\",\"args_schema_ref\":\"mosfet_pulse\",\"default_args\":{\"value\":255,\"duration_ms\":300},");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"mosfet.blink\",\"label\":\"MOSFET blink\",\"target\":\"mosfets\",\"command\":\"mosfet.blink\",\"args_schema_ref\":\"mosfet_blink\",\"default_args\":{\"value\":255,\"on_ms\":250,\"off_ms\":250,\"count\":3,\"final_value\":0},");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"mosfet.breathe\",\"label\":\"MOSFET breathe\",\"target\":\"mosfets\",\"command\":\"mosfet.breathe\",\"args_schema_ref\":\"mosfet_breathe\",\"default_args\":{\"min\":0,\"max\":255,\"fade_ms\":1000,\"hold_ms\":0,\"count\":1,\"final_value\":0},");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"mosfet.all_off\",\"label\":\"MOSFET all off\",\"target\":\"mosfets\",\"command\":\"mosfet.all_off\",\"args_schema_ref\":\"none\",");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"mosfet.effect\",\"label\":\"MOSFET effect alias\",\"target\":\"mosfets\",\"command\":\"mosfet.effect\",\"args_schema_ref\":\"mosfet_effect\",\"default_args\":{\"effect\":\"set\",\"value\":255},");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"io.set\",\"label\":\"Output set\",\"target\":\"outputs\",\"command\":\"io.set\",\"args_schema_ref\":\"output_set\",\"default_args\":{\"on\":true},");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"io.all_off\",\"label\":\"Output all off\",\"target\":\"outputs\",\"command\":\"io.all_off\",\"args_schema_ref\":\"none\",");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"node.all_off\",\"label\":\"Node all off\",\"target\":\"device\",\"command\":\"node.all_off\",\"args_schema_ref\":\"none\",");
+    append_policy(w, true, true, true, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"led.off\",\"label\":\"LED off\",\"target\":\"led_strips\",\"command\":\"led.off\",\"args_schema_ref\":\"led_strip_only\",");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"led.solid\",\"label\":\"LED solid\",\"target\":\"led_strips\",\"command\":\"led.solid\",\"args_schema_ref\":\"led_solid\",\"default_args\":{\"color\":\"#ffffff\",\"brightness\":255},");
+    append_policy(w, true, true, false, false);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"led.effect\",\"label\":\"LED effect\",\"target\":\"led_strips\",\"command\":\"led.effect\",\"args_schema_ref\":\"led_effect\",\"default_args\":{\"effect\":\"blink\",\"color\":\"#ffffff\",\"duration_ms\":250,\"step_ms\":250,\"count\":3,\"brightness\":255},");
     append_policy(w, true, true, false, false);
     jw_append(w, "}");
 
@@ -173,30 +247,86 @@ static void append_schemas(json_writer_t *w)
     jw_append(w,
               "\"schemas\":{"
               "\"output_set\":["
-              "{\"key\":\"channel\",\"label\":\"Channel\",\"type\":\"resource_channel\",\"optional\":false},"
-              "{\"key\":\"on\",\"label\":\"On\",\"type\":\"checkbox\",\"optional\":false}"
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"on\",\"type\":\"checkbox\"}"
               "],"
               "\"pulse\":["
-              "{\"key\":\"channel\",\"label\":\"Channel\",\"type\":\"resource_channel\",\"optional\":false},"
-              "{\"key\":\"duration_ms\",\"label\":\"Duration ms\",\"type\":\"number\",\"optional\":false}"
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"duration_ms\",\"type\":\"number\"}"
               "],"
-              "\"effect\":["
-              "{\"key\":\"channel\",\"label\":\"Channel\",\"type\":\"resource_channel\",\"optional\":false},"
-              "{\"key\":\"effect\",\"label\":\"Effect\",\"type\":\"select\",\"optional\":false,"
-              "\"options\":[\"set\",\"pulse\",\"blink\",\"fade_in\",\"fade_out\",\"breathe\"]},"
-              "{\"key\":\"duration_ms\",\"label\":\"Duration ms\",\"type\":\"number\",\"optional\":true},"
-              "{\"key\":\"repeat\",\"label\":\"Repeat\",\"type\":\"number\",\"optional\":true}"
+              "\"mosfet_set\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"value\",\"type\":\"number\"}"
+              "],"
+              "\"mosfet_fade\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"target\",\"type\":\"number\"},"
+              "{\"key\":\"duration_ms\",\"type\":\"number\"}"
+              "],"
+              "\"mosfet_pulse\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"value\",\"type\":\"number\"},"
+              "{\"key\":\"duration_ms\",\"type\":\"number\"}"
+              "],"
+              "\"mosfet_blink\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"value\",\"type\":\"number\"},"
+              "{\"key\":\"on_ms\",\"type\":\"number\"},"
+              "{\"key\":\"off_ms\",\"type\":\"number\"},"
+              "{\"key\":\"count\",\"type\":\"number\"},"
+              "{\"key\":\"final_value\",\"type\":\"number\",\"optional\":true}"
+              "],"
+              "\"mosfet_breathe\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"min\",\"type\":\"number\"},"
+              "{\"key\":\"max\",\"type\":\"number\"},"
+              "{\"key\":\"fade_ms\",\"type\":\"number\"},"
+              "{\"key\":\"hold_ms\",\"type\":\"number\"},"
+              "{\"key\":\"count\",\"type\":\"number\"},"
+              "{\"key\":\"final_value\",\"type\":\"number\",\"optional\":true}"
+              "],"
+              "\"mosfet_effect\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"effect\",\"type\":\"select\","
+              "\"options\":[\"set\",\"pulse\",\"blink\",\"fade\",\"fade_in\",\"fade_out\",\"breathe\"]},"
+              "{\"key\":\"value\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"target\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"min\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"max\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"final_value\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"duration_ms\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"repeat\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"on_ms\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"off_ms\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"fade_ms\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"hold_ms\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"count\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"on\",\"type\":\"checkbox\",\"optional\":true}"
+              "],"
+              "\"led_strip_only\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"}"
+              "],"
+              "\"led_solid\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"color\",\"type\":\"text\"},"
+              "{\"key\":\"brightness\",\"type\":\"number\",\"optional\":true}"
               "],"
               "\"led_effect\":["
-              "{\"key\":\"strip\",\"label\":\"Strip\",\"type\":\"resource_channel\",\"optional\":false},"
-              "{\"key\":\"effect\",\"label\":\"Effect\",\"type\":\"select\",\"optional\":false,"
-              "\"options\":[\"solid\",\"blink\",\"fade\",\"breathe\",\"rainbow\"]},"
-              "{\"key\":\"duration_ms\",\"label\":\"Duration ms\",\"type\":\"number\",\"optional\":true},"
-              "{\"key\":\"repeat\",\"label\":\"Repeat\",\"type\":\"number\",\"optional\":true}"
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"effect\",\"type\":\"select\","
+              "\"options\":[\"blink\",\"breathe\",\"rainbow\",\"color_wipe\",\"scanner\",\"theater\",\"strobe\"]},"
+              "{\"key\":\"color\",\"type\":\"text\",\"optional\":true},"
+              "{\"key\":\"color2\",\"type\":\"text\",\"optional\":true},"
+              "{\"key\":\"brightness\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"duration_ms\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"step_ms\",\"type\":\"number\",\"optional\":true},"
+              "{\"key\":\"count\",\"type\":\"number\",\"optional\":true}"
               "],"
               "\"input_event\":["
-              "{\"key\":\"channel\",\"label\":\"Channel\",\"type\":\"resource_channel\",\"optional\":false},"
-              "{\"key\":\"value\",\"label\":\"Value\",\"type\":\"number\",\"optional\":true}"
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"value\",\"type\":\"number\",\"optional\":true}"
+              "],"
+              "\"none\":["
               "]"
               "}");
 }
@@ -216,8 +346,7 @@ esp_err_t node_capability_write_device_description(const node_config_t *config,
               "{\"manifest_version\":2,\"format\":\"compact_resources\","
               "\"node_kind\":\"scenehub_node\","
               "\"capability_contract\":\"scenehub.node.compact.v1\","
-              "\"compatibility\":{\"flat_commands\":false},"
-              "\"device\":{\"id\":\"%s\",\"name\":\"%s\",\"kind\":\"scenehub_node\",\"fw_version\":\"0.1.0\"},"
+              "\"device\":{\"id\":\"%s\",\"name\":\"%s\",\"kind\":\"scenehub_node\"},"
               "\"resources\":{",
               safe_text(config->node_id),
               safe_text(config->node_name));

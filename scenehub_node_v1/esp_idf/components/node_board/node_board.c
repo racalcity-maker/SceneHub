@@ -112,6 +112,9 @@ static void apply_led(node_config_t *config, size_t idx, int gpio, int pixels, c
     config->led_strips[idx].enabled = true;
     config->led_strips[idx].gpio = gpio;
     config->led_strips[idx].pixel_count = pixels > 0 ? (uint16_t)pixels : 30;
+    config->led_strips[idx].chipset = NODE_LED_CHIPSET_WS2812;
+    config->led_strips[idx].color_order = NODE_LED_COLOR_ORDER_GRB;
+    config->led_strips[idx].rgbw = false;
     board_copy_label(config->led_strips[idx].label, sizeof(config->led_strips[idx].label), label);
 }
 #endif
@@ -224,6 +227,16 @@ static bool sanitize_output_pins(node_output_pin_config_t *pins, size_t count, b
     return changed;
 }
 
+static bool node_board_led_chipset_valid(node_led_chipset_t chipset)
+{
+    return chipset >= NODE_LED_CHIPSET_WS2812 && chipset <= NODE_LED_CHIPSET_SK6812;
+}
+
+static bool node_board_led_color_order_valid(node_led_color_order_t color_order)
+{
+    return color_order >= NODE_LED_COLOR_ORDER_RGB && color_order <= NODE_LED_COLOR_ORDER_BGR;
+}
+
 bool node_board_sanitize_pin_config(node_config_t *config)
 {
     if (!config) {
@@ -275,6 +288,14 @@ bool node_board_sanitize_pin_config(node_config_t *config)
         }
         if (pin->pixel_count == 0) {
             pin->pixel_count = 30;
+            changed = true;
+        }
+        if (!node_board_led_chipset_valid(pin->chipset)) {
+            pin->chipset = NODE_LED_CHIPSET_WS2812;
+            changed = true;
+        }
+        if (!node_board_led_color_order_valid(pin->color_order)) {
+            pin->color_order = NODE_LED_COLOR_ORDER_GRB;
             changed = true;
         }
     }

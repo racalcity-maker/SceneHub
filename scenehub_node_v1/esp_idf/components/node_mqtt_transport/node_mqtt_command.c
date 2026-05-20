@@ -49,6 +49,9 @@ void node_mqtt_handle_command_payload(const char *payload)
 
     if (node_mqtt_publish_lock(pdMS_TO_TICKS(500))) {
         node_mqtt_publish_result_locked(request_id, command_name, &s_result);
+        if (strcmp(s_result.status, "done") == 0) {
+            node_mqtt_publish_status_locked();
+        }
         node_mqtt_duplicate_remember(request_id, command_name, &s_result);
         node_mqtt_publish_unlock();
     }

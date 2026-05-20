@@ -15,6 +15,7 @@
 #include "web_ui_utils.h"
 
 #define GM_QUEST_DEVICE_BODY_MAX_BYTES (160 * 1024)
+#define GM_QUEST_DEVICE_SAVE_BODY_MAX_BYTES (32 * 1024)
 #define GM_QUEST_DEVICE_LIST_MAX (QUEST_DEVICE_MAX_DEVICES + 4)
 #define GM_QUEST_DEVICE_ISSUES_MAX 8
 
@@ -285,7 +286,7 @@ esp_err_t gm_quest_device_save_handler(httpd_req_t *req)
 {
     cJSON *root = NULL;
     cJSON *device_json = NULL;
-    esp_err_t err = gm_qd_read_json(req, 8192, &root);
+    esp_err_t err = gm_qd_read_json(req, GM_QUEST_DEVICE_SAVE_BODY_MAX_BYTES, &root);
     if (err != ESP_OK) {
         return gm_qd_send_error(req, err);
     }

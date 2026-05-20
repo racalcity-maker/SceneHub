@@ -15,6 +15,21 @@ typedef enum {
     NODE_PIN_LED_STRIP,
 } node_pin_role_t;
 
+typedef enum {
+    NODE_LED_CHIPSET_WS2812 = 0,
+    NODE_LED_CHIPSET_WS2815,
+    NODE_LED_CHIPSET_SK6812,
+} node_led_chipset_t;
+
+typedef enum {
+    NODE_LED_COLOR_ORDER_RGB = 0,
+    NODE_LED_COLOR_ORDER_RBG,
+    NODE_LED_COLOR_ORDER_GRB,
+    NODE_LED_COLOR_ORDER_GBR,
+    NODE_LED_COLOR_ORDER_BRG,
+    NODE_LED_COLOR_ORDER_BGR,
+} node_led_color_order_t;
+
 typedef struct {
     bool enabled;
     uint8_t channel;
@@ -37,6 +52,9 @@ typedef struct {
     uint8_t channel;
     int gpio;
     uint16_t pixel_count;
+    node_led_chipset_t chipset;
+    node_led_color_order_t color_order;
+    bool rgbw;
     char label[24];
 } node_led_strip_config_t;
 

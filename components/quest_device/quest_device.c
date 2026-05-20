@@ -1,6 +1,8 @@
 #include "quest_device.h"
 #include "quest_device_internal.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -138,6 +140,129 @@ static bool qd_compact_manifest_root_valid(const cJSON *root)
            strcmp(qd_json_string(root, "capability_contract"), "scenehub.node.compact.v1") == 0;
 }
 
+static const char *qd_compact_resource_key(const char *source)
+{
+    if (!source || !source[0]) {
+        return NULL;
+    }
+    return strcmp(source, "led_strips") == 0 ? "strip" : "channel";
+}
+
+static const cJSON *qd_compact_resources_array(const cJSON *root, const char *source)
+{
+    const cJSON *resources = NULL;
+    if (!root || !source || !source[0]) {
+        return NULL;
+    }
+    resources = cJSON_GetObjectItemCaseSensitive(root, "resources");
+    if (!cJSON_IsObject(resources)) {
+        return NULL;
+    }
+    return cJSON_GetObjectItemCaseSensitive(resources, source);
+}
+
+static bool qd_compact_resource_item_matches(const cJSON *item,
+                                             const char *resource_key,
+                                             const char *resource_id)
+{
+    const cJSON *value = NULL;
+    char buffer[16];
+    if (!cJSON_IsObject(item) || !resource_key || !resource_id || !resource_id[0]) {
+        return false;
+    }
+    value = cJSON_GetObjectItemCaseSensitive(item, resource_key);
+    if (cJSON_IsString(value) && value->valuestring) {
+        return strcmp(value->valuestring, resource_id) == 0;
+    }
+    if (cJSON_IsNumber(value)) {
+        snprintf(buffer, sizeof(buffer), "%d", value->valueint);
+        return strcmp(buffer, resource_id) == 0;
+    }
+    return false;
+}
+
+static const cJSON *qd_compact_find_resource_item(const cJSON *root,
+                                                  const char *source,
+                                                  const char *event_name,
+                                                  const char *resource_id)
+{
+    const char *resource_key = qd_compact_resource_key(source);
+    const cJSON *resources = qd_compact_resources_array(root, source);
+    int count = 0;
+    if (!resource_key || !cJSON_IsArray(resources) || !event_name || !event_name[0] ||
+        !resource_id || !resource_id[0]) {
+        return NULL;
+    }
+    count = cJSON_GetArraySize(resources);
+    for (int i = 0; i < count; ++i) {
+        const cJSON *item = cJSON_GetArrayItem(resources, i);
+        if (strcmp(qd_json_string(item, "event"), event_name) == 0 &&
+            qd_compact_resource_item_matches(item, resource_key, resource_id)) {
+            return item;
+        }
+    }
+    return NULL;
+}
+
+static esp_err_t qd_compact_build_match_json(const cJSON *resource_item,
+                                             const char *source,
+                                             char *dst,
+                                             size_t dst_len)
+{
+    const char *resource_key = qd_compact_resource_key(source);
+    const cJSON *value = NULL;
+    cJSON *match = NULL;
+    char *json = NULL;
+
+    if (!resource_item || !resource_key || !dst || dst_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    value = cJSON_GetObjectItemCaseSensitive(resource_item, resource_key);
+    if (!cJSON_IsString(value) && !cJSON_IsNumber(value)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    match = cJSON_CreateObject();
+    if (!match) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (cJSON_IsNumber(value)) {
+        cJSON_AddNumberToObject(match, resource_key, value->valuedouble);
+    } else {
+        cJSON_AddStringToObject(match, resource_key, value->valuestring ? value->valuestring : "");
+    }
+    json = cJSON_PrintUnformatted(match);
+    cJSON_Delete(match);
+    if (!json) {
+        return ESP_ERR_NO_MEM;
+    }
+    qd_copy(dst, dst_len, json);
+    free(json);
+    return dst[0] ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t qd_compact_copy_match_object(const cJSON *item,
+                                              char *dst,
+                                              size_t dst_len)
+{
+    const cJSON *match = NULL;
+    char *json = NULL;
+    if (!item || !dst || dst_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    dst[0] = '\0';
+    match = cJSON_GetObjectItemCaseSensitive(item, "match");
+    if (!cJSON_IsObject(match)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    json = cJSON_PrintUnformatted(match);
+    if (!json) {
+        return ESP_ERR_NO_MEM;
+    }
+    qd_copy(dst, dst_len, json);
+    free(json);
+    return dst[0] ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
 static esp_err_t qd_compact_manifest_get_event(const char *device_description_json,
                                                const char *event_id,
                                                quest_device_event_t *out)
@@ -146,6 +271,9 @@ static esp_err_t qd_compact_manifest_get_event(const char *device_description_js
     const cJSON *events = NULL;
     int event_count = 0;
     esp_err_t err = ESP_ERR_NOT_FOUND;
+    const char *resource_sep = NULL;
+    char base_event_id[QUEST_DEVICE_EVENT_ID_MAX_LEN];
+    char resource_id[16];
 
     if (!device_description_json || !device_description_json[0] || !event_id || !out) {
         return ESP_ERR_NOT_FOUND;
@@ -163,20 +291,72 @@ static esp_err_t qd_compact_manifest_get_event(const char *device_description_js
         cJSON_Delete(root);
         return ESP_ERR_NOT_FOUND;
     }
+    resource_sep = strchr(event_id, '@');
+    base_event_id[0] = '\0';
+    resource_id[0] = '\0';
+    if (resource_sep && resource_sep != event_id && resource_sep[1]) {
+        size_t base_len = (size_t)(resource_sep - event_id);
+        if (base_len >= sizeof(base_event_id)) {
+            base_len = sizeof(base_event_id) - 1;
+        }
+        memcpy(base_event_id, event_id, base_len);
+        base_event_id[base_len] = '\0';
+        qd_copy(resource_id, sizeof(resource_id), resource_sep + 1);
+    }
     event_count = cJSON_GetArraySize(events);
     for (int i = 0; i < event_count; ++i) {
         const cJSON *item = cJSON_GetArrayItem(events, i);
+        const cJSON *resource_item = NULL;
         const char *id = qd_json_string(item, "id");
         const char *event_name = qd_json_string(item, "event");
         const char *label = qd_json_string(item, "label");
         const char *capability = qd_json_string(item, "capability");
         const char *source = qd_json_string(item, "source");
-        if (!cJSON_IsObject(item) || strcmp(id, event_id) != 0 || !event_name[0]) {
+        bool exact_match = false;
+        bool resource_match = false;
+
+        if (!cJSON_IsObject(item) || !event_name[0]) {
+            continue;
+        }
+        exact_match = strcmp(id, event_id) == 0;
+        resource_match = base_event_id[0] &&
+                         strcmp(id, base_event_id) == 0 &&
+                         source[0] &&
+                         (resource_item = qd_compact_find_resource_item(root,
+                                                                        source,
+                                                                        event_name,
+                                                                        resource_id)) != NULL;
+        if (!exact_match && !resource_match) {
             continue;
         }
         memset(out, 0, sizeof(*out));
-        qd_copy(out->id, sizeof(out->id), id);
-        qd_copy(out->label, sizeof(out->label), label[0] ? label : id);
+        qd_copy(out->id, sizeof(out->id), resource_match ? event_id : id);
+        if (resource_match) {
+            const char *resource_label = qd_json_string(resource_item, "label");
+            char combined_label[QUEST_DEVICE_NAME_MAX_LEN];
+            combined_label[0] = '\0';
+            if (resource_label[0] && label[0]) {
+                snprintf(combined_label,
+                         sizeof(combined_label),
+                         "%s - %s",
+                         resource_label,
+                         label);
+            } else {
+                qd_copy(combined_label,
+                        sizeof(combined_label),
+                        resource_label[0] ? resource_label : (label[0] ? label : event_id));
+            }
+            qd_copy(out->label, sizeof(out->label), combined_label);
+            (void)qd_compact_build_match_json(resource_item,
+                                              source,
+                                              out->match_json,
+                                              sizeof(out->match_json));
+        } else {
+            qd_copy(out->label, sizeof(out->label), label[0] ? label : id);
+            (void)qd_compact_copy_match_object(item,
+                                               out->match_json,
+                                               sizeof(out->match_json));
+        }
         if (capability[0]) {
             qd_copy(out->capability, sizeof(out->capability), capability);
         } else if (source[0]) {

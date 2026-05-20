@@ -2751,6 +2751,18 @@ const resources=manifest&&manifest.resources&&typeof manifest.resources==='objec
 return (Array.isArray(resources[target])?resources[target]:[]).map(item=>({id:compactResourceId(item,target),name:compactResourceLabel(item,target)})).filter(item=>item.id);
 }
 
+function compactEventMatchKey(target){
+return target==='led_strips'?'strip':'channel';
+}
+
+function compactEventMatchForResource(item,target){
+const key=compactEventMatchKey(target);
+const raw=item&&item[key]!==undefined&&item[key]!==null?item[key]:'';
+if(raw==='')return null;
+const num=Number(raw);
+return {[key]:Number.isFinite(num)?num:raw};
+}
+
 function compactSchemaForTemplate(manifest,template){
 const schemas=manifest&&manifest.schemas&&typeof manifest.schemas==='object'?manifest.schemas:{};
 const ref=template&&template.args_schema_ref||'';
@@ -2802,15 +2814,35 @@ args_schema:compactSchemaForTemplate(manifest,template)
 function compactEventsForDevice(device){
 const manifest=compactManifest(device);
 if(!manifest)return Array.isArray(device&&device.events)?device.events:[];
-return (Array.isArray(manifest.event_templates)?manifest.event_templates:[]).map(template=>{
+const resources=manifest&&manifest.resources&&typeof manifest.resources==='object'?manifest.resources:{};
+return (Array.isArray(manifest.event_templates)?manifest.event_templates:[]).flatMap(template=>{
 const eventName=String(template&&template.event||'');
+const baseId=String(template&&template.id||eventName);
+const label=String(template&&template.label||template&&template.id||eventName);
+const capability=String(template&&template.capability||template&&template.source||eventName.split('.')[0]||'node');
+const source=String(template&&template.source||'');
+const resourceItems=(Array.isArray(resources[source])?resources[source]:[]).filter(item=>String(item&&item.event||'').trim()===eventName);
+const expanded=resourceItems.map(item=>{
+const resourceId=compactResourceId(item,source);
+const match=compactEventMatchForResource(item,source);
+if(!resourceId||!match)return null;
 return {
-id:String(template&&template.id||eventName),
-label:String(template&&template.label||template&&template.id||eventName),
-capability:String(template&&template.capability||template&&template.source||eventName.split('.')[0]||'node'),
+id:`${baseId}@${resourceId}`,
+label:`${compactResourceLabel(item,source)} - ${label}`,
+capability,
 event:eventName,
-source:template&&template.source||''
+source,
+match
 };
+}).filter(Boolean);
+if(expanded.length)return expanded;
+return [{
+id:baseId,
+label,
+capability,
+event:eventName,
+source
+}];
 }).filter(event=>event.id&&event.event);
 }
 

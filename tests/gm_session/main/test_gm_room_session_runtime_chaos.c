@@ -257,6 +257,34 @@ static void test_wait_device_event_survives_status_and_runtime_spam(void)
     TEST_ASSERT_TRUE(chaos_find_flag(&s_session, "advanced") >= 0);
 }
 
+static void test_wait_device_event_does_not_match_other_action_from_same_device(void)
+{
+    room_scenario_step_t *step = NULL;
+
+    chaos_bootstrap();
+    chaos_add_room("room_a");
+    chaos_add_device();
+    chaos_init_scenario("scenario_wait_exact_action", "room_a", "Wait exact action");
+
+    step = chaos_add_step("wait_event", "Wait event", ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT);
+    chaos_configure_wait_event(&step->data.wait_device_event, "door_opened");
+    step = chaos_add_step("flag", "Flag", ROOM_SCENARIO_STEP_SET_FLAG);
+    chaos_configure_set_flag(step, "advanced", true);
+
+    chaos_add_and_start_selected_scenario("room_a");
+
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, chaos_post_device_event_expect("drawer_opened"));
+    chaos_get_session("room_a");
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_session.branch_runtimes[0].scenario_state);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT, s_session.branch_runtimes[0].wait_type);
+    TEST_ASSERT_EQUAL(-1, chaos_find_flag(&s_session, "advanced"));
+
+    TEST_ASSERT_EQUAL(ESP_OK, chaos_post_device_event_expect("door_opened"));
+    chaos_get_session("room_a");
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_DONE, s_session.branch_runtimes[0].scenario_state);
+    TEST_ASSERT_TRUE(chaos_find_flag(&s_session, "advanced") >= 0);
+}
+
 static void test_wait_all_device_events_accepts_shuffled_order_and_duplicates(void)
 {
     room_scenario_step_t *step = NULL;
@@ -380,6 +408,7 @@ static void test_late_command_result_after_timeout_is_ignored(void)
 void register_gm_room_session_runtime_chaos_tests(void)
 {
     RUN_TEST(test_wait_device_event_survives_status_and_runtime_spam);
+    RUN_TEST(test_wait_device_event_does_not_match_other_action_from_same_device);
     RUN_TEST(test_wait_all_device_events_accepts_shuffled_order_and_duplicates);
     RUN_TEST(test_duplicate_command_result_after_success_is_ignored);
     RUN_TEST(test_late_command_result_after_timeout_is_ignored);

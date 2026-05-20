@@ -28,7 +28,7 @@ typedef struct {
     char result_command[DEVICE_CONTROL_INGEST_COMMAND_MAX_LEN];
     char result_status[DEVICE_CONTROL_INGEST_RESULT_STATUS_MAX_LEN];
     char event_name[DEVICE_CONTROL_INGEST_COMMAND_MAX_LEN];
-    char event_args_json[QUEST_PAYLOAD_MAX_LEN];
+    char event_args_json[DEVICE_CONTROL_INGEST_EVENT_ARGS_JSON_MAX_LEN];
 } dci_event_snapshot_t;
 
 extern dci_slot_t **dci_s_slots;

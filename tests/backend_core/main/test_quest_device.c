@@ -289,6 +289,69 @@ static void test_quest_device_compact_manifest_event_templates_are_resolvable(vo
     TEST_ASSERT_EQUAL_STRING("UID sequence valid", event.label);
     TEST_ASSERT_EQUAL_STRING("inputs", event.capability);
     TEST_ASSERT_EQUAL_STRING("uid.sequence_valid", event.event);
+    TEST_ASSERT_EQUAL_STRING("", event.match_json);
+    cJSON_Delete(root);
+}
+
+static void test_quest_device_compact_manifest_exact_event_preserves_template_match(void)
+{
+    cJSON *root = cJSON_Parse("{\"id\":\"node\",\"client_id\":\"relay_room_2\",\"name\":\"Relay Room 2\",\"enabled\":true,"
+                              "\"device_description\":{"
+                              "\"manifest_version\":2,\"format\":\"compact_resources\","
+                              "\"node_kind\":\"relay_node\","
+                              "\"capability_contract\":\"scenehub.node.compact.v1\","
+                              "\"resources\":{\"relays\":[],\"mosfets\":[],\"inputs\":[],\"outputs\":[],\"led_strips\":[]},"
+                              "\"command_templates\":[],"
+                              "\"event_templates\":[{\"id\":\"drawer_1_opened\","
+                              "\"label\":\"Drawer 1 opened\",\"source\":\"inputs\","
+                              "\"event\":\"input.pressed\",\"args_schema_ref\":\"input_event\","
+                              "\"match\":{\"channel\":2}}],"
+                              "\"schemas\":{\"input_event\":[]}}}");
+    quest_device_t device = {0};
+    quest_device_event_t event = {0};
+
+    qd_test_bootstrap();
+
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_from_json(root, &device));
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&device));
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_event("node", "drawer_1_opened", &event));
+    TEST_ASSERT_EQUAL_STRING("drawer_1_opened", event.id);
+    TEST_ASSERT_EQUAL_STRING("Drawer 1 opened", event.label);
+    TEST_ASSERT_EQUAL_STRING("input.pressed", event.event);
+    TEST_ASSERT_EQUAL_STRING("{\"channel\":2}", event.match_json);
+    cJSON_Delete(root);
+}
+
+static void test_quest_device_compact_manifest_resource_events_resolve_match_json(void)
+{
+    cJSON *root = cJSON_Parse("{\"id\":\"node\",\"client_id\":\"relay_room_2\",\"name\":\"Relay Room 2\",\"enabled\":true,"
+                              "\"device_description\":{"
+                              "\"manifest_version\":2,\"format\":\"compact_resources\","
+                              "\"node_kind\":\"universal_node\","
+                              "\"capability_contract\":\"scenehub.node.compact.v1\","
+                              "\"resources\":{\"relays\":[],\"mosfets\":[],"
+                              "\"inputs\":[{\"channel\":1,\"label\":\"Drawer 1\"},{\"channel\":2,\"label\":\"Drawer 2\"}],"
+                              "\"outputs\":[],\"led_strips\":[]},"
+                              "\"command_templates\":[],"
+                              "\"event_templates\":[{\"id\":\"input.changed\","
+                              "\"label\":\"Input changed\",\"source\":\"inputs\","
+                              "\"event\":\"input.changed\",\"args_schema_ref\":\"input_event\"}],"
+                              "\"schemas\":{\"input_event\":[]}}}");
+    quest_device_t device = {0};
+    quest_device_event_t event = {0};
+
+    qd_test_bootstrap();
+
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_from_json(root, &device));
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_upsert(&device));
+    TEST_ASSERT_EQUAL(ESP_OK, quest_device_get_event("node", "input.changed@2", &event));
+    TEST_ASSERT_EQUAL_STRING("input.changed@2", event.id);
+    TEST_ASSERT_EQUAL_STRING("Drawer 2 - Input changed", event.label);
+    TEST_ASSERT_EQUAL_STRING("inputs", event.capability);
+    TEST_ASSERT_EQUAL_STRING("input.changed", event.event);
+    TEST_ASSERT_EQUAL_STRING("{\"channel\":2}", event.match_json);
     cJSON_Delete(root);
 }
 
@@ -304,4 +367,6 @@ void register_quest_device_tests(void)
     RUN_TEST(test_quest_device_json_rejects_legacy_topic_payload_command);
     RUN_TEST(test_quest_device_json_accepts_command_event_contract);
     RUN_TEST(test_quest_device_compact_manifest_event_templates_are_resolvable);
+    RUN_TEST(test_quest_device_compact_manifest_exact_event_preserves_template_match);
+    RUN_TEST(test_quest_device_compact_manifest_resource_events_resolve_match_json);
 }

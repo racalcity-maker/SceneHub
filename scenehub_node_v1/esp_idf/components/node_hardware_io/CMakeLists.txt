@@ -7,5 +7,5 @@ idf_component_register(
         "led/node_hw_led.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
-    REQUIRES driver node_config node_board
+    REQUIRES driver esp_timer node_config node_board led_strip
 )

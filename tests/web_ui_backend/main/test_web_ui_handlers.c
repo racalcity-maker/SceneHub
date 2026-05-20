@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 
 #include "unity.h"
@@ -1228,6 +1229,102 @@ static void test_web_ui_device_handlers_reject_bad_body_before_persistence(void)
     TEST_ASSERT_EQUAL_STRING("invalid request", s_http_response);
 }
 
+static void test_web_ui_device_save_accepts_large_compact_manifest_body(void)
+{
+    cJSON *root = NULL;
+    cJSON *manifest = NULL;
+    cJSON *device = NULL;
+    cJSON *resources = NULL;
+    cJSON *commands = NULL;
+    cJSON *events = NULL;
+    cJSON *schemas = NULL;
+    cJSON *schema = NULL;
+    cJSON *saved = NULL;
+    char *body = NULL;
+
+    handler_bootstrap();
+
+    root = cJSON_CreateObject();
+    TEST_ASSERT_NOT_NULL(root);
+    cJSON_AddStringToObject(root, "id", "scenehub_node_s3");
+    cJSON_AddStringToObject(root, "client_id", "scenehub_node_s3");
+    cJSON_AddStringToObject(root, "name", "SceneHub Node S3");
+    cJSON_AddBoolToObject(root, "enabled", true);
+
+    manifest = cJSON_AddObjectToObject(root, "device_description");
+    TEST_ASSERT_NOT_NULL(manifest);
+    cJSON_AddNumberToObject(manifest, "manifest_version", 2);
+    cJSON_AddStringToObject(manifest, "format", "compact_resources");
+    cJSON_AddStringToObject(manifest, "node_kind", "scenehub_node");
+    cJSON_AddStringToObject(manifest, "capability_contract", "scenehub.node.compact.v1");
+
+    device = cJSON_AddObjectToObject(manifest, "device");
+    TEST_ASSERT_NOT_NULL(device);
+    cJSON_AddStringToObject(device, "id", "scenehub_node_s3");
+    cJSON_AddStringToObject(device, "name", "SceneHub Node S3");
+    cJSON_AddStringToObject(device, "kind", "scenehub_node");
+
+    resources = cJSON_AddObjectToObject(manifest, "resources");
+    TEST_ASSERT_NOT_NULL(resources);
+    cJSON_AddItemToObject(resources, "relays", cJSON_CreateArray());
+    cJSON_AddItemToArray(cJSON_GetObjectItem(resources, "relays"), cJSON_CreateObject());
+    cJSON_AddNumberToObject(cJSON_GetArrayItem(cJSON_GetObjectItem(resources, "relays"), 0), "channel", 1);
+    cJSON_AddStringToObject(cJSON_GetArrayItem(cJSON_GetObjectItem(resources, "relays"), 0), "label", "Relay 1");
+    cJSON_AddItemToObject(resources, "mosfets", cJSON_CreateArray());
+    cJSON_AddItemToObject(resources, "inputs", cJSON_CreateArray());
+    cJSON_AddItemToObject(resources, "outputs", cJSON_CreateArray());
+    cJSON_AddItemToObject(resources, "led_strips", cJSON_CreateArray());
+
+    commands = cJSON_AddArrayToObject(manifest, "command_templates");
+    TEST_ASSERT_NOT_NULL(commands);
+    {
+        cJSON *cmd = cJSON_CreateObject();
+        TEST_ASSERT_NOT_NULL(cmd);
+        cJSON_AddStringToObject(cmd, "id", "relay.set");
+        cJSON_AddStringToObject(cmd, "label", "Relay set");
+        cJSON_AddStringToObject(cmd, "target", "relays");
+        cJSON_AddStringToObject(cmd, "command", "relay.set");
+        cJSON_AddStringToObject(cmd, "args_schema_ref", "big");
+        cJSON_AddItemToArray(commands, cmd);
+    }
+
+    events = cJSON_AddArrayToObject(manifest, "event_templates");
+    TEST_ASSERT_NOT_NULL(events);
+    schemas = cJSON_AddObjectToObject(manifest, "schemas");
+    TEST_ASSERT_NOT_NULL(schemas);
+    schema = cJSON_AddArrayToObject(schemas, "big");
+    TEST_ASSERT_NOT_NULL(schema);
+    for (int i = 0; i < 220; ++i) {
+        char key[32];
+        cJSON *param = cJSON_CreateObject();
+        TEST_ASSERT_NOT_NULL(param);
+        snprintf(key, sizeof(key), "param_%03d", i);
+        cJSON_AddStringToObject(param, "key", key);
+        cJSON_AddStringToObject(param, "type", "text");
+        cJSON_AddItemToArray(schema, param);
+    }
+
+    cJSON_AddItemToObject(root, "commands", cJSON_CreateArray());
+    cJSON_AddItemToObject(root, "events", cJSON_CreateArray());
+
+    body = cJSON_PrintUnformatted(root);
+    TEST_ASSERT_NOT_NULL(body);
+    TEST_ASSERT_TRUE(strlen(body) > 8192);
+
+    http_test_reset_request(NULL, body);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_quest_device_save_handler(&s_http_req));
+    TEST_ASSERT_EQUAL_STRING("application/json", s_http_type);
+    saved = http_test_parse_response();
+    TEST_ASSERT_TRUE(cJSON_IsTrue(cJSON_GetObjectItem(saved, "ok")));
+    TEST_ASSERT_TRUE(cJSON_IsObject(cJSON_GetObjectItem(saved, "device")));
+    TEST_ASSERT_EQUAL_STRING("scenehub_node_s3",
+                             cJSON_GetObjectItem(cJSON_GetObjectItem(saved, "device"), "id")->valuestring);
+
+    cJSON_Delete(saved);
+    cJSON_free(body);
+    cJSON_Delete(root);
+}
+
 void register_web_ui_handler_tests(void)
 {
     RUN_TEST(test_web_ui_handler_timer_start_validates_query_and_returns_accepted_json);
@@ -1254,5 +1351,6 @@ void register_web_ui_handler_tests(void)
     RUN_TEST(test_web_ui_scenario_editor_catalog_uses_backend_device_list_path);
     RUN_TEST(test_web_ui_store_handlers_use_shared_operation_envelopes);
     RUN_TEST(test_web_ui_device_handlers_reject_bad_body_before_persistence);
+    RUN_TEST(test_web_ui_device_save_accepts_large_compact_manifest_body);
     web_ui_http_reset_adapter_for_test();
 }

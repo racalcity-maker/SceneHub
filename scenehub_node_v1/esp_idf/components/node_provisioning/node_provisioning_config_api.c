@@ -12,8 +12,8 @@
 #include "node_limits.h"
 
 static const char *TAG = "node_prov_api";
-static char s_config_json[4096];
-static char s_post_body[4097];
+static char s_config_json[6144];
+static char s_post_body[6145];
 static StaticSemaphore_t s_post_body_mutex_storage;
 static SemaphoreHandle_t s_post_body_mutex;
 
@@ -29,6 +29,40 @@ static void unlock_post_body(void)
 {
     if (s_post_body_mutex) {
         xSemaphoreGive(s_post_body_mutex);
+    }
+}
+
+static const char *led_chipset_text(node_led_chipset_t chipset)
+{
+    switch (chipset) {
+    case NODE_LED_CHIPSET_WS2812:
+        return "ws2812";
+    case NODE_LED_CHIPSET_WS2815:
+        return "ws2815";
+    case NODE_LED_CHIPSET_SK6812:
+        return "sk6812";
+    default:
+        return "ws2812";
+    }
+}
+
+static const char *led_color_order_text(node_led_color_order_t color_order)
+{
+    switch (color_order) {
+    case NODE_LED_COLOR_ORDER_RGB:
+        return "rgb";
+    case NODE_LED_COLOR_ORDER_RBG:
+        return "rbg";
+    case NODE_LED_COLOR_ORDER_GRB:
+        return "grb";
+    case NODE_LED_COLOR_ORDER_GBR:
+        return "gbr";
+    case NODE_LED_COLOR_ORDER_BRG:
+        return "brg";
+    case NODE_LED_COLOR_ORDER_BGR:
+        return "bgr";
+    default:
+        return "grb";
     }
 }
 
@@ -113,11 +147,14 @@ esp_err_t node_provisioning_config_get(httpd_req_t *req)
     APPEND_JSON("],\"led_strips\":[");
     for (size_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         const node_led_strip_config_t *p = &g_node_prov.config.led_strips[i];
-        APPEND_JSON("%s{\"enabled\":%s,\"gpio\":%d,\"pixel_count\":%u,\"label\":\"%s\"}",
+        APPEND_JSON("%s{\"enabled\":%s,\"gpio\":%d,\"pixel_count\":%u,\"chipset\":\"%s\",\"color_order\":\"%s\",\"rgbw\":%s,\"label\":\"%s\"}",
                     i ? "," : "",
                     p->enabled ? "true" : "false",
                     p->gpio,
                     (unsigned)p->pixel_count,
+                    led_chipset_text(p->chipset),
+                    led_color_order_text(p->color_order),
+                    p->rgbw ? "true" : "false",
                     p->label);
     }
     APPEND_JSON("]}");
@@ -223,6 +260,42 @@ static bool json_copy_bool_field(const char *json, const char *key, bool *out)
     return false;
 }
 
+static void json_copy_led_chipset_field(const char *json, const char *key, node_led_chipset_t *out)
+{
+    char value[16];
+    if (!out || !json_copy_string_field(json, key, value, sizeof(value))) {
+        return;
+    }
+    if (strcmp(value, "ws2812") == 0) {
+        *out = NODE_LED_CHIPSET_WS2812;
+    } else if (strcmp(value, "ws2815") == 0) {
+        *out = NODE_LED_CHIPSET_WS2815;
+    } else if (strcmp(value, "sk6812") == 0) {
+        *out = NODE_LED_CHIPSET_SK6812;
+    }
+}
+
+static void json_copy_led_color_order_field(const char *json, const char *key, node_led_color_order_t *out)
+{
+    char value[16];
+    if (!out || !json_copy_string_field(json, key, value, sizeof(value))) {
+        return;
+    }
+    if (strcmp(value, "rgb") == 0) {
+        *out = NODE_LED_COLOR_ORDER_RGB;
+    } else if (strcmp(value, "rbg") == 0) {
+        *out = NODE_LED_COLOR_ORDER_RBG;
+    } else if (strcmp(value, "grb") == 0) {
+        *out = NODE_LED_COLOR_ORDER_GRB;
+    } else if (strcmp(value, "gbr") == 0) {
+        *out = NODE_LED_COLOR_ORDER_GBR;
+    } else if (strcmp(value, "brg") == 0) {
+        *out = NODE_LED_COLOR_ORDER_BRG;
+    } else if (strcmp(value, "bgr") == 0) {
+        *out = NODE_LED_COLOR_ORDER_BGR;
+    }
+}
+
 static void make_indexed_key(char *out, size_t out_size, const char *prefix, size_t index, const char *field)
 {
     snprintf(out, out_size, "%s%u_%s", prefix, (unsigned)(index + 1), field);
@@ -286,6 +359,12 @@ static void apply_led_fields(const char *body, node_led_strip_config_t *pins, si
         json_copy_int_field(body, key, &pin->gpio);
         make_indexed_key(key, sizeof(key), "led", i, "pixel_count");
         json_copy_int_field(body, key, &pixels);
+        make_indexed_key(key, sizeof(key), "led", i, "chipset");
+        json_copy_led_chipset_field(body, key, &pin->chipset);
+        make_indexed_key(key, sizeof(key), "led", i, "color_order");
+        json_copy_led_color_order_field(body, key, &pin->color_order);
+        make_indexed_key(key, sizeof(key), "led", i, "rgbw");
+        json_copy_bool_field(body, key, &pin->rgbw);
         make_indexed_key(key, sizeof(key), "led", i, "label");
         json_copy_string_field(body, key, pin->label, sizeof(pin->label));
         pin->pixel_count = pixels > 0 ? (uint16_t)pixels : 30;
@@ -298,7 +377,7 @@ static void apply_led_fields(const char *body, node_led_strip_config_t *pins, si
 
 esp_err_t node_provisioning_config_post(httpd_req_t *req)
 {
-    enum { MAX_BODY = 4096 };
+    enum { MAX_BODY = 6144 };
     if (req->content_len <= 0 || req->content_len > MAX_BODY) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid body size");
     }

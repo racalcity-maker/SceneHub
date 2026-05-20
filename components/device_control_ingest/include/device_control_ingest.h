@@ -25,7 +25,8 @@ extern "C" {
 #define DEVICE_CONTROL_INGEST_COMMAND_MAX_LEN 32
 #define DEVICE_CONTROL_INGEST_RESULT_STATUS_MAX_LEN 16
 #define DEVICE_CONTROL_INGEST_ERROR_CODE_MAX_LEN 32
-#define DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN 4096
+#define DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN 12288
+#define DEVICE_CONTROL_INGEST_EVENT_ARGS_JSON_MAX_LEN 512
 #define DEVICE_CONTROL_INGEST_DEFAULT_ONLINE_TIMEOUT_MS 15000
 
 typedef enum {
@@ -75,7 +76,7 @@ typedef struct {
     uint64_t event_ts_ms;
     uint64_t event_rx_ms;
     char event_name[DEVICE_CONTROL_INGEST_COMMAND_MAX_LEN];
-    char event_args_json[DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN];
+    char event_args_json[DEVICE_CONTROL_INGEST_EVENT_ARGS_JSON_MAX_LEN];
     uint32_t heartbeat_count;
     uint32_t status_count;
     uint32_t diag_count;

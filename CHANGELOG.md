@@ -6,6 +6,10 @@ All notable project changes are documented in this file.
 
 ### Added
 
+- Added a dedicated Node `describe_interface` refactor plan documenting the
+  current large-payload producer/consumer path, persistent manifest ownership,
+  and the staged split between transport-sized metadata responses and compact
+  steady-state ingest/runtime buffers.
 - Added a temporary checked migration plan for moving SceneHub device import,
   scenario editing and runtime dispatch to compact Node manifest v2 without
   expanding node resources into per-channel commands.
@@ -46,6 +50,18 @@ All notable project changes are documented in this file.
 
 ### Changed
 
+- Expanded SceneHub Node compact-manifest support across hub and node:
+  node manifests now advertise richer relay/MOSFET/output/LED capabilities,
+  LED strip config includes chipset/color-order/RGBW metadata, and the node
+  runtime now exposes all-off commands plus first LED command/effect paths.
+- Raised rare metadata payload budgets for node `describe_interface` while
+  keeping runtime/event buffers separated from that larger manifest budget, and
+  increased the Quest Device save-request body ceiling so compact manifest
+  imports no longer fail at the HTTP handler boundary.
+- Fixed compact Quest Device event resolution so exact template matches preserve
+  their `match` object, GM scenario waits no longer advance on unrelated
+  same-device events, and compact resource events can be expanded and matched
+  safely without ambiguous channel collisions.
 - Renamed product-facing project/configuration identifiers to `SceneHub`.
 - Moved GM room runtime HTTP refresh paths off shared web scratch buffers:
   runtime summary/detail DTOs and JSON chunk buffers are now request-local, so
