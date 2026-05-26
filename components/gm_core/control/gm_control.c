@@ -175,12 +175,14 @@ static void gm_ctrl_audit(const char *source, const char *room_id, const char *a
     (void)orchestrator_audit_log_device_action(audit_source,
                                                audit_room,
                                                audit_action,
+                                               "",
                                                result == ESP_OK,
                                                error_code);
     (void)orchestrator_timeline_log(result == ESP_OK ? (timer_action ? ORCH_TIMELINE_TYPE_TIMER_CHANGED : ORCH_TIMELINE_TYPE_EVENT) : ORCH_TIMELINE_TYPE_ACTION_FAILED,
                                     result == ESP_OK ? ORCH_TIMELINE_SEVERITY_INFO : ORCH_TIMELINE_SEVERITY_ERROR,
                                     audit_source,
                                     audit_room,
+                                    "",
                                     "",
                                     result == ESP_OK ? "Room action" : "Room action failed",
                                     audit_action);

@@ -371,9 +371,10 @@ setTimeout(()=>loadHardwareIoStatus(false),0);
 }
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const catalogDevices=Array.isArray(catalog.quest_devices)?catalog.quest_devices:[];
-const base=catalogDevices.length?catalogDevices:questDevices().map(device=>({
+const useCatalogOnly=currentView==='scenarios'&&isAdmin();
+const base=useCatalogOnly?catalogDevices:(catalogDevices.length?catalogDevices:questDevices().map(device=>({
 id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',device_description:device.device_description,commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
-)).filter(device=>device.id);
+)).filter(device=>device.id));
 return base.map(scenarioNormalizeHardwareDevice).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
 }
 
@@ -561,10 +562,9 @@ return device&&Array.isArray(device.commands)&&device.commands.length?device.com
 }
 
 function defaultParamsForCommand(device,command){
-if(command&&command.default_args&&typeof command.default_args==='object'){
-return JSON.parse(JSON.stringify(command.default_args));
-}
-const params={};
+const params=command&&command.default_args&&typeof command.default_args==='object'
+?JSON.parse(JSON.stringify(command.default_args))
+:{};
 const deviceId=device&&device.id||'';
 const commandId=command&&command.id||'';
 if(deviceId==='system_audio'&&commandId==='play'){

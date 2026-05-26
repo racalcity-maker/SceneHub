@@ -178,6 +178,7 @@ esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
             return orch_send_text_error(req, "500 Internal Server Error", "scenario detail busy");
         }
         if (layout_only) {
+            room_scenario_t *layout_copy = NULL;
             memset(&s_room_scenario_layout_scratch, 0, sizeof(s_room_scenario_layout_scratch));
             err = orchestrator_registry_get_room_scenario_layout(room_id,
                                                                  scenario_id,
@@ -190,10 +191,18 @@ esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
                 orch_room_scenario_detail_scratch_unlock();
                 return orch_send_text_error(req, "500 Internal Server Error", "room scenarios failed");
             }
-            err = orchestrator_scenario_layout_writer_send(req, room_id, &s_room_scenario_layout_scratch);
+            layout_copy = orch_snapshot_alloc(sizeof(*layout_copy));
+            if (!layout_copy) {
+                orch_room_scenario_detail_scratch_unlock();
+                return orch_send_text_error(req, "500 Internal Server Error", "no memory");
+            }
+            *layout_copy = s_room_scenario_layout_scratch;
             orch_room_scenario_detail_scratch_unlock();
+            err = orchestrator_scenario_layout_writer_send(req, room_id, layout_copy);
+            heap_caps_free(layout_copy);
             return err;
         }
+        orch_room_scenario_detail_t *detail_copy = NULL;
         memset(&s_room_scenario_detail_scratch, 0, sizeof(s_room_scenario_detail_scratch));
         err = orchestrator_registry_get_room_scenario_detail(room_id, scenario_id, &s_room_scenario_detail_scratch);
         if (err == ESP_ERR_NOT_FOUND) {
@@ -204,15 +213,20 @@ esp_err_t gm_room_scenarios_handler(httpd_req_t *req)
             orch_room_scenario_detail_scratch_unlock();
             return orch_send_text_error(req, "500 Internal Server Error", "room scenarios failed");
         }
-        root = orchestrator_api_view_room_scenarios(room_id, &s_room_scenario_detail_scratch, 1);
-        if (!root) {
+        detail_copy = orch_snapshot_alloc(sizeof(*detail_copy));
+        if (!detail_copy) {
             orch_room_scenario_detail_scratch_unlock();
             return orch_send_text_error(req, "500 Internal Server Error", "no memory");
         }
-        cJSON_ReplaceItemInObject(root, "count", cJSON_CreateNumber(1));
-        err = web_ui_send_json(req, root);
+        *detail_copy = s_room_scenario_detail_scratch;
         orch_room_scenario_detail_scratch_unlock();
-        return err;
+        root = orchestrator_api_view_room_scenarios(room_id, detail_copy, 1);
+        heap_caps_free(detail_copy);
+        if (!root) {
+            return orch_send_text_error(req, "500 Internal Server Error", "no memory");
+        }
+        cJSON_ReplaceItemInObject(root, "count", cJSON_CreateNumber(1));
+        return web_ui_send_json(req, root);
     }
 
     if (summary_only) {

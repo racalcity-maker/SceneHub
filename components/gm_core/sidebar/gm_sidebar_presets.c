@@ -131,10 +131,13 @@ esp_err_t gm_sidebar_preset_validate_one(const gm_sidebar_preset_t *preset,
                                           resolver_error,
                                           sizeof(resolver_error));
     if (err != ESP_OK) {
-        gm_sidebar_preset_set_error(error,
-                                    error_size,
-                                    resolver_error[0] ? resolver_error : "sidebar_preset_command_invalid");
-        return err;
+        /*
+         * Sidebar presets are persistent admin metadata. They must remain
+         * editable and deletable even when the referenced quest device was
+         * removed or its command manifest changed. Runtime execution still
+         * resolves commands again and will reject stale presets when used.
+         */
+        return ESP_OK;
     }
     if (!resolved.command.manual_allowed) {
         gm_sidebar_preset_set_error(error, error_size, "sidebar_preset_command_not_manual");

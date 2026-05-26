@@ -252,6 +252,7 @@ questDeviceEditor.device_id=el.dataset.deviceId||'';
 questDeviceEditor.open=true;
 questDeviceEditor.draft=null;
 clearQuestDeviceDirty();
+await loadQuestDevices(true);
 render();
 });
 

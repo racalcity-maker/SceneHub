@@ -9,12 +9,15 @@
 #include "quest_common_utils.h"
 
 static const char *TAG = "control_ingest";
+#define DCI_DESCRIBE_INTERFACE_CACHE_MAX 4
 dci_slot_t **dci_s_slots = NULL;
 SemaphoreHandle_t dci_s_lock = NULL;
 StaticSemaphore_t dci_s_lock_storage;
 portMUX_TYPE dci_s_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
 uint32_t dci_s_generation = 0;
 char dci_s_last_changed_device_id[QUEST_ID_MAX_LEN] = {0};
+dci_describe_interface_cache_entry_t dci_s_describe_interface_cache
+    [DCI_DESCRIBE_INTERFACE_CACHE_MAX] = {0};
 
 static dci_slot_t *dci_alloc_slot_storage(void)
 {
@@ -61,6 +64,84 @@ static bool dci_streq(const char *lhs, const char *rhs)
         return false;
     }
     return strcmp(lhs, rhs) == 0;
+}
+
+static void dci_clear_describe_interface_cache_entry(dci_describe_interface_cache_entry_t *entry)
+{
+    if (!entry) {
+        return;
+    }
+    if (entry->data_json) {
+        heap_caps_free(entry->data_json);
+        entry->data_json = NULL;
+    }
+    memset(entry, 0, sizeof(*entry));
+}
+
+void dci_clear_describe_interface_cache_locked(void)
+{
+    for (size_t i = 0; i < DCI_DESCRIBE_INTERFACE_CACHE_MAX; ++i) {
+        dci_clear_describe_interface_cache_entry(&dci_s_describe_interface_cache[i]);
+    }
+}
+
+esp_err_t dci_store_describe_interface_data_locked(const char *device_id,
+                                                   const char *request_id,
+                                                   const char *json,
+                                                   size_t json_len,
+                                                   uint64_t rx_ms)
+{
+    dci_describe_interface_cache_entry_t *entry = NULL;
+    dci_describe_interface_cache_entry_t *oldest = NULL;
+    char *buffer = NULL;
+
+    if (!device_id || !device_id[0] || !request_id || !request_id[0] || !json || json_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (json_len >= DEVICE_CONTROL_INGEST_DESCRIBE_INTERFACE_DATA_JSON_MAX_LEN) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    for (size_t i = 0; i < DCI_DESCRIBE_INTERFACE_CACHE_MAX; ++i) {
+        dci_describe_interface_cache_entry_t *candidate = &dci_s_describe_interface_cache[i];
+        if (candidate->in_use &&
+            strcmp(candidate->device_id, device_id) == 0 &&
+            strcmp(candidate->request_id, request_id) == 0) {
+            entry = candidate;
+            break;
+        }
+        if (!candidate->in_use && !entry) {
+            entry = candidate;
+        }
+        if (!oldest || candidate->rx_ms < oldest->rx_ms) {
+            oldest = candidate;
+        }
+    }
+    if (!entry) {
+        entry = oldest;
+    }
+    if (!entry) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    buffer = heap_caps_malloc(json_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buffer) {
+        buffer = heap_caps_malloc(json_len + 1, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!buffer) {
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(buffer, json, json_len);
+    buffer[json_len] = '\0';
+
+    dci_clear_describe_interface_cache_entry(entry);
+    entry->in_use = true;
+    entry->rx_ms = rx_ms;
+    quest_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
+    quest_str_copy(entry->request_id, sizeof(entry->request_id), request_id);
+    entry->data_json = buffer;
+    entry->data_len = json_len;
+    return ESP_OK;
 }
 
 static bool dci_parse_topic(const char *topic,
@@ -231,6 +312,7 @@ esp_err_t device_control_ingest_reset(void)
         }
         memset(dci_s_slots[i], 0, sizeof(*dci_s_slots[i]));
     }
+    dci_clear_describe_interface_cache_locked();
     dci_s_last_changed_device_id[0] = '\0';
     dci_s_generation++;
     xSemaphoreGive(dci_s_lock);
@@ -293,10 +375,12 @@ esp_err_t device_control_ingest_handle_mqtt(const char *topic, const char *paylo
         dci_capture_event_snapshot(&slot->state,
                                    kind == DEVICE_CONTROL_TOPIC_EVENT,
                                    &snapshot);
-        quest_str_copy(dci_s_last_changed_device_id,
-                       sizeof(dci_s_last_changed_device_id),
-                       device_id);
-        dci_s_generation++;
+        if (kind != DEVICE_CONTROL_TOPIC_HEARTBEAT) {
+            quest_str_copy(dci_s_last_changed_device_id,
+                           sizeof(dci_s_last_changed_device_id),
+                           device_id);
+            dci_s_generation++;
+        }
     }
     xSemaphoreGive(dci_s_lock);
     if (err == ESP_ERR_INVALID_ARG) {
@@ -374,6 +458,43 @@ esp_err_t device_control_ingest_get_presence(const char *device_id,
     }
     xSemaphoreGive(dci_s_lock);
     return ESP_OK;
+}
+
+esp_err_t device_control_ingest_take_describe_interface_data(const char *device_id,
+                                                             const char *request_id,
+                                                             char *out,
+                                                             size_t out_size)
+{
+    if (!device_id || !device_id[0] || !request_id || !request_id[0] || !out || out_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    out[0] = '\0';
+    if (!dci_s_lock || !dci_s_slots) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(dci_s_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    for (size_t i = 0; i < DCI_DESCRIBE_INTERFACE_CACHE_MAX; ++i) {
+        dci_describe_interface_cache_entry_t *entry = &dci_s_describe_interface_cache[i];
+        if (!entry->in_use || !entry->data_json) {
+            continue;
+        }
+        if (strcmp(entry->device_id, device_id) != 0 ||
+            strcmp(entry->request_id, request_id) != 0) {
+            continue;
+        }
+        if (entry->data_len >= out_size) {
+            xSemaphoreGive(dci_s_lock);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(out, entry->data_json, entry->data_len + 1);
+        dci_clear_describe_interface_cache_entry(entry);
+        xSemaphoreGive(dci_s_lock);
+        return ESP_OK;
+    }
+    xSemaphoreGive(dci_s_lock);
+    return ESP_ERR_NOT_FOUND;
 }
 
 size_t device_control_ingest_count(void)

@@ -3,9 +3,12 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#include "esp_log.h"
 #include "node_config.h"
 #include "node_limits.h"
 #include "sdkconfig.h"
+
+static const char *TAG = "node_board";
 
 #if CONFIG_IDF_TARGET_ESP32S3
 static const node_board_profile_t s_profile = {
@@ -38,6 +41,62 @@ const node_board_profile_t *node_board_get_profile(void)
     return &s_profile;
 }
 
+static bool sanitize_led_runtime_preset(node_led_strip_config_t *strip)
+{
+    bool changed = false;
+
+    if (!strip) {
+        return false;
+    }
+
+    if (strip->blink.on_ms == 0) {
+        strip->blink.on_ms = 500;
+        changed = true;
+    }
+    if (strip->blink.off_ms == 0) {
+        strip->blink.off_ms = 500;
+        changed = true;
+    }
+    if (strip->breathe.cycle_ms == 0) {
+        strip->breathe.cycle_ms = 2000;
+        changed = true;
+    }
+    if (strip->breathe.step_ms == 0) {
+        strip->breathe.step_ms = 40;
+        changed = true;
+    }
+    if (strip->effects.items[NODE_LED_EFFECT_RAINBOW].step_ms == 0) {
+        strip->effects.items[NODE_LED_EFFECT_RAINBOW].step_ms = 50;
+        changed = true;
+    }
+    if (strip->effects.items[NODE_LED_EFFECT_RAINBOW_CYCLE].step_ms == 0) {
+        strip->effects.items[NODE_LED_EFFECT_RAINBOW_CYCLE].step_ms = 40;
+        changed = true;
+    }
+    if (strip->effects.items[NODE_LED_EFFECT_COLOR_WIPE].step_ms == 0) {
+        strip->effects.items[NODE_LED_EFFECT_COLOR_WIPE].step_ms = 30;
+        changed = true;
+    }
+    if (strip->effects.items[NODE_LED_EFFECT_SCANNER].step_ms == 0) {
+        strip->effects.items[NODE_LED_EFFECT_SCANNER].step_ms = 40;
+        changed = true;
+    }
+    if (strip->effects.items[NODE_LED_EFFECT_THEATER_CHASE].step_ms == 0) {
+        strip->effects.items[NODE_LED_EFFECT_THEATER_CHASE].step_ms = 80;
+        changed = true;
+    }
+    if (strip->effects.items[NODE_LED_EFFECT_STROBE].duration_ms == 0) {
+        strip->effects.items[NODE_LED_EFFECT_STROBE].duration_ms = 60;
+        changed = true;
+    }
+    if (strip->effects.items[NODE_LED_EFFECT_STROBE].step_ms == 0) {
+        strip->effects.items[NODE_LED_EFFECT_STROBE].step_ms = 60;
+        changed = true;
+    }
+
+    return changed;
+}
+
 #if CONFIG_SCENEHUB_NODE_FACTORY_PIN_PROFILE
 static void board_copy_label(char *dst, size_t dst_size, const char *src)
 {
@@ -59,6 +118,7 @@ static void apply_relay(node_config_t *config, size_t idx, int gpio, const char 
 #else
     config->relays[idx].active_low = true;
 #endif
+    config->relays[idx].pulse_duration_ms = 300;
     board_copy_label(config->relays[idx].label, sizeof(config->relays[idx].label), label);
 }
 
@@ -74,6 +134,19 @@ static void apply_mosfet(node_config_t *config, size_t idx, int gpio, const char
 #else
     config->mosfets[idx].active_low = false;
 #endif
+    config->mosfets[idx].pulse_duration_ms = 300;
+    config->mosfets[idx].fade_duration_ms = 500;
+    config->mosfets[idx].blink_on_ms = 250;
+    config->mosfets[idx].blink_off_ms = 250;
+    config->mosfets[idx].blink_repeat_count = 3;
+    config->mosfets[idx].breathe_fade_ms = 1000;
+    config->mosfets[idx].breathe_hold_ms = 0;
+    config->mosfets[idx].breathe_repeat_count = 1;
+    config->mosfets[idx].default_value = 255;
+    config->mosfets[idx].default_target = 255;
+    config->mosfets[idx].default_min = 0;
+    config->mosfets[idx].default_max = 255;
+    config->mosfets[idx].default_final_value = 0;
     board_copy_label(config->mosfets[idx].label, sizeof(config->mosfets[idx].label), label);
 }
 
@@ -210,6 +283,31 @@ static bool gpio_mark_used(bool used[49], int gpio)
     return true;
 }
 
+static const char *pin_role_name(node_pin_role_t role)
+{
+    switch (role) {
+    case NODE_PIN_DISABLED:
+        return "disabled";
+    case NODE_PIN_RELAY:
+        return "relay";
+    case NODE_PIN_MOSFET:
+        return "mosfet";
+    case NODE_PIN_UNIVERSAL_INPUT:
+        return "io_input";
+    case NODE_PIN_UNIVERSAL_OUTPUT:
+        return "io_output";
+    case NODE_PIN_LED_STRIP:
+        return "led_strip";
+    default:
+        return "unknown";
+    }
+}
+
+static bool gpio_conflicts_with_used(const bool used[49], int gpio)
+{
+    return gpio >= 0 && gpio < 49 && used[gpio];
+}
+
 static bool sanitize_output_pins(node_output_pin_config_t *pins, size_t count, bool used[49], int reset_gpio)
 {
     bool changed = false;
@@ -218,9 +316,75 @@ static bool sanitize_output_pins(node_output_pin_config_t *pins, size_t count, b
         if (!pin->enabled) {
             continue;
         }
-        if (pin->gpio == reset_gpio || !gpio_mark_used(used, pin->gpio)) {
+        if (pin->gpio == reset_gpio) {
+            ESP_LOGW(TAG,
+                     "sanitize disable output channel=%u gpio=%d reason=reset_gpio",
+                     (unsigned)pin->channel,
+                     pin->gpio);
             pin->enabled = false;
             pin->gpio = -1;
+            changed = true;
+            continue;
+        }
+        if (!node_board_gpio_is_allowed(pin->gpio)) {
+            ESP_LOGW(TAG,
+                     "sanitize disable output channel=%u gpio=%d reason=invalid_gpio",
+                     (unsigned)pin->channel,
+                     pin->gpio);
+            pin->enabled = false;
+            pin->gpio = -1;
+            changed = true;
+            continue;
+        }
+        if (gpio_conflicts_with_used(used, pin->gpio)) {
+            ESP_LOGW(TAG,
+                     "sanitize disable output channel=%u gpio=%d reason=duplicate_gpio",
+                     (unsigned)pin->channel,
+                     pin->gpio);
+            pin->enabled = false;
+            pin->gpio = -1;
+            changed = true;
+            continue;
+        }
+        (void)gpio_mark_used(used, pin->gpio);
+        if (pin->pulse_duration_ms == 0) {
+            pin->pulse_duration_ms = 300;
+            changed = true;
+        }
+        if (pin->fade_duration_ms == 0) {
+            pin->fade_duration_ms = 500;
+            changed = true;
+        }
+        if (pin->blink_on_ms == 0) {
+            pin->blink_on_ms = 250;
+            changed = true;
+        }
+        if (pin->blink_off_ms == 0) {
+            pin->blink_off_ms = 250;
+            changed = true;
+        }
+        if (pin->blink_repeat_count == 0) {
+            pin->blink_repeat_count = 3;
+            changed = true;
+        }
+        if (pin->breathe_fade_ms == 0) {
+            pin->breathe_fade_ms = 1000;
+            changed = true;
+        }
+        if (pin->breathe_repeat_count == 0) {
+            pin->breathe_repeat_count = 1;
+            changed = true;
+        }
+        if (pin->default_value == 0) {
+            pin->default_value = 255;
+            changed = true;
+        }
+        if (pin->default_target == 0) {
+            pin->default_target = 255;
+            changed = true;
+        }
+        if (pin->default_max == 0) {
+            pin->default_max = 255;
             changed = true;
         }
     }
@@ -262,18 +426,54 @@ bool node_board_sanitize_pin_config(node_config_t *config)
             continue;
         }
         if (pin->role != NODE_PIN_UNIVERSAL_INPUT && pin->role != NODE_PIN_UNIVERSAL_OUTPUT) {
+            ESP_LOGW(TAG,
+                     "sanitize disable io channel=%u gpio=%d reason=invalid_role role=%s",
+                     (unsigned)pin->channel,
+                     pin->gpio,
+                     pin_role_name(pin->role));
             pin->enabled = false;
             pin->role = NODE_PIN_DISABLED;
             pin->gpio = -1;
             changed = true;
             continue;
         }
-        if (pin->gpio == config->reset_gpio || !gpio_mark_used(used, pin->gpio)) {
+        if (pin->gpio == config->reset_gpio) {
+            ESP_LOGW(TAG,
+                     "sanitize disable io channel=%u gpio=%d reason=reset_gpio role=%s",
+                     (unsigned)pin->channel,
+                     pin->gpio,
+                     pin_role_name(pin->role));
             pin->enabled = false;
             pin->role = NODE_PIN_DISABLED;
             pin->gpio = -1;
             changed = true;
+            continue;
         }
+        if (!node_board_gpio_is_allowed(pin->gpio)) {
+            ESP_LOGW(TAG,
+                     "sanitize disable io channel=%u gpio=%d reason=invalid_gpio role=%s",
+                     (unsigned)pin->channel,
+                     pin->gpio,
+                     pin_role_name(pin->role));
+            pin->enabled = false;
+            pin->role = NODE_PIN_DISABLED;
+            pin->gpio = -1;
+            changed = true;
+            continue;
+        }
+        if (gpio_conflicts_with_used(used, pin->gpio)) {
+            ESP_LOGW(TAG,
+                     "sanitize disable io channel=%u gpio=%d reason=duplicate_gpio role=%s",
+                     (unsigned)pin->channel,
+                     pin->gpio,
+                     pin_role_name(pin->role));
+            pin->enabled = false;
+            pin->role = NODE_PIN_DISABLED;
+            pin->gpio = -1;
+            changed = true;
+            continue;
+        }
+        (void)gpio_mark_used(used, pin->gpio);
     }
 
     for (size_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
@@ -281,11 +481,37 @@ bool node_board_sanitize_pin_config(node_config_t *config)
         if (!pin->enabled) {
             continue;
         }
-        if (pin->gpio == config->reset_gpio || !gpio_mark_used(used, pin->gpio)) {
+        if (pin->gpio == config->reset_gpio) {
+            ESP_LOGW(TAG,
+                     "sanitize disable led strip=%u gpio=%d reason=reset_gpio",
+                     (unsigned)pin->channel,
+                     pin->gpio);
             pin->enabled = false;
             pin->gpio = -1;
             changed = true;
+            continue;
         }
+        if (!node_board_gpio_is_allowed(pin->gpio)) {
+            ESP_LOGW(TAG,
+                     "sanitize disable led strip=%u gpio=%d reason=invalid_gpio",
+                     (unsigned)pin->channel,
+                     pin->gpio);
+            pin->enabled = false;
+            pin->gpio = -1;
+            changed = true;
+            continue;
+        }
+        if (gpio_conflicts_with_used(used, pin->gpio)) {
+            ESP_LOGW(TAG,
+                     "sanitize disable led strip=%u gpio=%d reason=duplicate_gpio",
+                     (unsigned)pin->channel,
+                     pin->gpio);
+            pin->enabled = false;
+            pin->gpio = -1;
+            changed = true;
+            continue;
+        }
+        (void)gpio_mark_used(used, pin->gpio);
         if (pin->pixel_count == 0) {
             pin->pixel_count = 30;
             changed = true;
@@ -298,6 +524,7 @@ bool node_board_sanitize_pin_config(node_config_t *config)
             pin->color_order = NODE_LED_COLOR_ORDER_GRB;
             changed = true;
         }
+        changed |= sanitize_led_runtime_preset(pin);
     }
 
     return changed;

@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-05-26
+
+- Hardened local web auth without adding heavy hashing: admin bootstrap now
+  uses salted `SHA-256(salt || password || device_id)` storage, tracks
+  `password_initialized`, forces the first password change after bootstrap
+  login, keeps `GM` / normal admin surfaces blocked until the password is
+  replaced, and sends normal admin login back to `/gm` instead of the legacy
+  admin panel.
+- Documented and implemented the hub write-side dispatch-envelope model for
+  manual device commands. Successful async remote dispatch now returns
+  `status=accepted` plus `request_id`, and audit/timeline correlation uses that
+  same key instead of pretending immediate terminal success.
+- Added one shared `scenehub_control` dispatch owner for async write-side
+  transport work. `describe_interface` and manual GM device-command execution
+  now share the same owner task and owner-held scratch instead of per-endpoint
+  workers or dedicated stacks.
+- Added `COMMAND_RESULT_SEMANTICS.md` as the durable baseline for
+  `done/started/accepted/failed/rejected/timeout`, request-id correlation, and
+  append-only audit/timeline expectations.
+- Added `API_HTTP_POLICY.md` and moved mutable controller endpoints away from
+  state-changing `GET`. Wi-Fi, MQTT and logging config now use `POST` request
+  bodies instead of query-string mutation payloads.
+- Reworked hub network recovery policy: setup AP is now requested only by
+  holding the reset/setup pin during boot, runtime long hold restores defaults
+  and reboots, failed STA startup no longer auto-enables AP after retry
+  exhaustion, and an empty Wi-Fi config still opens setup AP for default-state
+  recovery.
+- Hardened SceneHub Node provisioning exposure: normal provisioned boots now
+  auto-close the provisioning HTTP surface after five minutes unless the
+  current boot explicitly requests `Keep setup open`; first-time
+  `provisioning_required` boots stay open.
+- Hardened SceneHub Node setup AP posture: provisioning now uses WPA2-PSK
+  credentials derived from the device MAC instead of an open AP.
+- Continued the Node v1 architecture cleanup by splitting the god files
+  `node_control`, `node_hw_led`, and `node_config`, and by routing provisioning
+  write/reset/apply/restart through `node_admin_control`.
+- Switched embedded GM live refresh further toward WS-first behavior:
+  background `versions` and active-room runtime polling are now suppressed
+  while the WebSocket is healthy, and `/api/gm/room/runtime` defaults to
+  `include_assets=0` unless a caller explicitly asks for asset readiness
+  detail.
+
 ## 2026-05-18
 
 - Split the overloaded embedded GM Panel source part

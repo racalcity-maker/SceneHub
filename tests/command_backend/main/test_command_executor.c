@@ -249,6 +249,32 @@ static void test_command_executor_accepted_result_keeps_pending_until_timeout(vo
     TEST_ASSERT_EQUAL_STRING(dispatch.request_id, timeout_event.data.device_control.action_id);
 }
 
+static void test_command_executor_started_result_keeps_pending_until_timeout(void)
+{
+    command_executor_request_t request = {0};
+    command_executor_dispatch_t dispatch = {0};
+    scenehub_event_t event = {0};
+    scenehub_event_t timeout_event = {0};
+
+    ce_test_bootstrap();
+    ce_add_relay_device(true, true, true, 1);
+
+    ce_test_copy(request.source, sizeof(request.source), "scenario");
+    ce_test_copy(request.device_id, sizeof(request.device_id), "relay");
+    ce_test_copy(request.command_id, sizeof(request.command_id), "pulse");
+    request.require_scenario_allowed = true;
+    TEST_ASSERT_EQUAL(ESP_OK, command_executor_execute(&request, &dispatch, NULL, 0));
+
+    ce_make_result_event(&event, &dispatch, SCENEHUB_COMMAND_RESULT_STARTED);
+    command_executor_on_event(&event);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    TEST_ASSERT_EQUAL(1, command_executor_poll_timeouts(&timeout_event, 1));
+    TEST_ASSERT_EQUAL(SCENEHUB_EVENT_DEVICE_CONTROL, timeout_event.type);
+    TEST_ASSERT_EQUAL_STRING(SCENEHUB_COMMAND_RESULT_TIMEOUT, timeout_event.payload);
+    TEST_ASSERT_EQUAL_STRING(dispatch.request_id, timeout_event.data.device_control.action_id);
+}
+
 static void test_command_executor_terminal_result_clears_pending(void)
 {
     command_executor_request_t request = {0};
@@ -334,6 +360,7 @@ void register_command_executor_tests(void)
     RUN_TEST(test_command_executor_rejects_manual_or_scenario_disabled_policy);
     RUN_TEST(test_command_executor_device_command_helper_requires_manual_policy);
     RUN_TEST(test_command_executor_accepted_result_keeps_pending_until_timeout);
+    RUN_TEST(test_command_executor_started_result_keeps_pending_until_timeout);
     RUN_TEST(test_command_executor_terminal_result_clears_pending);
     RUN_TEST(test_command_executor_cancel_request_clears_pending);
     RUN_TEST(test_command_executor_rejects_known_offline_device_before_publish);

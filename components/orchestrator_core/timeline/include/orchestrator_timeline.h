@@ -15,6 +15,7 @@ extern "C" {
 #define ORCH_TIMELINE_TEXT_MAX_LEN 24
 #define ORCH_TIMELINE_TITLE_MAX_LEN 64
 #define ORCH_TIMELINE_DETAILS_MAX_LEN 128
+#define ORCH_TIMELINE_REQUEST_ID_MAX_LEN 48
 
 typedef enum {
     ORCH_TIMELINE_TYPE_EVENT = 0,
@@ -42,6 +43,7 @@ typedef struct {
     char source[ORCH_TIMELINE_SOURCE_MAX_LEN];
     char room_id[QUEST_ROOM_ID_MAX_LEN];
     char device_id[QUEST_ID_MAX_LEN];
+    char request_id[ORCH_TIMELINE_REQUEST_ID_MAX_LEN];
     char title[ORCH_TIMELINE_TITLE_MAX_LEN];
     char details[ORCH_TIMELINE_DETAILS_MAX_LEN];
 } orchestrator_timeline_entry_t;
@@ -52,6 +54,7 @@ esp_err_t orchestrator_timeline_log(orchestrator_timeline_type_t type,
                                     const char *source,
                                     const char *room_id,
                                     const char *device_id,
+                                    const char *request_id,
                                     const char *title,
                                     const char *details);
 esp_err_t orchestrator_timeline_list_recent(size_t max_items,

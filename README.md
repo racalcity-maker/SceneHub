@@ -14,6 +14,16 @@ The firmware includes:
 - audio playback and background/effect mixing
 - OTA firmware update
 
+Recent operational changes worth knowing:
+
+- Admin bootstrap login is `admin / admin` only until the first forced password
+  change completes.
+- Manual HTTP device-command responses are now dispatch envelopes:
+  async remote work returns `accepted` plus `request_id`, not fake terminal
+  `done`.
+- State-changing hub endpoints are being converged to `POST` plus request body
+  under [docs/API_HTTP_POLICY.md](/d:/Projects/SceneHub/docs/API_HTTP_POLICY.md).
+
 The firmware is designed for stand-alone escape room and interactive exhibit setups where the controller acts as both the game control plane and the local integration point for field devices. MQTT broker functionality is one module inside the product, not the product identity.
 
 ## Main Capabilities
@@ -57,8 +67,9 @@ The codebase is now split into clear modules:
 Detailed architecture notes are in:
 
 - `docs/ARCHITECTURE.md`
-- `docs/gm_panel_ui_plan.md`
 - `docs/gm_api_contract.md`
+- `docs/COMMAND_RESULT_SEMANTICS.md`
+- `docs/API_HTTP_POLICY.md`
 - `docs/QUEST_DEVICE_SETUP_RUS.md`
 - `docs/ROOM_SCENARIO_SETUP_RUS.md`
 
@@ -211,7 +222,7 @@ The `/gm` panel is the primary quest console:
 Authentication:
 
 - cookie-based session auth
-- admin account
+- admin account with bootstrap `admin / admin` and forced first password change
 - operator/user account with GM-first routing
 - credential reset supported by hardware reset flow
 - setup AP password is configurable with `CONFIG_SCENEHUB_SETUP_AP_PASSWORD`
@@ -506,9 +517,10 @@ main/
 - `docs/README.md` - index of current firmware and desktop documentation
 - `docs/ARCHITECTURE.md` - module boundaries and layered design
 - `docs/gm_api_contract.md` - GM/orchestrator HTTP contracts and JSON formats
-- `docs/gm_panel_ui_plan.md` - operator/admin GM panel direction
+- `docs/COMMAND_RESULT_SEMANTICS.md` - command lifecycle and dispatch-envelope semantics
+- `docs/API_HTTP_POLICY.md` - HTTP method/payload hygiene policy
 - `docs/device_control_contract_v1.md` - MQTT control contract and interface discovery
-- `docs/HARDWARE_IO_PLAN.md` - local relay/MOSFET/GPIO hardware IO status and roadmap
+- `docs/KNOWN_ISSUES.md` - active backlog for open product/runtime/architecture work
 - `docs/QUEST_DEVICE_SETUP_RUS.md` - Quest Device setup guide
 - `docs/ROOM_SCENARIO_SETUP_RUS.md` - Room Scenario and Game Mode setup guide
 

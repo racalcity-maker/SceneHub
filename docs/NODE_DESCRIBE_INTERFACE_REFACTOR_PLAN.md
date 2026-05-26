@@ -131,21 +131,21 @@ The second outcome is the one to avoid.
 
 ## Refactor Checklist
 
-- [ ] Separate payload budgets by purpose instead of sharing one large limit
+- [x] Separate payload budgets by purpose instead of sharing one large limit
   across all device-control paths.
   Target split:
   `event_args_json` small, ordinary command `result_data_json` moderate,
   `device_description` large.
 - [ ] Keep MQTT transport capable of receiving large metadata payloads without
   forcing equally large permanent per-device ingest buffers.
-- [ ] Rework `describe_interface` into a metadata-specialized path rather than
+- [x] Rework `describe_interface` into a metadata-specialized path rather than
   treating it as an ordinary command result blob.
-- [ ] Move large `describe_interface` response ownership to a transient
+- [x] Move large `describe_interface` response ownership to a transient
   request-local/control-layer buffer or cache instead of permanent
   `device_control_ingest_device_t` state.
 - [ ] Keep `quest_device.device_description_json` as the persistent owner of
   saved device manifests after import/apply.
-- [ ] Reduce ordinary `device_control_ingest` steady-state memory again after
+- [x] Reduce ordinary `device_control_ingest` steady-state memory again after
   the metadata path is split:
   `event_args_json` small, `result_data_json` moderate, no giant fixed metadata
   blob in the hot path.
@@ -187,6 +187,32 @@ The immediate objective for that slice:
   ingest result blob;
 - preserve `quest_device.device_description_json` as the only long-lived
   manifest owner after import/apply.
+
+## Current Progress
+
+Completed in the first implementation slice:
+
+- ordinary `device_control_ingest.result_data_json` was reduced to a moderate
+  size instead of carrying full manifest budgets;
+- `describe_interface` payloads are no longer stored in ordinary steady-state
+  per-device ingest result storage;
+- large `describe_interface` payloads now go through a dedicated transient
+  metadata cache and are consumed through a take-and-clear path by
+  `scenehub_control_device_describe_interface(...)`;
+- regression coverage was added for:
+  ordinary small command results staying in steady-state ingest storage,
+  and large `describe_interface` payloads being routed through transient
+  metadata ownership instead.
+
+Still pending after that slice:
+
+- review whether current MQTT transport ceilings are still appropriate after
+  the split;
+- keep `quest_device.device_description_json` as the only durable manifest
+  owner after save/import flows;
+- decide whether the transient metadata cache should remain inside ingest or
+  move further toward a narrower control-owned pending-response path in a later
+  refactor.
 
 ## Success Criteria
 

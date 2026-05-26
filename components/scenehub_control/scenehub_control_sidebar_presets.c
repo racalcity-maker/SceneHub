@@ -26,7 +26,9 @@ esp_err_t scenehub_control_save_sidebar_presets_payload(const char *source,
                                                           "sidebar_presets_save");
         return ESP_OK;
     }
-    if ((err == ESP_ERR_INVALID_ARG || err == ESP_ERR_INVALID_SIZE) && error[0]) {
+    if ((err == ESP_ERR_INVALID_ARG || err == ESP_ERR_INVALID_SIZE || err == ESP_ERR_NOT_FOUND ||
+         err == ESP_ERR_INVALID_STATE) &&
+        error[0]) {
         scenehub_control_set_result(out_result,
                                     SCENEHUB_CONTROL_STATUS_REJECTED,
                                     err,

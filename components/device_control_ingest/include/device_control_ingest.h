@@ -25,8 +25,10 @@ extern "C" {
 #define DEVICE_CONTROL_INGEST_COMMAND_MAX_LEN 32
 #define DEVICE_CONTROL_INGEST_RESULT_STATUS_MAX_LEN 16
 #define DEVICE_CONTROL_INGEST_ERROR_CODE_MAX_LEN 32
-#define DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN 12288
+#define DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN 2048
 #define DEVICE_CONTROL_INGEST_EVENT_ARGS_JSON_MAX_LEN 512
+#define DEVICE_CONTROL_INGEST_DESCRIBE_INTERFACE_DATA_JSON_MAX_LEN \
+    (QUEST_DEVICE_DESCRIPTION_JSON_MAX_LEN + 256)
 #define DEVICE_CONTROL_INGEST_DEFAULT_ONLINE_TIMEOUT_MS 15000
 
 typedef enum {
@@ -93,6 +95,10 @@ esp_err_t device_control_ingest_get_presence(const char *device_id,
                                              uint32_t timeout_ms,
                                              uint64_t *out_last_seen_ms,
                                              bool *out_online);
+esp_err_t device_control_ingest_take_describe_interface_data(const char *device_id,
+                                                             const char *request_id,
+                                                             char *out,
+                                                             size_t out_size);
 size_t device_control_ingest_count(void);
 uint32_t device_control_ingest_generation(void);
 esp_err_t device_control_ingest_get_last_changed_device_id(char *out_device_id, size_t out_device_id_size);

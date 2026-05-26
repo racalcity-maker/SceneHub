@@ -136,7 +136,8 @@ static esp_err_t gm_qd_add_manifest_summary(const orch_quest_device_catalog_entr
 }
 
 esp_err_t gm_quest_device_catalog_entry_to_json(const orch_quest_device_catalog_entry_t *device,
-                                                cJSON *out)
+                                                cJSON *out,
+                                                bool include_manifest_json)
 {
     cJSON *commands = NULL;
     cJSON *events = NULL;
@@ -149,9 +150,11 @@ esp_err_t gm_quest_device_catalog_entry_to_json(const orch_quest_device_catalog_
     cJSON_AddStringToObject(out, "name", device->name);
     cJSON_AddBoolToObject(out, "enabled", device->enabled);
     cJSON_AddBoolToObject(out, "system_device", device->system_device);
-    err = gm_qd_json_add_raw_object(out, "device_description", device->device_description_json);
-    if (err != ESP_OK) {
-        return err;
+    if (include_manifest_json) {
+        err = gm_qd_json_add_raw_object(out, "device_description", device->device_description_json);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
     err = gm_qd_add_manifest_summary(device, out);
     if (err != ESP_OK) {

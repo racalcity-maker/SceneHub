@@ -90,7 +90,7 @@ Actions внутри реакции сейчас поддерживают:
 - set flag;
 - show operator message.
 
-Если action отправляет `result_required` команду, `accepted` не завершает action.
+Если action отправляет `result_required` команду, `accepted` или `started` не завершает action.
 Только terminal `done` двигает реакцию дальше. `failed`, `rejected` и timeout
 обрабатываются через result policy.
 

@@ -265,12 +265,29 @@ Response:
 ```json
 {
   "ok": true,
+  "status": "accepted",
   "device_id": "relay_room_2",
   "device_name": "Room 2 relay",
   "command_id": "open_door",
-  "command_label": "Open room 2 door"
+  "command_label": "Open room 2 door",
+  "request_id": "cmd_123456"
 }
 ```
+
+Response semantics:
+
+- `status` is the hub write-side dispatch status, not a full remote lifecycle
+  mirror.
+- For synchronous local/manual actions the write-side status may be `done`.
+- For successful async remote quest-device dispatch the write-side status is
+  `accepted`.
+- `request_id` is returned for async remote dispatch so UI, audit, timeline and
+  later device-control results can be correlated.
+- `remote_status` may be returned in the future when it is already known at
+  dispatch time, but callers must not assume terminal remote completion from the
+  initial HTTP response.
+- Absence of a remote error in the initial HTTP response does not imply remote
+  terminal success.
 
 This requests capabilities from a physical client, but does not automatically save them. UI/import code must still confirm and save a quest device.
 
@@ -727,7 +744,7 @@ Reactive branch contract:
 - reactive branches do not block `END_GAME`, do not finish the game and do not
   count toward quest completion.
 - result-required reactive commands advance only on terminal `done`; `accepted`
-  keeps the action pending.
+  or `started` keeps the action pending.
 
 Step payloads:
 
@@ -1097,6 +1114,8 @@ payload.
 Query options:
 
 - default: full runtime detail for the active room-control view
+- `include_assets=1`: opt-in asset readiness summary; default is `0` so live
+  refresh stays on the lighter runtime path
 - `detail=summary`: dedicated lightweight summary path for dashboard/rooms
   refresh; omits heavy arrays such as runtime flags, wait-event groups,
   issue-id lists, branch runtime metadata, and asset readiness detail

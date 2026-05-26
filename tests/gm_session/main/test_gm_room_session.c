@@ -565,6 +565,43 @@ static void test_device_command_waits_for_done_result_before_next_step(void)
     TEST_ASSERT_TRUE(find_flag(&s_session, "command_done") >= 0);
 }
 
+static void test_device_command_started_result_waits_for_done(void)
+{
+    room_scenario_step_t *step = NULL;
+    char request_id[48] = {0};
+
+    session_test_bootstrap();
+    add_room("room_a");
+    add_device_with_events();
+    init_scenario(&s_scenario, "scenario_command_started", "room_a", "Command started");
+
+    step = add_step(&s_scenario, "pulse", "Pulse relay", ROOM_SCENARIO_STEP_DEVICE_COMMAND);
+    test_copy(step->data.device_command.device_id,
+              sizeof(step->data.device_command.device_id),
+              "relay");
+    test_copy(step->data.device_command.command_id,
+              sizeof(step->data.device_command.command_id),
+              "pulse");
+    step = add_step(&s_scenario, "flag", "Set flag", ROOM_SCENARIO_STEP_SET_FLAG);
+    configure_set_flag(step, "command_done", true);
+
+    add_and_start_selected_scenario("room_a");
+    get_session("room_a");
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT, s_session.branch_runtimes[0].wait_type);
+    TEST_ASSERT_TRUE(s_session.branch_runtimes[0].wait_event_type[0] != '\0');
+    test_copy(request_id, sizeof(request_id), s_session.branch_runtimes[0].wait_event_type);
+
+    post_command_result(request_id, "started");
+    get_session("room_a");
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_COMMAND_RESULT, s_session.branch_runtimes[0].wait_type);
+    TEST_ASSERT_EQUAL(-1, find_flag(&s_session, "command_done"));
+
+    post_command_result(request_id, "done");
+    get_session("room_a");
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_DONE, s_session.branch_runtimes[0].scenario_state);
+    TEST_ASSERT_TRUE(find_flag(&s_session, "command_done") >= 0);
+}
+
 static void test_device_command_rejected_result_fails_step(void)
 {
     room_scenario_step_t *step = NULL;
@@ -2332,6 +2369,7 @@ void register_gm_room_session_tests(void)
     RUN_TEST(test_wait_any_device_event_advances_on_one_matching_event);
     RUN_TEST(test_wait_all_device_events_waits_for_every_event);
     RUN_TEST(test_device_command_waits_for_done_result_before_next_step);
+    RUN_TEST(test_device_command_started_result_waits_for_done);
     RUN_TEST(test_device_command_rejected_result_fails_step);
     RUN_TEST(test_device_command_failed_result_fails_step);
     RUN_TEST(test_device_command_result_timeout_fails_step);

@@ -227,6 +227,7 @@ esp_err_t orchestrator_timeline_log(orchestrator_timeline_type_t type,
                                     const char *source,
                                     const char *room_id,
                                     const char *device_id,
+                                    const char *request_id,
                                     const char *title,
                                     const char *details)
 {
@@ -249,6 +250,7 @@ esp_err_t orchestrator_timeline_log(orchestrator_timeline_type_t type,
     timeline_str_copy(entry->source, sizeof(entry->source), source && source[0] ? source : "system");
     timeline_str_copy(entry->room_id, sizeof(entry->room_id), room_id);
     timeline_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
+    timeline_str_copy(entry->request_id, sizeof(entry->request_id), request_id);
     timeline_str_copy(entry->title, sizeof(entry->title), title && title[0] ? title : "Event");
     timeline_str_copy(entry->details, sizeof(entry->details), details);
 
@@ -326,6 +328,7 @@ static void timeline_log_device_status(const scenehub_event_t *message)
                                     "timeline",
                                     "",
                                     status->device_id,
+                                    "",
                                     title,
                                     details);
 }
@@ -351,6 +354,7 @@ static void timeline_log_runtime_changed(const scenehub_event_t *message)
                                     "timeline",
                                     "",
                                     runtime->device_id,
+                                    "",
                                     "Runtime changed",
                                     details);
 }
@@ -369,6 +373,7 @@ static void timeline_log_device_control(const scenehub_event_t *message)
                                     "timeline",
                                     "",
                                     control->device_id,
+                                    control->action_id,
                                     "Device control",
                                     details);
 }
@@ -403,6 +408,7 @@ static void timeline_process_event(const scenehub_event_t *message)
                                         "timeline",
                                         "",
                                         message->topic,
+                                        "",
                                         "Scenario triggered",
                                         details);
         break;
@@ -413,6 +419,7 @@ static void timeline_process_event(const scenehub_event_t *message)
                                         "timeline",
                                         "",
                                         "",
+                                        "",
                                         "Runtime control",
                                         details);
         break;
@@ -420,6 +427,7 @@ static void timeline_process_event(const scenehub_event_t *message)
         (void)orchestrator_timeline_log(ORCH_TIMELINE_TYPE_CONFIG_CHANGED,
                                         ORCH_TIMELINE_SEVERITY_INFO,
                                         "timeline",
+                                        "",
                                         "",
                                         "",
                                         "Device config changed",

@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "command_executor.h"
 #include "gm_room_session.h"
 
 #ifdef __cplusplus
@@ -75,6 +76,10 @@ esp_err_t gm_api_scenario_reset(const char *room_id);
 esp_err_t gm_api_device_command_run(const char *device_id,
                                     const char *command_id,
                                     const char *params_json);
+esp_err_t gm_api_device_command_dispatch_run(const char *device_id,
+                                             const char *command_id,
+                                             const char *params_json,
+                                             command_executor_dispatch_t *out_dispatch);
 
 #ifdef __cplusplus
 }

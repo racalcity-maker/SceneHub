@@ -69,7 +69,7 @@ Node rules:
 - Always publish a result with the same `request_id`.
 - Treat `request_id` as the idempotency key.
 - Never repeat unsafe physical side effects for a duplicate `request_id`.
-- If duplicate work is still running, republish `accepted`.
+- If duplicate work is still running, republish `accepted` or `started`.
 - If duplicate work is already complete, republish the cached terminal result.
 - Reject invalid JSON, unsupported commands and invalid args with
   `status=rejected`.
@@ -82,13 +82,14 @@ Terminal statuses:
 
 Non-terminal status:
 
-- `accepted`, only if a later terminal result will be published.
+- `accepted` or `started`, only if a later terminal result will be published.
 
 Scenario behavior:
 
 - Only terminal `done` advances a `result_required` scenario step.
 - `failed`, `rejected` or timeout fail the step.
 - `accepted` alone does not advance the step.
+- `started` alone does not advance the step.
 
 ## Required Node Commands
 
@@ -161,7 +162,7 @@ Minimum manual test before using the node in a room:
   `cp/v1/dev/dcc-relay-room-2/...` while SceneHub expects
   `cp/v1/dev/relay_room_2/...`.
 - Node publishes heartbeat but never status, leaving UI diagnostics incomplete.
-- Node returns `accepted` and never sends a terminal result.
+- Node returns `accepted` or `started` and never sends a terminal result.
 - Node executes duplicate `request_id` commands as fresh physical actions.
 - Node uses retained command/result/event messages.
 - Node imports a large `device_description` that exceeds MQTT packet limits.

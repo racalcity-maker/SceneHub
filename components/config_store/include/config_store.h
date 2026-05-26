@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "esp_err.h"
 
@@ -10,6 +11,7 @@
 #define CONFIG_STORE_USERNAME_MAX     32
 #define CONFIG_STORE_PASSWORD_MAX     32
 #define CONFIG_STORE_AUTH_HASH_LEN    32
+#define CONFIG_STORE_AUTH_SALT_LEN    16
 
 typedef struct {
     char ssid[32];
@@ -33,7 +35,9 @@ typedef struct {
 
 typedef struct {
     char username[CONFIG_STORE_USERNAME_MAX];
+    uint8_t salt[CONFIG_STORE_AUTH_SALT_LEN];
     uint8_t password_hash[CONFIG_STORE_AUTH_HASH_LEN];
+    bool password_initialized;
 } app_web_auth_t;
 
 typedef struct {
@@ -55,8 +59,10 @@ esp_err_t config_store_init(void);
 const app_config_t *config_store_get(void);
 esp_err_t config_store_set(const app_config_t *next);
 esp_err_t config_store_reset_defaults(void);
-void config_store_hash_password(const char *password, uint8_t out_hash[CONFIG_STORE_AUTH_HASH_LEN]);
-esp_err_t config_store_set_web_auth(const char *username, const uint8_t hash[CONFIG_STORE_AUTH_HASH_LEN]);
-esp_err_t config_store_set_web_user(const char *username, const uint8_t hash[CONFIG_STORE_AUTH_HASH_LEN], bool enabled);
+void config_store_hash_password(const uint8_t salt[CONFIG_STORE_AUTH_SALT_LEN],
+                                const char *password,
+                                uint8_t out_hash[CONFIG_STORE_AUTH_HASH_LEN]);
+esp_err_t config_store_set_web_auth(const char *username, const char *password, bool initialized);
+esp_err_t config_store_set_web_user(const char *username, const char *password, bool enabled);
 esp_err_t config_store_reset_web_auth_defaults(void);
 bool config_store_has_web_user(const app_config_t *cfg);

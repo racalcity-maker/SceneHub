@@ -220,6 +220,7 @@ static esp_err_t gm_qd_add_backend_presentation(cJSON *item,
 esp_err_t gm_quest_devices_handler(httpd_req_t *req)
 {
     bool include_system = gm_qd_query_bool(req, "include_system", true);
+    bool include_manifest_json = gm_qd_query_bool(req, "include_manifest_json", false);
     orch_quest_device_catalog_entry_t *devices = NULL;
     size_t count = 0;
     cJSON *root = NULL;
@@ -250,6 +251,7 @@ esp_err_t gm_quest_devices_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "ok", true);
     cJSON_AddNumberToObject(root, "generation", quest_device_generation());
     cJSON_AddBoolToObject(root, "include_system", include_system);
+    cJSON_AddBoolToObject(root, "include_manifest_json", include_manifest_json);
     for (size_t i = 0; i < count; ++i) {
         cJSON *item = cJSON_CreateObject();
         if (!item) {
@@ -258,7 +260,7 @@ esp_err_t gm_quest_devices_handler(httpd_req_t *req)
             heap_caps_free(devices);
             return gm_qd_send_error(req, ESP_ERR_NO_MEM);
         }
-        err = gm_quest_device_catalog_entry_to_json(&devices[i], item);
+        err = gm_quest_device_catalog_entry_to_json(&devices[i], item, include_manifest_json);
         if (err != ESP_OK) {
             cJSON_Delete(item);
             cJSON_Delete(root);
@@ -405,7 +407,7 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
                                               params_json,
                                               &info,
                                               &result);
-    if (!web_ui_scenehub_control_is_done(err, &result)) {
+    if (!web_ui_scenehub_control_is_success(err, &result)) {
         cJSON_Delete(root);
         return gm_qd_send_control_error(req, err, &result);
     }
@@ -415,7 +417,8 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
                                                   device_id_buf,
                                                   info.device_name,
                                                   command_id_buf,
-                                                  info.command_label);
+                                                  info.command_label,
+                                                  &result);
 }
 
 esp_err_t gm_quest_devices_export_handler(httpd_req_t *req)

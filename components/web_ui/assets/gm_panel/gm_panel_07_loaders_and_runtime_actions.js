@@ -41,6 +41,10 @@ function gmCurrentViewUsesQuestDeviceStatic(){
 return ['room','devices','observed','device_setup','scenarios','hardware_io'].includes(currentView);
 }
 
+function gmCurrentViewNeedsQuestDeviceManifest(){
+return ['rooms','room','devices','device_setup','scenarios'].includes(currentView)||!!questDeviceEditor.open;
+}
+
 function gmCurrentViewUsesScenarioStatic(){
 return ['room','scenarios','profiles'].includes(currentView);
 }
@@ -92,7 +96,8 @@ gmTimeline=null;
 async function loadQuestDevices(force){
 if(!force&&gmStaticFresh('questDevices'))return;
 try{
-const res=await api.device.list(true);
+const includeManifestJson=gmCurrentViewNeedsQuestDeviceManifest();
+const res=await api.device.list(true,includeManifestJson);
 gmQuestDevices=await gmJsonOrNull(res);
 gmMarkStaticLoaded('questDevices');
 }
@@ -386,22 +391,28 @@ render();
 
 async function loadScenarioEditorCatalogs(force){
 if(!force&&gmStaticFresh('scenarioCatalogs'))return;
-gmScenarioEditorCatalogs={};
+const prevCatalogs=gmScenarioEditorCatalogs&&typeof gmScenarioEditorCatalogs==='object'?gmScenarioEditorCatalogs:{};
 if(!isAdmin()){
 gmMarkStaticLoaded('scenarioCatalogs');
 return;
 }
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
+const nextCatalogs={};
+rooms.forEach(r=>{
+nextCatalogs[r.room_id]=prevCatalogs[r.room_id]&&typeof prevCatalogs[r.room_id]==='object'
+?prevCatalogs[r.room_id]
+:{quest_devices:[],step_schemas:[]};
+});
 await Promise.all(rooms.map(async r=>{
 try{
 const res=await api.room.scenarioEditorCatalog(r.room_id);
 const data=res.ok?await res.json():null;
-gmScenarioEditorCatalogs[r.room_id]=data&&Array.isArray(data.quest_devices)?data:{quest_devices:[],step_schemas:[]};
+nextCatalogs[r.room_id]=data&&Array.isArray(data.quest_devices)?data:nextCatalogs[r.room_id];
 }
 catch(err){
-gmScenarioEditorCatalogs[r.room_id]={quest_devices:[],step_schemas:[]};
 }
 }));
+gmScenarioEditorCatalogs=nextCatalogs;
 gmMarkStaticLoaded('scenarioCatalogs');
 }
 

@@ -14,6 +14,7 @@ extern "C" {
 #define ORCH_AUDIT_SOURCE_MAX_LEN 16
 #define ORCH_AUDIT_ERROR_MAX_LEN  32
 #define ORCH_AUDIT_ACTION_ID_MAX_LEN 96
+#define ORCH_AUDIT_REQUEST_ID_MAX_LEN 48
 #define ORCH_AUDIT_CAPACITY       64
 
 typedef struct {
@@ -21,6 +22,7 @@ typedef struct {
     char source[ORCH_AUDIT_SOURCE_MAX_LEN];
     char device_id[QUEST_ID_MAX_LEN];
     char action_id[ORCH_AUDIT_ACTION_ID_MAX_LEN];
+    char request_id[ORCH_AUDIT_REQUEST_ID_MAX_LEN];
     bool success;
     char error_code[ORCH_AUDIT_ERROR_MAX_LEN];
 } orchestrator_audit_entry_t;
@@ -29,6 +31,7 @@ esp_err_t orchestrator_audit_init(void);
 esp_err_t orchestrator_audit_log_device_action(const char *source,
                                                const char *device_id,
                                                const char *action_id,
+                                               const char *request_id,
                                                bool success,
                                                const char *error_code);
 esp_err_t orchestrator_audit_list_recent(size_t max_items,

@@ -27,6 +27,12 @@ static bool s_heartbeat_task_started;
 static StaticTask_t s_input_task_storage;
 static StackType_t s_input_task_stack[3072];
 static bool s_input_task_started;
+static StaticTask_t s_command_task_storage;
+static StackType_t s_command_task_stack[4096];
+static bool s_command_task_started;
+static StaticQueue_t s_command_queue_storage;
+static uint8_t s_command_queue_buffer[NODE_MQTT_COMMAND_QUEUE_LEN * sizeof(node_mqtt_command_message_t)];
+static QueueHandle_t s_command_queue;
 
 static void mqtt_event_handler(void *handler_args,
                                esp_event_base_t base,
@@ -52,6 +58,9 @@ static void mqtt_event_handler(void *handler_args,
         ESP_LOGW(TAG, "disconnected");
         break;
     case MQTT_EVENT_DATA:
+    {
+        node_mqtt_command_message_t message = {0};
+
         if (event->current_data_offset != 0 || event->total_data_len != event->data_len ||
             event->data_len <= 0 || event->data_len >= (int)sizeof(s_rx_payload)) {
             ESP_LOGW(TAG,
@@ -63,8 +72,21 @@ static void mqtt_event_handler(void *handler_args,
         }
         memcpy(s_rx_payload, event->data, event->data_len);
         s_rx_payload[event->data_len] = '\0';
-        node_mqtt_handle_command_payload(s_rx_payload);
+        (void)node_mqtt_parse_command_payload(s_rx_payload, &message);
+
+        if (!s_command_queue || xQueueSend(s_command_queue, &message, 0) != pdPASS) {
+            ESP_LOGW(TAG, "command queue full");
+            if (message.valid && node_mqtt_publish_lock(portMAX_DELAY)) {
+                node_mqtt_publish_result_fields_locked(message.request_id,
+                                                       message.command,
+                                                       "rejected",
+                                                       "busy",
+                                                       NULL);
+                node_mqtt_publish_unlock();
+            }
+        }
         break;
+    }
     default:
         break;
     }
@@ -83,9 +105,10 @@ static void input_task(void *arg)
 {
     (void)arg;
     while (true) {
-        if (g_node_mqtt_connected && node_mqtt_publish_lock(pdMS_TO_TICKS(100))) {
+        if (g_node_mqtt_connected) {
             for (uint8_t channel = 1; channel <= NODE_UNIVERSAL_IO_MAX; ++channel) {
                 bool active = false;
+                bool changed = false;
                 esp_err_t err = node_hardware_io_read_input(channel, &active);
                 if (err == ESP_ERR_NOT_FOUND) {
                     continue;
@@ -93,27 +116,41 @@ static void input_task(void *arg)
                 if (err != ESP_OK) {
                     continue;
                 }
-                bool changed = false;
                 err = node_hardware_io_observe_input_change(channel, active, &changed);
-                if (err != ESP_OK) {
+                if (err != ESP_OK || !changed) {
                     continue;
                 }
-                if (changed) {
-                    char args_json[64];
-                    int n = snprintf(args_json,
-                                     sizeof(args_json),
-                                     "{\"channel\":%u,\"value\":%u}",
-                                     (unsigned)channel,
-                                     active ? 1U : 0U);
-                    if (n > 0 && n < (int)sizeof(args_json)) {
-                        node_mqtt_publish_event_locked("input.changed", args_json);
-                        node_mqtt_publish_status_locked();
-                    }
+
+                char args_json[64];
+                int n = snprintf(args_json,
+                                 sizeof(args_json),
+                                 "{\"channel\":%u,\"value\":%u}",
+                                 (unsigned)channel,
+                                 active ? 1U : 0U);
+                if (n <= 0 || n >= (int)sizeof(args_json)) {
+                    continue;
                 }
+                if (!node_mqtt_publish_lock(pdMS_TO_TICKS(100))) {
+                    continue;
+                }
+                node_mqtt_publish_event_locked("input.changed", args_json);
+                node_mqtt_publish_status_locked();
+                node_mqtt_publish_unlock();
             }
-            node_mqtt_publish_unlock();
         }
         vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+static void command_task(void *arg)
+{
+    node_mqtt_command_message_t message;
+
+    (void)arg;
+    while (true) {
+        if (xQueueReceive(s_command_queue, &message, portMAX_DELAY) == pdPASS) {
+            node_mqtt_process_command_message(&message);
+        }
     }
 }
 
@@ -127,6 +164,16 @@ esp_err_t node_mqtt_transport_start(const node_config_t *config)
     }
     g_node_mqtt_config = *config;
     ESP_RETURN_ON_ERROR(node_mqtt_publish_init(), TAG, "publish init failed");
+
+    if (!s_command_queue) {
+        s_command_queue = xQueueCreateStatic(NODE_MQTT_COMMAND_QUEUE_LEN,
+                                             sizeof(node_mqtt_command_message_t),
+                                             s_command_queue_buffer,
+                                             &s_command_queue_storage);
+        if (!s_command_queue) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
 
     int n = snprintf(s_uri, sizeof(s_uri), "mqtt://%s:%u", g_node_mqtt_config.controller_host, (unsigned)g_node_mqtt_config.mqtt_port);
     if (n <= 0 || n >= (int)sizeof(s_uri)) {
@@ -164,6 +211,19 @@ esp_err_t node_mqtt_transport_start(const node_config_t *config)
             return ESP_ERR_NO_MEM;
         }
         s_heartbeat_task_started = true;
+    }
+    if (!s_command_task_started) {
+        TaskHandle_t handle = xTaskCreateStatic(command_task,
+                                                "node_mqtt_cmd",
+                                                sizeof(s_command_task_stack) / sizeof(s_command_task_stack[0]),
+                                                NULL,
+                                                tskIDLE_PRIORITY + 2,
+                                                s_command_task_stack,
+                                                &s_command_task_storage);
+        if (!handle) {
+            return ESP_ERR_NO_MEM;
+        }
+        s_command_task_started = true;
     }
     if (!s_input_task_started) {
         TaskHandle_t handle = xTaskCreateStatic(input_task,

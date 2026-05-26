@@ -73,7 +73,7 @@ status:()=>gmGet('/api/hardware-io/status'),
 setIoMode:body=>gmPostJson('/api/hardware-io/io-mode',body),
 },
 device:{
-list:(includeSystem=true)=>gmGet(`/api/gm/devices?include_system=${includeSystem?'1':'0'}`),
+list:(includeSystem=true,includeManifestJson=false)=>gmGet(`/api/gm/devices?include_system=${includeSystem?'1':'0'}&include_manifest_json=${includeManifestJson?'1':'0'}`),
 save:device=>gmPostJson('/api/gm/device/save',{device}),
 delete:deviceId=>gmPostJson('/api/gm/device/delete',{device_id:deviceId}),
 describeInterface:clientId=>gmPostJson('/api/gm/device/describe-interface',{client_id:clientId}),

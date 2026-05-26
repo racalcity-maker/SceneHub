@@ -139,7 +139,7 @@ static esp_err_t gm_scenario_add_quest_devices_catalog(cJSON *root)
             cJSON_Delete(array);
             return ESP_ERR_NO_MEM;
         }
-        err = gm_quest_device_catalog_entry_to_json(&devices[i], obj);
+        err = gm_quest_device_catalog_entry_to_json(&devices[i], obj, true);
         if (err != ESP_OK) {
             cJSON_Delete(obj);
             heap_caps_free(devices);

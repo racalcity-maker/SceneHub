@@ -557,6 +557,8 @@ esp_err_t dci_apply_result_text_locked(dci_slot_t *slot, const char *json, uint6
 {
     const char *cursor = NULL;
     const char *end = NULL;
+    const char *data_value = NULL;
+    size_t data_value_len = 0;
     char status[DEVICE_CONTROL_INGEST_RESULT_STATUS_MAX_LEN] = {0};
     dci_json_pair_t error_pair = {0};
     if (!slot || !json) {
@@ -603,10 +605,8 @@ esp_err_t dci_apply_result_text_locked(dci_slot_t *slot, const char *json, uint6
                                              slot->state.result_message,
                                              sizeof(slot->state.result_message));
         } else if (dci_json_key_equals(&pair, "data")) {
-            (void)dci_json_copy_raw_value(pair.value,
-                                          pair.value_len,
-                                          slot->state.result_data_json,
-                                          sizeof(slot->state.result_data_json));
+            data_value = pair.value;
+            data_value_len = pair.value_len;
         } else if (dci_json_key_equals(&pair, "error")) {
             error_pair = pair;
         }
@@ -617,6 +617,24 @@ esp_err_t dci_apply_result_text_locked(dci_slot_t *slot, const char *json, uint6
     quest_str_copy(slot->state.result_status,
                    sizeof(slot->state.result_status),
                    scenehub_command_result_normalize(status));
+    if (data_value && data_value_len > 0) {
+        if (strcmp(slot->state.result_command, "describe_interface") == 0) {
+            esp_err_t cache_err =
+                dci_store_describe_interface_data_locked(slot->state.device_id,
+                                                         slot->state.result_request_id,
+                                                         data_value,
+                                                         data_value_len,
+                                                         rx_ms);
+            if (cache_err != ESP_OK) {
+                return cache_err;
+            }
+        } else {
+            (void)dci_json_copy_raw_value(data_value,
+                                          data_value_len,
+                                          slot->state.result_data_json,
+                                          sizeof(slot->state.result_data_json));
+        }
+    }
     if (error_pair.value && (!slot->state.result_error_code[0] || !slot->state.result_message[0])) {
         if (!slot->state.result_error_code[0]) {
             (void)dci_json_copy_raw_field(error_pair.value,

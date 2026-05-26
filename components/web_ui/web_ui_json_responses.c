@@ -145,17 +145,27 @@ esp_err_t web_ui_send_device_command_result_json(httpd_req_t *req,
                                                  const char *device_id,
                                                  const char *device_name,
                                                  const char *command_id,
-                                                 const char *command_label)
+                                                 const char *command_label,
+                                                 const scenehub_control_result_t *result)
 {
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         return web_ui_http_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
     }
     cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root,
+                            "status",
+                            result ? scenehub_control_status_str(result->status) : "done");
     cJSON_AddStringToObject(root, "device_id", device_id ? device_id : "");
     cJSON_AddStringToObject(root, "device_name", device_name ? device_name : "");
     cJSON_AddStringToObject(root, "command_id", command_id ? command_id : "");
     cJSON_AddStringToObject(root, "command_label", command_label ? command_label : "");
+    if (result && result->has_request_id) {
+        cJSON_AddStringToObject(root, "request_id", result->request_id);
+    }
+    if (result && result->has_remote_status) {
+        cJSON_AddStringToObject(root, "remote_status", result->remote_status);
+    }
     return web_ui_send_json(req, root);
 }
 

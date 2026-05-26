@@ -622,7 +622,7 @@ static esp_err_t gm_scenario_send_runtime_state(httpd_req_t *req, const char *ro
     char detail[16] = {0};
     char include_assets_value[8] = {0};
     bool summary_only = false;
-    bool include_assets = true;
+    bool include_assets = false;
     char *chunk = NULL;
     esp_err_t err = ESP_OK;
 

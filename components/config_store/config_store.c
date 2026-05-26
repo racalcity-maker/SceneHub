@@ -1,6 +1,7 @@
 #include "config_store.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
@@ -8,6 +9,8 @@
 #include "esp_check.h"
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_random.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "mbedtls/sha256.h"
@@ -18,13 +21,13 @@
 #define CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER "admin"
 #endif
 
-#ifndef CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS
-#define CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS "admin"
+#ifndef CONFIG_SCENEHUB_WEB_AUTH_BOOTSTRAP_PASS
+#define CONFIG_SCENEHUB_WEB_AUTH_BOOTSTRAP_PASS "admin"
 #endif
 
 static const char *TAG = "config_store";
 static const char *NVS_NS = "cfg";
-static const uint32_t CONFIG_VERSION = 1;
+static const uint32_t CONFIG_VERSION = 2;
 static const char *SCENEHUB_DEFAULT_HOSTNAME = "scenehub";
 static const char *SCENEHUB_DEFAULT_MQTT_ID = "scenehub";
 static const char *LEGACY_BROKER_NAME = "broker";
@@ -67,22 +70,75 @@ static void config_scratch_unlock(void)
     }
 }
 
-void config_store_hash_password(const char *password, uint8_t out_hash[CONFIG_STORE_AUTH_HASH_LEN])
+static void fill_device_id_string(char *out, size_t out_len)
+{
+    uint8_t mac[6] = {0};
+    if (!out || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+        snprintf(out, out_len, "scenehub");
+        return;
+    }
+    snprintf(out, out_len, "%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static void fill_random_salt(uint8_t salt[CONFIG_STORE_AUTH_SALT_LEN])
+{
+    if (!salt) {
+        return;
+    }
+    for (size_t i = 0; i < CONFIG_STORE_AUTH_SALT_LEN; i += sizeof(uint32_t)) {
+        uint32_t value = esp_random();
+        size_t chunk = CONFIG_STORE_AUTH_SALT_LEN - i;
+        if (chunk > sizeof(value)) {
+            chunk = sizeof(value);
+        }
+        memcpy(salt + i, &value, chunk);
+    }
+}
+
+static bool salt_is_nonzero(const uint8_t *salt)
+{
+    if (!salt) {
+        return false;
+    }
+    for (size_t i = 0; i < CONFIG_STORE_AUTH_SALT_LEN; ++i) {
+        if (salt[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void config_store_hash_password(const uint8_t salt[CONFIG_STORE_AUTH_SALT_LEN],
+                                const char *password,
+                                uint8_t out_hash[CONFIG_STORE_AUTH_HASH_LEN])
 {
     int rc = 0;
+    char device_id[24] = {0};
 
-    if (!out_hash) {
+    if (!out_hash || !salt) {
         return;
     }
     const unsigned char *input = (const unsigned char *)(password ? password : "");
     size_t len = strlen((const char *)input);
+    fill_device_id_string(device_id, sizeof(device_id));
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
 
 #if defined(MBEDTLS_VERSION_NUMBER) && MBEDTLS_VERSION_NUMBER >= 0x03000000
     rc = mbedtls_sha256_starts(&ctx, 0);
     if (rc == 0) {
+        rc = mbedtls_sha256_update(&ctx, salt, CONFIG_STORE_AUTH_SALT_LEN);
+    }
+    if (rc == 0) {
         rc = mbedtls_sha256_update(&ctx, input, len);
+    }
+    if (rc == 0) {
+        rc = mbedtls_sha256_update(&ctx, (const unsigned char *)device_id, strlen(device_id));
     }
     if (rc == 0) {
         rc = mbedtls_sha256_finish(&ctx, out_hash);
@@ -90,7 +146,13 @@ void config_store_hash_password(const char *password, uint8_t out_hash[CONFIG_ST
 #else
     rc = mbedtls_sha256_starts_ret(&ctx, 0);
     if (rc == 0) {
+        rc = mbedtls_sha256_update_ret(&ctx, salt, CONFIG_STORE_AUTH_SALT_LEN);
+    }
+    if (rc == 0) {
         rc = mbedtls_sha256_update_ret(&ctx, input, len);
+    }
+    if (rc == 0) {
+        rc = mbedtls_sha256_update_ret(&ctx, (const unsigned char *)device_id, strlen(device_id));
     }
     if (rc == 0) {
         rc = mbedtls_sha256_finish_ret(&ctx, out_hash);
@@ -102,14 +164,39 @@ void config_store_hash_password(const char *password, uint8_t out_hash[CONFIG_ST
     mbedtls_sha256_free(&ctx);
 }
 
+static void apply_web_auth_credentials(app_web_auth_t *web,
+                                       const char *username,
+                                       const char *password,
+                                       bool initialized)
+{
+    if (!web || !username || !password) {
+        return;
+    }
+    memset(web, 0, sizeof(*web));
+    strncpy(web->username, username, sizeof(web->username) - 1);
+    fill_random_salt(web->salt);
+    config_store_hash_password(web->salt, password, web->password_hash);
+    web->password_initialized = initialized;
+}
+
 static void apply_default_web_auth(app_web_auth_t *web)
 {
     if (!web) {
         return;
     }
-    memset(web, 0, sizeof(*web));
-    strncpy(web->username, CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER, sizeof(web->username) - 1);
-    config_store_hash_password(CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS, web->password_hash);
+    apply_web_auth_credentials(web,
+                               CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER,
+                               CONFIG_SCENEHUB_WEB_AUTH_BOOTSTRAP_PASS,
+                               false);
+}
+
+static void log_initial_admin_credentials(const char *reason)
+{
+    ESP_LOGW(TAG,
+             "initial admin credentials (%s): username=%s password=%s",
+             reason ? reason : "setup",
+             CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER,
+             CONFIG_SCENEHUB_WEB_AUTH_BOOTSTRAP_PASS);
 }
 
 static void load_defaults(app_config_t *cfg)
@@ -150,6 +237,18 @@ static bool apply_legacy_scenehub_migration(app_config_t *cfg)
     return changed;
 }
 
+static bool normalize_bootstrap_admin_policy(app_config_t *cfg)
+{
+    if (!cfg) {
+        return false;
+    }
+    if (cfg->web.password_initialized) {
+        return false;
+    }
+    apply_default_web_auth(&cfg->web);
+    return true;
+}
+
 static bool validate_string(const char *s, size_t max_len)
 {
     if (!s) {
@@ -180,7 +279,7 @@ static bool validate_web_auth(const app_web_auth_t *web)
     if (!validate_string(web->username, sizeof(web->username))) {
         return false;
     }
-    return hash_is_nonzero(web->password_hash);
+    return salt_is_nonzero(web->salt) && hash_is_nonzero(web->password_hash);
 }
 
 static bool web_auth_is_empty(const app_web_auth_t *web)
@@ -340,15 +439,22 @@ esp_err_t config_store_init(void)
     memset(&s_config_scratch, 0, sizeof(s_config_scratch));
     if (load_from_nvs(&s_config_scratch) == ESP_OK && validate_config(&s_config_scratch)) {
         bool migrated = apply_legacy_scenehub_migration(&s_config_scratch);
+        bool bootstrap_normalized = normalize_bootstrap_admin_policy(&s_config_scratch);
         config_lock();
         g_config = s_config_scratch;
         config_unlock();
-        if (migrated) {
+        if (migrated || bootstrap_normalized) {
             err = save_to_nvs(&s_config_scratch);
             if (err != ESP_OK) {
-                ESP_LOGW(TAG, "failed to persist legacy scenehub migration: %s", esp_err_to_name(err));
+                ESP_LOGW(TAG, "failed to persist config migration: %s", esp_err_to_name(err));
             } else {
-                ESP_LOGI(TAG, "legacy broker naming migrated to scenehub");
+                if (migrated) {
+                    ESP_LOGI(TAG, "legacy broker naming migrated to scenehub");
+                }
+                if (bootstrap_normalized) {
+                    ESP_LOGI(TAG, "bootstrap admin policy normalized to admin/admin");
+                    log_initial_admin_credentials("bootstrap_normalized");
+                }
             }
         }
         config_scratch_unlock();
@@ -361,6 +467,7 @@ esp_err_t config_store_init(void)
     s_config_scratch = g_config;
     config_unlock();
     err = save_to_nvs(&s_config_scratch);
+    log_initial_admin_credentials("defaults");
     config_scratch_unlock();
     return err;
 }
@@ -383,16 +490,19 @@ esp_err_t config_store_reset_defaults(void)
     }
     load_defaults(&s_config_scratch);
     err = config_commit_locked(&s_config_scratch, false);
+    if (err == ESP_OK) {
+        log_initial_admin_credentials("config_reset");
+    }
     config_scratch_unlock();
     return err;
 }
 
-esp_err_t config_store_set_web_auth(const char *username, const uint8_t hash[CONFIG_STORE_AUTH_HASH_LEN])
+esp_err_t config_store_set_web_auth(const char *username, const char *password, bool initialized)
 {
-    if (!username || !hash) {
+    if (!username || !password) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!validate_string(username, CONFIG_STORE_USERNAME_MAX) || !hash_is_nonzero(hash)) {
+    if (!validate_string(username, CONFIG_STORE_USERNAME_MAX) || !password[0]) {
         return ESP_ERR_INVALID_ARG;
     }
     esp_err_t err = config_scratch_lock();
@@ -402,9 +512,7 @@ esp_err_t config_store_set_web_auth(const char *username, const uint8_t hash[CON
     config_lock();
     s_config_scratch = g_config;
     config_unlock();
-    memset(s_config_scratch.web.username, 0, sizeof(s_config_scratch.web.username));
-    strncpy(s_config_scratch.web.username, username, sizeof(s_config_scratch.web.username) - 1);
-    memcpy(s_config_scratch.web.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN);
+    apply_web_auth_credentials(&s_config_scratch.web, username, password, initialized);
     err = config_commit_locked(&s_config_scratch, true);
     config_scratch_unlock();
     return err;
@@ -423,17 +531,20 @@ esp_err_t config_store_reset_web_auth_defaults(void)
     memset(&s_config_scratch.web_user, 0, sizeof(s_config_scratch.web_user));
     s_config_scratch.web_user_enabled = false;
     err = config_commit_locked(&s_config_scratch, true);
+    if (err == ESP_OK) {
+        log_initial_admin_credentials("reset");
+    }
     config_scratch_unlock();
     return err;
 }
 
-esp_err_t config_store_set_web_user(const char *username, const uint8_t hash[CONFIG_STORE_AUTH_HASH_LEN], bool enabled)
+esp_err_t config_store_set_web_user(const char *username, const char *password, bool enabled)
 {
     if (enabled) {
-        if (!username || !hash) {
+        if (!username || !password) {
             return ESP_ERR_INVALID_ARG;
         }
-        if (!validate_string(username, CONFIG_STORE_USERNAME_MAX) || !hash_is_nonzero(hash)) {
+        if (!validate_string(username, CONFIG_STORE_USERNAME_MAX) || !password[0]) {
             return ESP_ERR_INVALID_ARG;
         }
     }
@@ -447,8 +558,7 @@ esp_err_t config_store_set_web_user(const char *username, const uint8_t hash[CON
     s_config_scratch.web_user_enabled = enabled;
     memset(&s_config_scratch.web_user, 0, sizeof(s_config_scratch.web_user));
     if (enabled) {
-        strncpy(s_config_scratch.web_user.username, username, sizeof(s_config_scratch.web_user.username) - 1);
-        memcpy(s_config_scratch.web_user.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN);
+        apply_web_auth_credentials(&s_config_scratch.web_user, username, password, true);
     }
     err = config_commit_locked(&s_config_scratch, true);
     config_scratch_unlock();

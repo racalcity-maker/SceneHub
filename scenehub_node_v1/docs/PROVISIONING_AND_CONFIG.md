@@ -25,10 +25,19 @@ The node enters provisioning mode when:
 
 Provisioning mode starts a local access point:
 
-- SSID: `SceneHub-Node-<short_id>`;
-- password: generated or printed/stickered per device if productized;
+- SSID: `SceneNode-XXXX`;
+- password: `setup-XXXXXX`, derived from the AP MAC;
 - local address: implementation-defined, for example `192.168.4.1`;
 - web UI route: `/`.
+
+Provisioning availability policy:
+
+- first-time `provisioning_required` boot stays open until setup completes;
+- already provisioned normal boots auto-close the provisioning HTTP surface
+  after 5 minutes;
+- the local UI may disable that timer for the current boot only with
+  `Keep setup open`;
+- after reboot, the timeout is active again by default.
 
 The AP should be stopped after successful STA connection unless explicitly
 configured for service/debug mode.
@@ -132,6 +141,7 @@ commands must not be accepted from broadcast topics.
 ## Security Baseline
 
 - Provisioning AP should not run indefinitely after successful setup.
+- Provisioning AP should use WPA2-PSK rather than open auth.
 - Local web UI must not expose stored Wi-Fi password.
 - Factory reset action should require confirmation.
 - If auth is added, keep it simple and local-only.

@@ -18,6 +18,20 @@ static esp_err_t web_same_origin_reject(httpd_req_t *req)
                                           HTTPD_RESP_USE_STRLEN));
 }
 
+static esp_err_t send_login_success(httpd_req_t *req,
+                                    web_user_role_t role,
+                                    bool password_change_required)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"));
+    }
+    cJSON_AddStringToObject(root, "status", "ok");
+    cJSON_AddStringToObject(root, "role", role == WEB_USER_ROLE_ADMIN ? "admin" : "user");
+    cJSON_AddBoolToObject(root, "password_change_required", password_change_required);
+    return WEB_HTTP_CHECK(web_ui_send_json(req, root));
+}
+
 esp_err_t login_page_handler(httpd_req_t *req)
 {
     char token[WEB_SESSION_TOKEN_LEN] = {0};
@@ -54,29 +68,36 @@ esp_err_t auth_login_handler(httpd_req_t *req)
     const char *username = username_item->valuestring;
     const char *password = password_item->valuestring;
 
-    uint8_t hash[CONFIG_STORE_AUTH_HASH_LEN] = {0};
-    config_store_hash_password(password, hash);
     const app_config_t *cfg = config_store_get();
     if (!cfg) {
         cJSON_Delete(json);
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config missing"));
     }
 
+    uint8_t admin_hash[CONFIG_STORE_AUTH_HASH_LEN] = {0};
+    uint8_t user_hash[CONFIG_STORE_AUTH_HASH_LEN] = {0};
+    config_store_hash_password(cfg->web.salt, password, admin_hash);
+    if (config_store_has_web_user(cfg)) {
+        config_store_hash_password(cfg->web_user.salt, password, user_hash);
+    }
+
     bool admin_username_match = strcasecmp(cfg->web.username, username) == 0;
     bool admin_password_match = admin_username_match &&
-        auth_hash_equal_consttime(cfg->web.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN);
+        auth_hash_equal_consttime(cfg->web.password_hash, admin_hash, CONFIG_STORE_AUTH_HASH_LEN);
     bool user_account_exists = config_store_has_web_user(cfg);
     bool user_username_match = user_account_exists &&
         strcasecmp(cfg->web_user.username, username) == 0;
     bool user_password_match = user_username_match &&
-        auth_hash_equal_consttime(cfg->web_user.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN);
+        auth_hash_equal_consttime(cfg->web_user.password_hash, user_hash, CONFIG_STORE_AUTH_HASH_LEN);
 
     const app_web_auth_t *target = NULL;
     web_user_role_t session_role = WEB_USER_ROLE_ADMIN;
+    bool password_change_required = false;
 
     if (admin_password_match) {
         target = &cfg->web;
         session_role = WEB_USER_ROLE_ADMIN;
+        password_change_required = !cfg->web.password_initialized;
     } else if (user_password_match) {
         target = &cfg->web_user;
         session_role = WEB_USER_ROLE_USER;
@@ -103,12 +124,7 @@ esp_err_t auth_login_handler(httpd_req_t *req)
     char cookie[WEB_SESSION_TOKEN_LEN + 80];
     snprintf(cookie, sizeof(cookie), "broker_sid=%s; Path=/; HttpOnly; SameSite=Strict", token);
     httpd_resp_set_hdr(req, "Set-Cookie", cookie);
-    httpd_resp_set_type(req, "application/json");
-    return WEB_HTTP_CHECK(httpd_resp_send(req,
-                                          session_role == WEB_USER_ROLE_ADMIN
-                                              ? "{\"status\":\"ok\",\"role\":\"admin\"}"
-                                              : "{\"status\":\"ok\",\"role\":\"user\"}",
-                                          HTTPD_RESP_USE_STRLEN));
+    return send_login_success(req, session_role, password_change_required);
 }
 
 esp_err_t session_info_handler(httpd_req_t *req)
@@ -124,8 +140,12 @@ esp_err_t session_info_handler(httpd_req_t *req)
     if (!root) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"));
     }
+    const app_config_t *cfg = config_store_get();
     cJSON_AddStringToObject(root, "role", web_role_to_string(role));
     cJSON_AddStringToObject(root, "username", username);
+    cJSON_AddBoolToObject(root,
+                          "password_change_required",
+                          role == WEB_USER_ROLE_ADMIN && cfg && !cfg->web.password_initialized);
     return WEB_HTTP_CHECK(web_ui_send_json(req, root));
 }
 
@@ -160,7 +180,13 @@ esp_err_t auth_password_handler(httpd_req_t *req)
     const char *next = cJSON_IsString(next_item) ? next_item->valuestring : NULL;
     const char *role_str = cJSON_IsString(role_item) ? role_item->valuestring : NULL;
     bool target_user = role_str && strcasecmp(role_str, "user") == 0;
-    if (!current || !current[0]) {
+    const app_config_t *cfg = config_store_get();
+    if (!cfg) {
+        cJSON_Delete(json);
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config missing"));
+    }
+    bool bootstrap_admin_change = !target_user && !cfg->web.password_initialized;
+    if (!bootstrap_admin_change && (!current || !current[0])) {
         cJSON_Delete(json);
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing current password"));
     }
@@ -172,14 +198,12 @@ esp_err_t auth_password_handler(httpd_req_t *req)
         cJSON_Delete(json);
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "username required"));
     }
-    const app_config_t *cfg = config_store_get();
-    if (!cfg) {
-        cJSON_Delete(json);
-        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config missing"));
-    }
     uint8_t hash[CONFIG_STORE_AUTH_HASH_LEN] = {0};
-    config_store_hash_password(current, hash);
-    if (!auth_hash_equal_consttime(cfg->web.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN)) {
+    if (!bootstrap_admin_change) {
+        config_store_hash_password(cfg->web.salt, current, hash);
+    }
+    if (!bootstrap_admin_change &&
+        !auth_hash_equal_consttime(cfg->web.password_hash, hash, CONFIG_STORE_AUTH_HASH_LEN)) {
         ESP_LOGW(g_web_ui_auth_tag, "password change rejected: invalid admin confirmation for role=%s",
                  target_user ? "user" : "admin");
         cJSON_Delete(json);
@@ -190,9 +214,7 @@ esp_err_t auth_password_handler(httpd_req_t *req)
     }
     esp_err_t err = ESP_OK;
     if (target_user) {
-        uint8_t user_hash[CONFIG_STORE_AUTH_HASH_LEN];
-        config_store_hash_password(next, user_hash);
-        err = config_store_set_web_user(new_user, user_hash, true);
+        err = config_store_set_web_user(new_user, next, true);
         if (err != ESP_OK) {
             cJSON_Delete(json);
             ESP_LOGE(g_web_ui_auth_tag, "failed to update user auth: %s", esp_err_to_name(err));
@@ -205,9 +227,7 @@ esp_err_t auth_password_handler(httpd_req_t *req)
         return WEB_HTTP_CHECK(httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN));
     }
     const char *username = (new_user && new_user[0]) ? new_user : cfg->web.username;
-    uint8_t new_hash[CONFIG_STORE_AUTH_HASH_LEN];
-    config_store_hash_password(next, new_hash);
-    err = config_store_set_web_auth(username, new_hash);
+    err = config_store_set_web_auth(username, next, true);
     if (err != ESP_OK) {
         cJSON_Delete(json);
         ESP_LOGE(g_web_ui_auth_tag, "failed to update web auth: %s", esp_err_to_name(err));

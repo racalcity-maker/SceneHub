@@ -20,6 +20,7 @@ static node_config_t s_config;
 static char s_manifest[NODE_DEVICE_DESCRIPTION_MAX_LEN];
 static StaticTask_t s_network_task_storage;
 static StackType_t s_network_task_stack[4096];
+static bool s_runtime_initialized;
 
 static void log_output_pins(const char *group, const node_output_pin_config_t *pins, size_t count)
 {
@@ -68,6 +69,9 @@ static void log_pin_config(const node_config_t *config)
 
 static void init_runtime_after_network(const node_config_t *config)
 {
+    if (s_runtime_initialized) {
+        return;
+    }
     esp_err_t err = node_hardware_io_init(config);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "hardware init failed: %s", esp_err_to_name(err));
@@ -81,6 +85,7 @@ static void init_runtime_after_network(const node_config_t *config)
     } else {
         ESP_LOGE(TAG, "device_description failed: %s", esp_err_to_name(err));
     }
+    s_runtime_initialized = true;
 }
 
 static void on_sta_got_ip(const node_config_t *config, void *ctx)
@@ -100,6 +105,9 @@ static void network_task(void *arg)
 {
     node_config_t *config = (node_config_t *)arg;
     ESP_LOGI(TAG, "network/provisioning start");
+    if (node_config_needs_provisioning(config)) {
+        init_runtime_after_network(config);
+    }
     node_provisioning_callbacks_t callbacks = {
         .got_ip_cb = on_sta_got_ip,
         .got_ip_ctx = NULL,
@@ -154,10 +162,6 @@ void app_main(void)
     err = node_reset_button_start(&reset_button);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "reset/config button disabled: %s", esp_err_to_name(err));
-    }
-
-    if (node_config_needs_provisioning(&s_config)) {
-        init_runtime_after_network(&s_config);
     }
 
     TaskHandle_t handle = xTaskCreateStatic(network_task,

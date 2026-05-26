@@ -10,7 +10,14 @@ predictable, especially when Node v2 adds custom JSON/rule execution.
 - No dynamic allocation in rule-engine hot paths.
 - No dynamic allocation in MQTT command dispatch after payload parse.
 - Prefer static storage, fixed pools or startup-only allocation.
+- Large scratch/config/editor/import structs must not live on task stacks.
+- If a struct is wide enough to materially grow `main`, `httpd` or transport
+  task stack usage, move it into owner-held static storage immediately instead
+  of keeping a stack-local copy.
 - Prefer PSRAM for large non-DMA buffers when the target has PSRAM.
+- For large scratch storage, prefer PSRAM-first placement with a clean fallback
+  to internal RAM/static storage when PSRAM is unavailable or unsafe for that
+  path.
 - Keep DMA/peripheral buffers in internal DMA-capable memory.
 - Admin/config JSON import may allocate only in bounded, fail-cleanly paths.
 
@@ -38,6 +45,10 @@ V1 should use fixed storage for:
 - idempotency cache;
 - hardware state snapshot;
 - device_description publish buffer or streamed writer.
+- config migration scratch;
+- LED editor/provisioning overlay scratch;
+- LED worker task stack/snapshot owner storage;
+- large admin/import/export temporary structs.
 
 ## V2 Targets
 
@@ -81,12 +92,26 @@ On allocation or capacity failure:
 - keep the previous active config/rules;
 - do not partially activate a rule bundle.
 
+## LED Runtime Lifecycle
+
+- `node_hw_led_init()` is boot-only.
+- Live LED wiring reconfigure is forbidden on the current v1 runtime path.
+- Do not call `node_hw_led_init()` again after startup unless an explicit
+  `deinit/restart` sequence is added for effect tasks, strip handles and
+  static task storage.
+- Preset updates may be applied at runtime; hardware wiring changes still
+  require restart or a future dedicated deinit path.
+
 ## PSRAM Guidance
 
 If PSRAM is available:
 
 - use it for large JSON import scratch;
 - use it for rule bundle storage and compiled tables;
+- use it for large static admin/config/editor scratch before consuming internal
+  RAM;
+- keep an explicit internal-RAM/static fallback for targets or code paths where
+  PSRAM is not present or not appropriate;
 - do not use it for DMA buffers;
 - do not put tiny lock/event primitives there unless the RTOS target supports
   it safely.

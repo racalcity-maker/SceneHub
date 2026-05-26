@@ -7,52 +7,74 @@
 
 static node_control_result_t s_result;
 
-void node_mqtt_handle_command_payload(const char *payload)
+bool node_mqtt_parse_command_payload(const char *payload, node_mqtt_command_message_t *out_message)
 {
-    char request_id[NODE_MQTT_REQUEST_ID_MAX];
-    char command_name[NODE_MQTT_COMMAND_MAX];
-    char args_json[NODE_MQTT_ARGS_MAX];
+    if (!payload || !out_message) {
+        return false;
+    }
+    memset(out_message, 0, sizeof(*out_message));
 
-    if (!node_mqtt_json_extract_string(payload, "request_id", request_id, sizeof(request_id)) ||
-        !node_mqtt_json_extract_string(payload, "command", command_name, sizeof(command_name)) ||
-        !node_mqtt_json_copy_object(payload, "args", args_json, sizeof(args_json))) {
-        if (node_mqtt_publish_lock(pdMS_TO_TICKS(500))) {
+    if (!node_mqtt_json_extract_string(payload, "request_id", out_message->request_id, sizeof(out_message->request_id)) ||
+        !node_mqtt_json_extract_string(payload, "command", out_message->command, sizeof(out_message->command)) ||
+        !node_mqtt_json_copy_object(payload, "args", out_message->args_json, sizeof(out_message->args_json))) {
+        return false;
+    }
+    out_message->valid = true;
+    return true;
+}
+
+void node_mqtt_process_command_message(const node_mqtt_command_message_t *message)
+{
+    const node_mqtt_duplicate_entry_t *duplicate = NULL;
+
+    if (!message) {
+        return;
+    }
+    if (!message->valid) {
+        if (node_mqtt_publish_lock(portMAX_DELAY)) {
             node_mqtt_publish_result_fields_locked("", "", "rejected", "invalid_request", NULL);
             node_mqtt_publish_unlock();
         }
         return;
     }
 
-    if (!node_mqtt_publish_lock(pdMS_TO_TICKS(500))) {
-        return;
-    }
-
-    const node_mqtt_duplicate_entry_t *duplicate = node_mqtt_duplicate_find(request_id);
+    duplicate = node_mqtt_duplicate_find(message->request_id);
     if (duplicate) {
-        if (strcmp(duplicate->command, command_name) == 0) {
-            node_mqtt_publish_result_fields_locked(request_id, command_name, duplicate->status, duplicate->error_code, NULL);
-        } else {
-            node_mqtt_publish_result_fields_locked(request_id, command_name, "rejected", "invalid_request", NULL);
+        if (node_mqtt_publish_lock(portMAX_DELAY)) {
+            if (strcmp(duplicate->command, message->command) == 0) {
+                node_mqtt_publish_result_fields_locked(message->request_id,
+                                                       message->command,
+                                                       duplicate->status,
+                                                       duplicate->error_code,
+                                                       NULL);
+            } else {
+                node_mqtt_publish_result_fields_locked(message->request_id,
+                                                       message->command,
+                                                       "rejected",
+                                                       "invalid_request",
+                                                       NULL);
+            }
+            node_mqtt_publish_unlock();
         }
-        node_mqtt_publish_unlock();
         return;
     }
-
-    node_mqtt_publish_unlock();
 
     node_control_command_t control = {
-        .request_id = request_id,
-        .command = command_name,
-        .args_json = args_json,
+        .request_id = message->request_id,
+        .command = message->command,
+        .args_json = message->args_json,
+        .source = NODE_CONTROL_SOURCE_HUB,
     };
     (void)node_control_execute(&control, &s_result);
 
-    if (node_mqtt_publish_lock(pdMS_TO_TICKS(500))) {
-        node_mqtt_publish_result_locked(request_id, command_name, &s_result);
-        if (strcmp(s_result.status, "done") == 0) {
+    if (node_mqtt_publish_lock(portMAX_DELAY)) {
+        node_mqtt_publish_result_locked(message->request_id, message->command, &s_result);
+        if (strcmp(s_result.status, "done") == 0 ||
+            strcmp(s_result.status, "started") == 0 ||
+            strcmp(s_result.status, "accepted") == 0) {
             node_mqtt_publish_status_locked();
         }
-        node_mqtt_duplicate_remember(request_id, command_name, &s_result);
+        node_mqtt_duplicate_remember(message->request_id, message->command, &s_result);
         node_mqtt_publish_unlock();
     }
 }

@@ -1,6 +1,7 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 const GM_WS_RECONNECT_MS=3000;
 const GM_RUNTIME_HTTP_FALLBACK_MS=5000;
+const GM_WS_POLL_SUPPRESS_MS=30000;
 let gmWsSocket=null;
 let gmWsReconnectTimer=0;
 let gmWsFlushTimer=0;
@@ -20,6 +21,13 @@ gmWsReconnectTimer=0;
 gmInitWebSocket();
 }
 ,GM_WS_RECONNECT_MS);
+}
+
+function gmWsHealthy(){
+return !!(gmWsSocket&&
+gmWsSocket.readyState===WebSocket.OPEN&&
+gmWsLastMessageAt>0&&
+(Date.now()-gmWsLastMessageAt)<GM_WS_POLL_SUPPRESS_MS);
 }
 
 function gmWsQueueInvalidation(slice){
@@ -187,11 +195,16 @@ method:'POST'}
 
 const gmAdminHome=document.getElementById('gm_admin_home');
 if(gmAdminHome){
-gmAdminHome.onclick=()=>{
+gmAdminHome.onclick=e=>{
+if(!confirmDiscardEditorChanges()){
+e.preventDefault();
+return;
+}
 clearProfileDirty();
 clearScenarioDirty();
 clearQuestDeviceDirty();
 clearTransientFieldDirty();
+window.location='/';
 }
 ;
 }
@@ -221,13 +234,13 @@ gmInitWebSocket();
 
 function gmPollActiveRoomRuntimeVisible(){
 if(document.hidden)return;
-const runtimeAge=currentRoomId?Date.now()-((gmRuntimeLastRefreshAt[currentRoomId])||0):GM_RUNTIME_HTTP_FALLBACK_MS;
-if(gmWsSocket&&gmWsSocket.readyState===WebSocket.OPEN&&runtimeAge<GM_RUNTIME_HTTP_FALLBACK_MS)return;
+if(gmWsHealthy())return;
 pollActiveRoomRuntime();
 }
 
 function gmPollStateSnapshotVisible(){
 if(document.hidden)return;
+if(gmWsHealthy())return;
 pollGMStateSnapshot();
 }
 
@@ -240,7 +253,7 @@ document.addEventListener('visibilitychange',()=>{
 if(document.hidden)return;
 updateVisibleRoomClocks();
 gmPollActiveRoomRuntimeVisible();
-pollGMStateSnapshot();
+gmPollStateSnapshotVisible();
 });
 
 setInterval(gmPollActiveRoomRuntimeVisible,GM_RUNTIME_HTTP_FALLBACK_MS);

@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 #define SCENEHUB_COMMAND_RESULT_ACCEPTED "accepted"
+#define SCENEHUB_COMMAND_RESULT_STARTED "started"
 #define SCENEHUB_COMMAND_RESULT_DONE "done"
 #define SCENEHUB_COMMAND_RESULT_FAILED "failed"
 #define SCENEHUB_COMMAND_RESULT_REJECTED "rejected"
@@ -34,7 +35,8 @@ static inline const char *scenehub_command_result_normalize(const char *status)
 
 static inline bool scenehub_command_result_is_pending(const char *status)
 {
-    return scenehub_command_result_streq(status, SCENEHUB_COMMAND_RESULT_ACCEPTED);
+    return scenehub_command_result_streq(status, SCENEHUB_COMMAND_RESULT_ACCEPTED) ||
+           scenehub_command_result_streq(status, SCENEHUB_COMMAND_RESULT_STARTED);
 }
 
 static inline bool scenehub_command_result_is_success(const char *status)

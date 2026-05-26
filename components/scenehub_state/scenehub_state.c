@@ -185,6 +185,25 @@ static const char *scenehub_state_slice_scope(scenehub_state_slice_t slice)
     }
 }
 
+static bool scenehub_state_slice_invalidates_registry(scenehub_state_slice_t slice)
+{
+    switch (slice) {
+    case SCENEHUB_STATE_SLICE_ROOM_CATALOG:
+    case SCENEHUB_STATE_SLICE_DEVICES_CATALOG:
+    case SCENEHUB_STATE_SLICE_ROOM_SCENARIOS:
+    case SCENEHUB_STATE_SLICE_ROOM_PROFILES:
+    case SCENEHUB_STATE_SLICE_GM_SIDEBAR_PRESETS:
+    case SCENEHUB_STATE_SLICE_FULL_SNAPSHOT:
+        return true;
+    case SCENEHUB_STATE_SLICE_DEVICES_RUNTIME:
+    case SCENEHUB_STATE_SLICE_ROOM_RUNTIME:
+    case SCENEHUB_STATE_SLICE_SYSTEM_SUMMARY:
+    case SCENEHUB_STATE_SLICE_NONE:
+    default:
+        return false;
+    }
+}
+
 static uint32_t scenehub_state_slice_generation(scenehub_state_slice_t slice,
                                                 const scenehub_state_versions_t *versions)
 {
@@ -438,7 +457,9 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
         return;
     }
 
-    orchestrator_registry_invalidate();
+    if (scenehub_state_slice_invalidates_registry(slice)) {
+        orchestrator_registry_invalidate();
+    }
 
     if (scenehub_state_lock() != ESP_OK) {
         return;

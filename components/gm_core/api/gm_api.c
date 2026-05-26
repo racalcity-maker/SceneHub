@@ -799,6 +799,15 @@ esp_err_t gm_api_device_command_run(const char *device_id,
                                     const char *command_id,
                                     const char *params_json)
 {
+    return gm_api_device_command_dispatch_run(device_id, command_id, params_json, NULL);
+}
+
+esp_err_t gm_api_device_command_dispatch_run(const char *device_id,
+                                             const char *command_id,
+                                             const char *params_json,
+                                             command_executor_dispatch_t *out_dispatch)
+{
+    command_executor_request_t request = {0};
     scenehub_resolved_device_command_t resolved = {0};
     esp_err_t err = scenehub_device_command_resolve(device_id,
                                                     command_id,
@@ -813,5 +822,20 @@ esp_err_t gm_api_device_command_run(const char *device_id,
     if (!resolved.command.manual_allowed) {
         return ESP_ERR_INVALID_STATE;
     }
-    return gm_room_session_execute_device_command(device_id, command_id, params_json);
+    quest_str_copy(request.source, sizeof(request.source), "manual");
+    quest_str_copy(request.device_id, sizeof(request.device_id), device_id);
+    quest_str_copy(request.command_id, sizeof(request.command_id), command_id);
+    request.require_manual_allowed = true;
+    if (params_json && params_json[0]) {
+        if (strlen(params_json) >= sizeof(request.params_json)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        quest_str_copy(request.params_json, sizeof(request.params_json), params_json);
+    }
+    return command_executor_execute_resolved(&request,
+                                             resolved.client_id,
+                                             &resolved.command,
+                                             out_dispatch,
+                                             NULL,
+                                             0);
 }

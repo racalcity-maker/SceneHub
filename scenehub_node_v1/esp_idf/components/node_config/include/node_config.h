@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "node_led_effects.h"
 #include "node_limits.h"
 
 typedef enum {
@@ -35,6 +36,19 @@ typedef struct {
     uint8_t channel;
     int gpio;
     bool active_low;
+    uint32_t pulse_duration_ms;
+    uint32_t fade_duration_ms;
+    uint32_t blink_on_ms;
+    uint32_t blink_off_ms;
+    uint16_t blink_repeat_count;
+    uint32_t breathe_fade_ms;
+    uint32_t breathe_hold_ms;
+    uint16_t breathe_repeat_count;
+    uint8_t default_value;
+    uint8_t default_target;
+    uint8_t default_min;
+    uint8_t default_max;
+    uint8_t default_final_value;
     char label[24];
 } node_output_pin_config_t;
 
@@ -48,6 +62,53 @@ typedef struct {
 } node_universal_pin_config_t;
 
 typedef struct {
+    uint32_t on_ms;
+    uint32_t off_ms;
+    uint16_t repeat_count;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t white;
+} node_led_blink_preset_t;
+
+typedef struct {
+    uint32_t cycle_ms;
+    uint32_t step_ms;
+    uint16_t repeat_count;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t white;
+} node_led_breathe_preset_t;
+
+typedef struct {
+    uint32_t duration_ms;
+    uint32_t step_ms;
+    uint16_t repeat_count;
+    uint16_t size;
+    uint16_t intensity;
+    uint16_t density;
+    uint16_t fade;
+    node_led_palette_mode_t palette_mode;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t white;
+    uint8_t red2;
+    uint8_t green2;
+    uint8_t blue2;
+    uint8_t white2;
+    uint8_t bg_red;
+    uint8_t bg_green;
+    uint8_t bg_blue;
+    uint8_t bg_white;
+} node_led_effect_preset_t;
+
+typedef struct {
+    node_led_effect_preset_t items[NODE_LED_EFFECT_COUNT];
+} node_led_effect_presets_t;
+
+typedef struct {
     bool enabled;
     uint8_t channel;
     int gpio;
@@ -55,6 +116,9 @@ typedef struct {
     node_led_chipset_t chipset;
     node_led_color_order_t color_order;
     bool rgbw;
+    node_led_blink_preset_t blink;
+    node_led_breathe_preset_t breathe;
+    node_led_effect_presets_t effects;
     char label[24];
 } node_led_strip_config_t;
 
@@ -78,6 +142,7 @@ typedef struct node_config_t {
 void node_config_set_factory_defaults(node_config_t *config);
 esp_err_t node_config_load_or_default(node_config_t *config);
 esp_err_t node_config_save(const node_config_t *config);
+esp_err_t node_config_save_led_editor(const node_led_strip_config_t *led_strips, size_t count);
 esp_err_t node_config_reset_wifi(void);
 esp_err_t node_config_factory_reset(void);
 bool node_config_needs_provisioning(const node_config_t *config);

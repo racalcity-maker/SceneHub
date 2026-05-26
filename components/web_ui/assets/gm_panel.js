@@ -191,7 +191,7 @@ status:()=>gmGet('/api/hardware-io/status'),
 setIoMode:body=>gmPostJson('/api/hardware-io/io-mode',body),
 },
 device:{
-list:(includeSystem=true)=>gmGet(`/api/gm/devices?include_system=${includeSystem?'1':'0'}`),
+list:(includeSystem=true,includeManifestJson=false)=>gmGet(`/api/gm/devices?include_system=${includeSystem?'1':'0'}&include_manifest_json=${includeManifestJson?'1':'0'}`),
 save:device=>gmPostJson('/api/gm/device/save',{device}),
 delete:deviceId=>gmPostJson('/api/gm/device/delete',{device_id:deviceId}),
 describeInterface:clientId=>gmPostJson('/api/gm/device/describe-interface',{client_id:clientId}),
@@ -636,6 +636,7 @@ questDeviceEditor.device_id=el.dataset.deviceId||'';
 questDeviceEditor.open=true;
 questDeviceEditor.draft=null;
 clearQuestDeviceDirty();
+await loadQuestDevices(true);
 render();
 });
 
@@ -1216,8 +1217,28 @@ groups.set('device',existing);
 return Array.from(groups.values()).sort((a,b)=>String(a.label||'').localeCompare(String(b.label||'')));
 }
 
+function sidebarSourceDevices(){
+return questDevices().map(device=>scenarioNormalizeHardwareDevice({
+id:device.id||'',
+name:device.name||device.id||'',
+room_id:device.room_id||'',
+device_description:device.device_description,
+commands:Array.isArray(device.commands)?device.commands:[],
+events:Array.isArray(device.events)?device.events:[]
+})).filter(device=>device&&device.id);
+}
+
+function sidebarDeviceById(deviceId){
+return sidebarSourceDevices().find(device=>device.id===deviceId)||null;
+}
+
+function sidebarCommandById(deviceId,commandId){
+const device=sidebarDeviceById(deviceId);
+return device&&Array.isArray(device.commands)?device.commands.find(cmd=>cmd.id===commandId)||null:null;
+}
+
 function sidebarManualDevices(){
-return scenarioCatalogDevices().filter(device=>device&&device.id&&sidebarResourceGroupsForDevice(device).length);
+return sidebarSourceDevices().filter(device=>device&&device.id&&sidebarResourceGroupsForDevice(device).length);
 }
 
 function sidebarWizardDevice(){
@@ -1355,19 +1376,19 @@ return {device_name:resolved.device_name,resource_label:resolved.resource_label,
 
 function resolveSidebarPreset(preset){
 if(!preset||!preset.device_id||!preset.command_id)return null;
-const device=scenarioDeviceById(preset.device_id)||questDeviceById(preset.device_id);
+const device=sidebarDeviceById(preset.device_id)||questDeviceById(preset.device_id);
 const liveDevice=questDeviceById(preset.device_id)||device;
 if(!device)return null;
 const resources=sidebarResourceGroupsForDevice(device);
 const resource=resources.find(item=>item.key===preset.resource_key)||resources.find(item=>item.actions.some(action=>action.command_id===preset.command_id))||null;
-const action=resource&&resource.actions.find(item=>item.command_id===preset.command_id)||sidebarManualCommandsForDevice(device).find(cmd=>cmd.id===preset.command_id)&&{command_id:preset.command_id,label:scenarioCommandName(preset.device_id,preset.command_id),command:scenarioCommandById(preset.device_id,preset.command_id),params:preset.params&&typeof preset.params==='object'?preset.params:{},resource_label:preset.resource_label||'Device actions'};
-const command=action&&(action.command||scenarioCommandById(preset.device_id,preset.command_id))||scenarioCommandById(preset.device_id,preset.command_id);
+const action=resource&&resource.actions.find(item=>item.command_id===preset.command_id)||sidebarManualCommandsForDevice(device).find(cmd=>cmd.id===preset.command_id)&&{command_id:preset.command_id,label:(sidebarCommandById(preset.device_id,preset.command_id)&&sidebarCommandById(preset.device_id,preset.command_id).label)||preset.command_id,command:sidebarCommandById(preset.device_id,preset.command_id),params:preset.params&&typeof preset.params==='object'?preset.params:{},resource_label:preset.resource_label||'Device actions'};
+const command=action&&(action.command||sidebarCommandById(preset.device_id,preset.command_id))||sidebarCommandById(preset.device_id,preset.command_id);
 if(!command)return null;
 const params={...(action&&action.params&&typeof action.params==='object'?action.params:{}),...(preset.params&&typeof preset.params==='object'?preset.params:{})};
 const deviceName=questDeviceDisplayName(liveDevice||device);
 return {
 id:preset.id,
-label:preset.label||sidebarWizardLabel(device,resource,action||{label:scenarioCommandName(preset.device_id,preset.command_id)}),
+label:preset.label||sidebarWizardLabel(device,resource,action||{label:(command&&command.label)||preset.command_id}),
 device:liveDevice||device,
 device_id:device.id||preset.device_id,
 device_name:deviceName,
@@ -1962,10 +1983,8 @@ const degraded=savedQuestDevices.filter(d=>questDeviceHealth(d)==='degraded').le
 const setupAction=isAdmin()?uiButton({label:'Add device',action:'device.setup.open',dataset:{'device-id':'new'}}):'';
 const presets=sidebarPresets();
 const legacyMigration=sidebarPresetMigrationPending()?`<div class='card'><div class='card-head'><div><h2 class='section-title'>Import legacy browser presets</h2><div class='card-sub'>Found ${esc(legacySidebarPresetCount())} quick action${legacySidebarPresetCount()===1?'':'s'} saved in this browser from the old localStorage model.</div></div><div class='actions'>${uiButton({label:'Import to controller',action:'sidebar.preset.import_legacy'})}</div></div><div class='row-meta'>Import them once into /sdcard/quest/gm_sidebar_presets.json so every browser sees the same operator sidebar.</div></div><div style='height:12px'></div>`:'';
-const questRows=savedQuestDevices.length?savedQuestDevices.map(d=>{const observedClient=observedByClientId(d.client_id||d.id);const health=questDeviceHealth(d);const caps=questDeviceCapabilityMeta(d);const setup=isAdmin()?uiButton({label:'Setup',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':d.id||'1'}}):'';return `<tr><td><strong>${esc(questDeviceDisplayName(d))}</strong><span>${esc(d.id||'')}</span></td><td>${status(health)}</td><td>${esc(questDeviceStatusText(d))}</td><td>${esc(d.client_id||'none')}</td><td>${esc(caps)}</td><td>${observedClient?`${esc(observedClient.connectivity||'unknown')} / fw ${esc(observedClient.fw_version||'n/a')}`:'not observed'}</td><td>${d.enabled===false?'<span class="badge">disabled</span>':'<span class="badge selected-badge">enabled</span>'}</td><td class='observed-actions'>${setup}</td></tr>`;}).join(''):`<tr><td colspan='8' class='observed-empty'>No saved quest devices${isAdmin()?` ${uiButton({label:'Add device',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':'new'}})}`:''}</td></tr>`;
-const observedRows=observed.length?observed.map(o=>{const reg=observedRegistration(o.device_id);return `<tr><td><strong>${esc(observedDisplayName(o))}</strong><span>${esc(o.device_id||'')}</span></td><td>${status(o.connectivity)}</td><td><span class='badge ${reg?'selected-badge':''}'>${reg?'registered':'unregistered'}</span></td><td>${esc(o.fw_version||'n/a')}</td><td>${esc(o.mode||'')}</td><td>${esc(o.state||'')}</td><td>${esc(o.boot_id||'n/a')}</td></tr>`;}).join(''):`<tr><td colspan='7' class='observed-empty'>No physical clients observed</td></tr>`;
 const presetRows=presets.length?presets.map((preset,index)=>renderSidebarPresetRow(preset,index,presets.length)).join(''):`<div class='manual-empty'>No quick actions yet. Add the first preset with the wizard.</div>`;
-return `<div class='observed-toolbar'><div class='observed-summary'><span>Quick actions <strong>${esc(presets.length)}</strong></span><span>Quest devices <strong>${esc(savedQuestDevices.length)}</strong></span><span>Observed <strong>${esc(observed.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Degraded <strong>${esc(degraded)}</strong></span><span>Offline/Fault <strong>${esc(fault)}</strong></span></div><div class='actions'>${setupAction}</div></div>${legacyMigration}<div class='device-preset-layout'><section class='card'><div class='card-head'><div><h2 class='section-title'>Sidebar quick actions</h2><div class='card-sub'>Only these presets are shown to the operator in the right sidebar.</div></div><div class='actions'>${uiButton({label:'New preset',action:'sidebar.preset.new'})}</div></div><div class='list'>${presetRows}</div></section><section>${renderSidebarPresetWizard()}</section></div><div style='height:12px'></div><section><h2 class='section-title'>Quest devices</h2><div class='observed-table-wrap'><table class='observed-table device-table'><thead><tr><th>Device</th><th>Health</th><th>Status</th><th>Client</th><th>Caps</th><th>Observed</th><th>Enabled</th><th></th></tr></thead><tbody>${questRows}</tbody></table></div></section><div style='height:12px'></div><section><h2 class='section-title'>Physical clients</h2><div class='observed-table-wrap'><table class='observed-table device-table'><thead><tr><th>Client</th><th>Status</th><th>Link</th><th>FW</th><th>Mode</th><th>State</th><th>Boot</th></tr></thead><tbody>${observedRows}</tbody></table></div></section>`;
+return `<div class='observed-toolbar'><div class='observed-summary'><span>Quick actions <strong>${esc(presets.length)}</strong></span><span>Quest devices <strong>${esc(savedQuestDevices.length)}</strong></span><span>Observed <strong>${esc(observed.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Degraded <strong>${esc(degraded)}</strong></span><span>Offline/Fault <strong>${esc(fault)}</strong></span></div><div class='actions'>${setupAction}</div></div>${legacyMigration}<div class='device-preset-layout'><section class='card'><div class='card-head'><div><h2 class='section-title'>Sidebar quick actions</h2><div class='card-sub'>Only these presets are shown to the operator in the right sidebar.</div></div><div class='actions'>${uiButton({label:'New preset',action:'sidebar.preset.new'})}</div></div><div class='list'>${presetRows}</div></section><section>${renderSidebarPresetWizard()}</section></div>`;
 }
 
 function renderObservedView(){
@@ -2724,9 +2743,10 @@ setTimeout(()=>loadHardwareIoStatus(false),0);
 }
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const catalogDevices=Array.isArray(catalog.quest_devices)?catalog.quest_devices:[];
-const base=catalogDevices.length?catalogDevices:questDevices().map(device=>({
+const useCatalogOnly=currentView==='scenarios'&&isAdmin();
+const base=useCatalogOnly?catalogDevices:(catalogDevices.length?catalogDevices:questDevices().map(device=>({
 id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',device_description:device.device_description,commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
-)).filter(device=>device.id);
+)).filter(device=>device.id));
 return base.map(scenarioNormalizeHardwareDevice).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
 }
 
@@ -2914,10 +2934,9 @@ return device&&Array.isArray(device.commands)&&device.commands.length?device.com
 }
 
 function defaultParamsForCommand(device,command){
-if(command&&command.default_args&&typeof command.default_args==='object'){
-return JSON.parse(JSON.stringify(command.default_args));
-}
-const params={};
+const params=command&&command.default_args&&typeof command.default_args==='object'
+?JSON.parse(JSON.stringify(command.default_args))
+:{};
 const deviceId=device&&device.id||'';
 const commandId=command&&command.id||'';
 if(deviceId==='system_audio'&&commandId==='play'){
@@ -4586,6 +4605,10 @@ function gmCurrentViewUsesQuestDeviceStatic(){
 return ['room','devices','observed','device_setup','scenarios','hardware_io'].includes(currentView);
 }
 
+function gmCurrentViewNeedsQuestDeviceManifest(){
+return ['rooms','room','devices','device_setup','scenarios'].includes(currentView)||!!questDeviceEditor.open;
+}
+
 function gmCurrentViewUsesScenarioStatic(){
 return ['room','scenarios','profiles'].includes(currentView);
 }
@@ -4637,7 +4660,8 @@ gmTimeline=null;
 async function loadQuestDevices(force){
 if(!force&&gmStaticFresh('questDevices'))return;
 try{
-const res=await api.device.list(true);
+const includeManifestJson=gmCurrentViewNeedsQuestDeviceManifest();
+const res=await api.device.list(true,includeManifestJson);
 gmQuestDevices=await gmJsonOrNull(res);
 gmMarkStaticLoaded('questDevices');
 }
@@ -4931,22 +4955,28 @@ render();
 
 async function loadScenarioEditorCatalogs(force){
 if(!force&&gmStaticFresh('scenarioCatalogs'))return;
-gmScenarioEditorCatalogs={};
+const prevCatalogs=gmScenarioEditorCatalogs&&typeof gmScenarioEditorCatalogs==='object'?gmScenarioEditorCatalogs:{};
 if(!isAdmin()){
 gmMarkStaticLoaded('scenarioCatalogs');
 return;
 }
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
+const nextCatalogs={};
+rooms.forEach(r=>{
+nextCatalogs[r.room_id]=prevCatalogs[r.room_id]&&typeof prevCatalogs[r.room_id]==='object'
+?prevCatalogs[r.room_id]
+:{quest_devices:[],step_schemas:[]};
+});
 await Promise.all(rooms.map(async r=>{
 try{
 const res=await api.room.scenarioEditorCatalog(r.room_id);
 const data=res.ok?await res.json():null;
-gmScenarioEditorCatalogs[r.room_id]=data&&Array.isArray(data.quest_devices)?data:{quest_devices:[],step_schemas:[]};
+nextCatalogs[r.room_id]=data&&Array.isArray(data.quest_devices)?data:nextCatalogs[r.room_id];
 }
 catch(err){
-gmScenarioEditorCatalogs[r.room_id]={quest_devices:[],step_schemas:[]};
 }
 }));
+gmScenarioEditorCatalogs=nextCatalogs;
 gmMarkStaticLoaded('scenarioCatalogs');
 }
 
@@ -5433,6 +5463,12 @@ shouldRender=shouldRender||gmCurrentViewUsesProfileStatic();
 }
 if(needsRoomRuntime||needsSystemSummary){
 const localRuntimeTargetMatches=!roomRuntimeTargets.length||(roomRuntimeTargets.length===1&&roomRuntimeTargets[0]===currentRoomId);
+let summaryRefreshed=false;
+if(needsSystemSummary){
+await loadGMSystemSummaryOnly(false);
+summaryRefreshed=true;
+}
+if(needsRoomRuntime){
 if(localRuntimeRefreshActive&&localRuntimeTargetMatches)return;
 if(runtimeRefreshRecent&&localRuntimeTargetMatches)return;
 if(roomRuntimeTargets.length===1&&roomRuntimeTargets[0]&&roomById(roomRuntimeTargets[0])){
@@ -5441,10 +5477,14 @@ await loadGMRuntimeOnly(roomRuntimeTargets[0],false);
 else if(currentView==='room'&&roomTab==='control'&&currentRoomId){
 await loadGMRuntimeOnly(currentRoomId,false);
 }
-else if(needsRoomRuntime&&currentView==='rooms'){
+else if(currentView==='rooms'){
 await loadGMRoomsRuntimeOnly(roomRuntimeTargets,false);
 }
-else{
+else if(!summaryRefreshed){
+await loadGMSystemSummaryOnly(false);
+}
+}
+else if(!summaryRefreshed){
 await loadGMSystemSummaryOnly(false);
 }
 return;
@@ -6561,9 +6601,13 @@ const draft=scenarioWorkingDraft();
 if(!draft)return false;
 const steps=scenarioActiveSteps(draft);
 if(Number.isFinite(index)&&steps[index]){
-const params=steps[index].params&&typeof steps[index].params==='object'?steps[index].params:{};
+const step=steps[index];
+if(String(step.device_id||'')!=='system_audio'||String(step.command_id||'')!=='play'){
+return gmHandleScenarioStepParamInput(stepParamChannel,false);
+}
+const params=step.params&&typeof step.params==='object'?step.params:{};
 params.channel=stepParamChannel.value||'effect';
-steps[index].params=scenarioNormalizeAudioParams(params);
+step.params=scenarioNormalizeAudioParams(params);
 }
 gmScenarioChangeCommitDraft(draft,index);
 return true;
@@ -6703,7 +6747,8 @@ const steps=scenarioActiveSteps(draft);
 if(!Number.isFinite(index)||!steps[index])return false;
 const step=steps[index];
 const key=field.dataset.stepParam||'';
-if(!key||key==='channel')return false;
+if(!key)return false;
+if(key==='channel'&&String(step.device_id||'')==='system_audio'&&String(step.command_id||'')==='play')return false;
 const params=step.params&&typeof step.params==='object'?{...step.params}:{};
 const typeAttr=(field.getAttribute('type')||'').toLowerCase();
 const paramType=field.dataset.stepParamType||'';
@@ -6936,6 +6981,7 @@ content.onchange=gmHandleEditorChange;
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 const GM_WS_RECONNECT_MS=3000;
 const GM_RUNTIME_HTTP_FALLBACK_MS=5000;
+const GM_WS_POLL_SUPPRESS_MS=30000;
 let gmWsSocket=null;
 let gmWsReconnectTimer=0;
 let gmWsFlushTimer=0;
@@ -6955,6 +7001,13 @@ gmWsReconnectTimer=0;
 gmInitWebSocket();
 }
 ,GM_WS_RECONNECT_MS);
+}
+
+function gmWsHealthy(){
+return !!(gmWsSocket&&
+gmWsSocket.readyState===WebSocket.OPEN&&
+gmWsLastMessageAt>0&&
+(Date.now()-gmWsLastMessageAt)<GM_WS_POLL_SUPPRESS_MS);
 }
 
 function gmWsQueueInvalidation(slice){
@@ -7122,11 +7175,16 @@ method:'POST'}
 
 const gmAdminHome=document.getElementById('gm_admin_home');
 if(gmAdminHome){
-gmAdminHome.onclick=()=>{
+gmAdminHome.onclick=e=>{
+if(!confirmDiscardEditorChanges()){
+e.preventDefault();
+return;
+}
 clearProfileDirty();
 clearScenarioDirty();
 clearQuestDeviceDirty();
 clearTransientFieldDirty();
+window.location='/';
 }
 ;
 }
@@ -7156,13 +7214,13 @@ gmInitWebSocket();
 
 function gmPollActiveRoomRuntimeVisible(){
 if(document.hidden)return;
-const runtimeAge=currentRoomId?Date.now()-((gmRuntimeLastRefreshAt[currentRoomId])||0):GM_RUNTIME_HTTP_FALLBACK_MS;
-if(gmWsSocket&&gmWsSocket.readyState===WebSocket.OPEN&&runtimeAge<GM_RUNTIME_HTTP_FALLBACK_MS)return;
+if(gmWsHealthy())return;
 pollActiveRoomRuntime();
 }
 
 function gmPollStateSnapshotVisible(){
 if(document.hidden)return;
+if(gmWsHealthy())return;
 pollGMStateSnapshot();
 }
 
@@ -7175,7 +7233,7 @@ document.addEventListener('visibilitychange',()=>{
 if(document.hidden)return;
 updateVisibleRoomClocks();
 gmPollActiveRoomRuntimeVisible();
-pollGMStateSnapshot();
+gmPollStateSnapshotVisible();
 });
 
 setInterval(gmPollActiveRoomRuntimeVisible,GM_RUNTIME_HTTP_FALLBACK_MS);

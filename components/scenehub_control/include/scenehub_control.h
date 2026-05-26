@@ -21,6 +21,7 @@ extern "C" {
 #define SCENEHUB_CONTROL_MESSAGE_MAX_LEN    96
 #define SCENEHUB_CONTROL_ACTION_ID_MAX_LEN  32
 #define SCENEHUB_CONTROL_REQUEST_ID_MAX_LEN 48
+#define SCENEHUB_CONTROL_REMOTE_STATUS_MAX_LEN 16
 
 typedef enum {
     SCENEHUB_CONTROL_STATUS_DONE = 0,
@@ -34,10 +35,14 @@ typedef struct {
     scenehub_control_status_t status;
     esp_err_t err;
     bool state_changed;
+    bool has_request_id;
+    bool has_remote_status;
     char room_id[QUEST_ROOM_ID_MAX_LEN];
     char action_id[SCENEHUB_CONTROL_ACTION_ID_MAX_LEN];
     char error_code[SCENEHUB_CONTROL_ERROR_CODE_MAX_LEN];
     char message[SCENEHUB_CONTROL_MESSAGE_MAX_LEN];
+    char request_id[SCENEHUB_CONTROL_REQUEST_ID_MAX_LEN];
+    char remote_status[SCENEHUB_CONTROL_REMOTE_STATUS_MAX_LEN];
 } scenehub_control_result_t;
 
 /*

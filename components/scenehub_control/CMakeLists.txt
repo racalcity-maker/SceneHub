@@ -1,7 +1,8 @@
 idf_component_register(
-    SRCS "scenehub_control.c" "scenehub_control_rooms.c" "scenehub_control_devices.c" "scenehub_control_scenarios.c" "scenehub_control_profiles.c" "scenehub_control_sidebar_presets.c" "scenehub_control_hardware_io.c"
+    SRCS "scenehub_control_dispatch.c" "scenehub_control.c" "scenehub_control_rooms.c" "scenehub_control_devices.c" "scenehub_control_scenarios.c" "scenehub_control_profiles.c" "scenehub_control_sidebar_presets.c" "scenehub_control_hardware_io.c"
     INCLUDE_DIRS "include"
     REQUIRES
+        command_executor
         device_control_ingest
         gm_core
         hardware_io

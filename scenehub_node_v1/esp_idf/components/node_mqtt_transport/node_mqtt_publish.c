@@ -115,7 +115,7 @@ esp_err_t node_mqtt_publish_status_locked(void)
                      sizeof(s_tx_payload),
                      "{\"ts_ms\":%lld,\"fw_version\":\"0.1.0\",\"mode\":\"normal\","
                      "\"state\":\"idle\",\"health\":\"ok\","
-                     "\"capabilities\":[\"heartbeat\",\"status\",\"describe_interface\",\"node.identify\",\"node.get_status\",\"relay.set\",\"relay.pulse\",\"relay.all_off\",\"mosfet.set\",\"mosfet.fade\",\"mosfet.pulse\",\"mosfet.blink\",\"mosfet.breathe\",\"mosfet.all_off\",\"mosfet.effect\",\"io.set\",\"io.all_off\",\"node.all_off\",\"led.off\",\"led.solid\",\"led.effect\",\"input.changed\"],"
+                     "\"capabilities\":[\"heartbeat\",\"status\",\"describe_interface\",\"node.identify\",\"node.get_status\",\"relay.set\",\"relay.pulse\",\"relay.all_off\",\"mosfet.set\",\"mosfet.fade\",\"mosfet.pulse\",\"mosfet.blink\",\"mosfet.breathe\",\"mosfet.all_off\",\"mosfet.effect\",\"io.set\",\"io.all_off\",\"node.all_off\",\"led.off\",\"led.solid\",\"led.blink\",\"led.breathe\",\"led.effect\",\"input.changed\"],"
                      "\"runtime\":{\"active\":false},\"status_seq\":%u}",
                      (long long)node_mqtt_now_ms(),
                      (unsigned)s_status_seq);

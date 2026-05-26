@@ -104,15 +104,61 @@ esp_err_t wifi_scan_handler(httpd_req_t *req)
 
 esp_err_t wifi_config_handler(httpd_req_t *req)
 {
-    char q[160];
+    size_t len = req->content_len;
+    char *body = NULL;
     char ssid[32] = {0};
     char pass[64] = {0};
     char host[32] = {0};
-    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
-        httpd_query_key_value(q, "ssid", ssid, sizeof(ssid));
-        httpd_query_key_value(q, "password", pass, sizeof(pass));
-        httpd_query_key_value(q, "host", host, sizeof(host));
+
+    if (len == 0 || len > 512) {
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid body"));
     }
+
+    body = web_ui_malloc(len + 1);
+    if (!body) {
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory"));
+    }
+
+    size_t received = 0;
+    while (received < len) {
+        int r = httpd_req_recv(req, body + received, len - received);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            web_ui_free(body);
+            return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"));
+        }
+        received += (size_t)r;
+    }
+    body[len] = 0;
+
+    cJSON *root = cJSON_Parse(body);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) {
+            cJSON_Delete(root);
+        }
+        web_ui_free(body);
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "object required"));
+    }
+
+    cJSON *ssid_json = cJSON_GetObjectItemCaseSensitive(root, "ssid");
+    cJSON *password_json = cJSON_GetObjectItemCaseSensitive(root, "password");
+    cJSON *host_json = cJSON_GetObjectItemCaseSensitive(root, "host");
+
+    if (cJSON_IsString(ssid_json) && ssid_json->valuestring) {
+        snprintf(ssid, sizeof(ssid), "%s", ssid_json->valuestring);
+    }
+    if (cJSON_IsString(password_json) && password_json->valuestring) {
+        snprintf(pass, sizeof(pass), "%s", password_json->valuestring);
+    }
+    if (cJSON_IsString(host_json) && host_json->valuestring) {
+        snprintf(host, sizeof(host), "%s", host_json->valuestring);
+    }
+
+    cJSON_Delete(root);
+    web_ui_free(body);
+
     app_config_t cfg = *config_store_get();
     if (ssid[0]) {
         strncpy(cfg.wifi.ssid, ssid, sizeof(cfg.wifi.ssid) - 1);
@@ -137,15 +183,61 @@ esp_err_t wifi_config_handler(httpd_req_t *req)
 
 esp_err_t mqtt_config_handler(httpd_req_t *req)
 {
-    char q[160];
+    size_t len = req->content_len;
+    char *body = NULL;
     char id[16] = {0};
     char port[8] = {0};
     char keep[8] = {0};
-    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
-        httpd_query_key_value(q, "id", id, sizeof(id));
-        httpd_query_key_value(q, "port", port, sizeof(port));
-        httpd_query_key_value(q, "keepalive", keep, sizeof(keep));
+
+    if (len == 0 || len > 256) {
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid body"));
     }
+
+    body = web_ui_malloc(len + 1);
+    if (!body) {
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory"));
+    }
+
+    size_t received = 0;
+    while (received < len) {
+        int r = httpd_req_recv(req, body + received, len - received);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            web_ui_free(body);
+            return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"));
+        }
+        received += (size_t)r;
+    }
+    body[len] = 0;
+
+    cJSON *root = cJSON_Parse(body);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) {
+            cJSON_Delete(root);
+        }
+        web_ui_free(body);
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "object required"));
+    }
+
+    cJSON *id_json = cJSON_GetObjectItemCaseSensitive(root, "id");
+    cJSON *port_json = cJSON_GetObjectItemCaseSensitive(root, "port");
+    cJSON *keep_json = cJSON_GetObjectItemCaseSensitive(root, "keepalive");
+
+    if (cJSON_IsString(id_json) && id_json->valuestring) {
+        snprintf(id, sizeof(id), "%s", id_json->valuestring);
+    }
+    if (cJSON_IsNumber(port_json)) {
+        snprintf(port, sizeof(port), "%d", port_json->valueint);
+    }
+    if (cJSON_IsNumber(keep_json)) {
+        snprintf(keep, sizeof(keep), "%d", keep_json->valueint);
+    }
+
+    cJSON_Delete(root);
+    web_ui_free(body);
+
     app_config_t cfg = *config_store_get();
     if (id[0]) {
         strncpy(cfg.mqtt.broker_id, id, sizeof(cfg.mqtt.broker_id) - 1);
@@ -166,12 +258,58 @@ esp_err_t mqtt_config_handler(httpd_req_t *req)
 
 esp_err_t logging_config_handler(httpd_req_t *req)
 {
-    char q[64];
+    size_t len = req->content_len;
+    char *body = NULL;
     char verbose[16] = {0};
-    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK ||
-        httpd_query_key_value(q, "verbose", verbose, sizeof(verbose)) != ESP_OK) {
+
+    if (len == 0 || len > 128) {
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid body"));
+    }
+
+    body = web_ui_malloc(len + 1);
+    if (!body) {
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory"));
+    }
+
+    size_t received = 0;
+    while (received < len) {
+        int r = httpd_req_recv(req, body + received, len - received);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            web_ui_free(body);
+            return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"));
+        }
+        received += (size_t)r;
+    }
+    body[len] = 0;
+
+    cJSON *root = cJSON_Parse(body);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) {
+            cJSON_Delete(root);
+        }
+        web_ui_free(body);
+        return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "object required"));
+    }
+
+    cJSON *verbose_json = cJSON_GetObjectItemCaseSensitive(root, "verbose");
+    if (cJSON_IsBool(verbose_json)) {
+        snprintf(verbose, sizeof(verbose), "%s", cJSON_IsTrue(verbose_json) ? "true" : "false");
+    } else if (cJSON_IsNumber(verbose_json)) {
+        snprintf(verbose, sizeof(verbose), "%d", verbose_json->valueint);
+    } else if (cJSON_IsString(verbose_json) && verbose_json->valuestring) {
+        snprintf(verbose, sizeof(verbose), "%s", verbose_json->valuestring);
+    }
+
+    cJSON_Delete(root);
+    web_ui_free(body);
+
+    if (!verbose[0]) {
         return WEB_HTTP_CHECK(httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing verbose"));
     }
+
     bool enable = false;
     if (strcasecmp(verbose, "1") == 0 || strcasecmp(verbose, "true") == 0 ||
         strcasecmp(verbose, "on") == 0 || strcasecmp(verbose, "yes") == 0) {

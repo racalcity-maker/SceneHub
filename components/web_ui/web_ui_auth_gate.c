@@ -1,6 +1,9 @@
 #include "web_ui_auth_internal.h"
 
+#include <string.h>
+
 #include "esp_log.h"
+#include "config_store.h"
 #include "web_ui_utils.h"
 
 static esp_err_t web_same_origin_reject(httpd_req_t *req)
@@ -9,6 +12,52 @@ static esp_err_t web_same_origin_reject(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     return WEB_HTTP_CHECK(httpd_resp_send(req,
                                           "{\"error\":\"csrf\",\"message\":\"same-origin check failed\"}",
+                                          HTTPD_RESP_USE_STRLEN));
+}
+
+static bool admin_password_change_allowed_uri(const char *uri)
+{
+    char path[96];
+    size_t len = 0;
+    if (!uri) {
+        return false;
+    }
+    while (uri[len] && uri[len] != '?' && len < sizeof(path) - 1) {
+        path[len] = uri[len];
+        ++len;
+    }
+    path[len] = '\0';
+    return strcmp(path, "/") == 0 ||
+           strcmp(path, "/api/status") == 0 ||
+           strcmp(path, "/api/session/info") == 0 ||
+           strcmp(path, "/api/auth/password") == 0 ||
+           strcmp(path, "/api/auth/logout") == 0;
+}
+
+static esp_err_t admin_password_change_required_response(httpd_req_t *req)
+{
+    char path[96];
+    size_t len = 0;
+    if (!req) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    while (req->uri[len] && req->uri[len] != '?' && len < sizeof(path) - 1) {
+        path[len] = req->uri[len];
+        ++len;
+    }
+    path[len] = '\0';
+    if (req->method == HTTP_GET && strcmp(path, "/gm") == 0) {
+        httpd_resp_set_status(req, "302 Found");
+        httpd_resp_set_hdr(req, "Location", "/?force_password_change=1");
+        return WEB_HTTP_CHECK(httpd_resp_send(req, NULL, 0));
+    }
+    if (req->method == HTTP_GET && strcmp(path, "/") == 0) {
+        return ESP_OK;
+    }
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_set_type(req, "application/json");
+    return WEB_HTTP_CHECK(httpd_resp_send(req,
+                                          "{\"error\":\"password_change_required\",\"message\":\"admin password must be changed before normal use\"}",
                                           HTTPD_RESP_USE_STRLEN));
 }
 
@@ -27,6 +76,13 @@ esp_err_t auth_gate_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         WEB_HTTP_CHECK(httpd_resp_send(req, "{\"error\":\"forbidden\"}", HTTPD_RESP_USE_STRLEN));
         return ESP_OK;
+    }
+    const app_config_t *cfg = config_store_get();
+    if (role == WEB_USER_ROLE_ADMIN &&
+        cfg &&
+        !cfg->web.password_initialized &&
+        !admin_password_change_allowed_uri(req->uri)) {
+        return admin_password_change_required_response(req);
     }
     if (req->method != HTTP_GET && !web_ui_is_same_origin_request(req)) {
         return web_same_origin_reject(req);

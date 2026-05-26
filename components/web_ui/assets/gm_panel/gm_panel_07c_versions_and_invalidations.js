@@ -121,6 +121,12 @@ shouldRender=shouldRender||gmCurrentViewUsesProfileStatic();
 }
 if(needsRoomRuntime||needsSystemSummary){
 const localRuntimeTargetMatches=!roomRuntimeTargets.length||(roomRuntimeTargets.length===1&&roomRuntimeTargets[0]===currentRoomId);
+let summaryRefreshed=false;
+if(needsSystemSummary){
+await loadGMSystemSummaryOnly(false);
+summaryRefreshed=true;
+}
+if(needsRoomRuntime){
 if(localRuntimeRefreshActive&&localRuntimeTargetMatches)return;
 if(runtimeRefreshRecent&&localRuntimeTargetMatches)return;
 if(roomRuntimeTargets.length===1&&roomRuntimeTargets[0]&&roomById(roomRuntimeTargets[0])){
@@ -129,10 +135,14 @@ await loadGMRuntimeOnly(roomRuntimeTargets[0],false);
 else if(currentView==='room'&&roomTab==='control'&&currentRoomId){
 await loadGMRuntimeOnly(currentRoomId,false);
 }
-else if(needsRoomRuntime&&currentView==='rooms'){
+else if(currentView==='rooms'){
 await loadGMRoomsRuntimeOnly(roomRuntimeTargets,false);
 }
-else{
+else if(!summaryRefreshed){
+await loadGMSystemSummaryOnly(false);
+}
+}
+else if(!summaryRefreshed){
 await loadGMSystemSummaryOnly(false);
 }
 return;

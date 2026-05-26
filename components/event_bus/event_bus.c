@@ -22,6 +22,7 @@
 #define EVENT_BUS_MAX_HANDLERS 12
 #define EVENT_BUS_HANDLER_WARN_MS 20
 #define EVENT_BUS_JOB_TASK_STACK_BYTES 8192
+#define EVENT_BUS_STATUS_PUBLISH_MIN_US 500000ULL
 
 typedef struct {
     event_bus_job_fn_t fn;
@@ -54,6 +55,7 @@ static uint32_t s_max_handler_ms = 0;
 static uint32_t s_job_posted_count = 0;
 static uint32_t s_job_dispatched_count = 0;
 static uint32_t s_job_drop_count = 0;
+static uint64_t s_last_status_publish_us = 0;
 
 static uint32_t queue_waiting(QueueHandle_t queue)
 {
@@ -175,7 +177,7 @@ esp_err_t event_bus_get_stats(event_bus_stats_t *out)
     return ESP_OK;
 }
 
-static void publish_status(void)
+static void publish_status_snapshot(void)
 {
     event_bus_stats_t stats = {0};
     if (event_bus_get_stats(&stats) != ESP_OK) {
@@ -192,6 +194,33 @@ static void publish_status(void)
                                     stats.job_dispatched,
                                     stats.job_dropped,
                                     stats.job_queue_waiting);
+}
+
+static void publish_status_now(void)
+{
+    portENTER_CRITICAL(&s_stats_lock);
+    s_last_status_publish_us = (uint64_t)esp_timer_get_time();
+    portEXIT_CRITICAL(&s_stats_lock);
+    publish_status_snapshot();
+}
+
+static void publish_status_if_due(void)
+{
+    uint64_t now_us = (uint64_t)esp_timer_get_time();
+    bool should_publish = false;
+
+    portENTER_CRITICAL(&s_stats_lock);
+    if (s_last_status_publish_us == 0 ||
+        now_us <= s_last_status_publish_us ||
+        (now_us - s_last_status_publish_us) >= EVENT_BUS_STATUS_PUBLISH_MIN_US) {
+        s_last_status_publish_us = now_us;
+        should_publish = true;
+    }
+    portEXIT_CRITICAL(&s_stats_lock);
+
+    if (should_publish) {
+        publish_status_snapshot();
+    }
 }
 
 static void dispatch_message(const scenehub_event_t *message)
@@ -233,7 +262,7 @@ static void event_bus_task(void *param)
             message_pool_free(message);
             message = NULL;
             stats_increment(&s_dispatched_count);
-            publish_status();
+            publish_status_if_due();
         }
     }
 }
@@ -249,7 +278,7 @@ static void event_bus_job_task(void *param)
                 job.fn(job.ctx);
             }
             stats_increment(&s_job_dispatched_count);
-            publish_status();
+            publish_status_if_due();
         }
     }
 }
@@ -257,7 +286,7 @@ static void event_bus_job_task(void *param)
 esp_err_t event_bus_init(void)
 {
     if (s_initialized) {
-        publish_status();
+        publish_status_now();
         return ESP_OK;
     }
 
@@ -308,9 +337,10 @@ esp_err_t event_bus_init(void)
     s_job_posted_count = 0;
     s_job_dispatched_count = 0;
     s_job_drop_count = 0;
+    s_last_status_publish_us = 0;
     portEXIT_CRITICAL(&s_stats_lock);
 
-    publish_status();
+    publish_status_now();
     s_initialized = true;
     return ESP_OK;
 }
@@ -341,7 +371,7 @@ esp_err_t event_bus_start(void)
         }
     }
 
-    publish_status();
+    publish_status_now();
     return ESP_OK;
 }
 
@@ -375,7 +405,7 @@ esp_err_t event_bus_post_priority(const scenehub_event_t *message,
                  scenehub_event_type_to_string(message->type),
                  scenehub_event_payload_type_to_string(message->payload_type),
                  message->topic);
-        publish_status();
+        publish_status_now();
         return ESP_ERR_INVALID_ARG;
     }
 #endif
@@ -386,7 +416,7 @@ esp_err_t event_bus_post_priority(const scenehub_event_t *message,
         ESP_LOGW(TAG, "drop event type=%s topic=%s: message pool exhausted",
                  scenehub_event_type_to_string(message->type),
                  message->topic);
-        publish_status();
+        publish_status_now();
         return ESP_ERR_NO_MEM;
     }
 
@@ -409,12 +439,12 @@ esp_err_t event_bus_post_priority(const scenehub_event_t *message,
         stats_increment(&s_drop_count);
         ESP_LOGW(TAG, "drop event type=%s topic=%s", scenehub_event_type_to_string(type), topic);
         message_pool_free(queued);
-        publish_status();
+        publish_status_now();
         return ESP_ERR_TIMEOUT;
     }
 
     stats_increment(&s_posted_count);
-    publish_status();
+    publish_status_if_due();
     return ESP_OK;
 }
 
@@ -435,12 +465,12 @@ esp_err_t event_bus_post_job(event_bus_job_fn_t fn, void *ctx, TickType_t timeou
     if (xQueueSend(s_job_queue, &job, timeout) != pdTRUE) {
         stats_increment(&s_job_drop_count);
         ESP_LOGW(TAG, "drop event bus job");
-        publish_status();
+        publish_status_now();
         return ESP_ERR_TIMEOUT;
     }
 
     stats_increment(&s_job_posted_count);
-    publish_status();
+    publish_status_if_due();
     return ESP_OK;
 }
 
@@ -454,7 +484,7 @@ esp_err_t event_bus_register_handler(event_bus_handler_t handler)
     for (size_t i = 0; i < s_handler_count; ++i) {
         if (s_handlers[i] == handler) {
             portEXIT_CRITICAL(&s_handler_lock);
-            publish_status();
+            publish_status_now();
             return ESP_OK;
         }
     }
@@ -466,6 +496,6 @@ esp_err_t event_bus_register_handler(event_bus_handler_t handler)
     s_handlers[s_handler_count++] = handler;
     portEXIT_CRITICAL(&s_handler_lock);
 
-    publish_status();
+    publish_status_now();
     return ESP_OK;
 }

@@ -114,6 +114,14 @@ bool web_ui_scenehub_control_is_done(esp_err_t call_err, const scenehub_control_
            result->status == SCENEHUB_CONTROL_STATUS_DONE;
 }
 
+bool web_ui_scenehub_control_is_success(esp_err_t call_err, const scenehub_control_result_t *result)
+{
+    return call_err == ESP_OK &&
+           result &&
+           (result->status == SCENEHUB_CONTROL_STATUS_DONE ||
+            result->status == SCENEHUB_CONTROL_STATUS_ACCEPTED);
+}
+
 esp_err_t web_ui_send_scenehub_control_ack(httpd_req_t *req)
 {
     return web_ui_send_ok(req, "application/json", "{\"ok\":true,\"accepted\":true}");

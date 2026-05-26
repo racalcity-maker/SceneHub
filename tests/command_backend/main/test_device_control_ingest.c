@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 
 #include "unity.h"
@@ -122,6 +123,92 @@ static void test_control_ingest_event_does_not_overwrite_last_result(void)
     TEST_ASSERT_EQUAL_UINT32(1, state.event_count);
 }
 
+static void test_control_ingest_preserves_started_result_status(void)
+{
+    device_control_ingest_device_t state = {0};
+    dci_test_bootstrap();
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      device_control_ingest_handle_mqtt("cp/v1/dev/node_1/result",
+                                                        "{\"ts_ms\":1000,\"request_id\":\"req-10\",\"command\":\"led.effect\",\"status\":\"started\"}"));
+
+    TEST_ASSERT_EQUAL(ESP_OK, device_control_ingest_get_device("node_1", &state));
+    TEST_ASSERT_TRUE(state.has_result);
+    TEST_ASSERT_EQUAL_STRING("req-10", state.result_request_id);
+    TEST_ASSERT_EQUAL_STRING("led.effect", state.result_command);
+    TEST_ASSERT_EQUAL_STRING("started", state.result_status);
+}
+
+static void test_control_ingest_keeps_small_result_data_in_steady_state(void)
+{
+    device_control_ingest_device_t state = {0};
+    char describe_json[DEVICE_CONTROL_INGEST_DESCRIBE_INTERFACE_DATA_JSON_MAX_LEN] = {0};
+
+    dci_test_bootstrap();
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      device_control_ingest_handle_mqtt("cp/v1/dev/node_1/result",
+                                                        "{\"ts_ms\":1000,\"request_id\":\"req-1\",\"command\":\"relay.get_state\",\"status\":\"done\",\"data\":{\"on\":true}}"));
+
+    TEST_ASSERT_EQUAL(ESP_OK, device_control_ingest_get_device("node_1", &state));
+    TEST_ASSERT_EQUAL_STRING("req-1", state.result_request_id);
+    TEST_ASSERT_EQUAL_STRING("relay.get_state", state.result_command);
+    TEST_ASSERT_EQUAL_STRING("done", state.result_status);
+    TEST_ASSERT_EQUAL_STRING("{\"on\":true}", state.result_data_json);
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
+                      device_control_ingest_take_describe_interface_data("node_1",
+                                                                         "req-1",
+                                                                         describe_json,
+                                                                         sizeof(describe_json)));
+}
+
+static void test_control_ingest_routes_describe_interface_data_to_transient_cache(void)
+{
+    device_control_ingest_device_t state = {0};
+    char large_name[2600];
+    char payload[4096];
+    char describe_json[DEVICE_CONTROL_INGEST_DESCRIBE_INTERFACE_DATA_JSON_MAX_LEN] = {0};
+
+    memset(large_name, 'x', sizeof(large_name) - 1);
+    large_name[sizeof(large_name) - 1] = '\0';
+    snprintf(payload,
+             sizeof(payload),
+             "{\"ts_ms\":1000,\"request_id\":\"iface-1\",\"command\":\"describe_interface\","
+             "\"status\":\"done\",\"data\":{\"device_description\":{\"manifest_version\":2,"
+             "\"format\":\"compact_resources\",\"node_kind\":\"scenehub_node\","
+             "\"capability_contract\":\"scenehub.node.compact.v1\","
+             "\"device\":{\"id\":\"node_1\",\"name\":\"%s\",\"kind\":\"scenehub_node\"},"
+             "\"resources\":{\"relays\":[],\"mosfets\":[],\"inputs\":[],\"outputs\":[],\"led_strips\":[]},"
+             "\"command_templates\":[],\"event_templates\":[],\"schemas\":{}}}}",
+             large_name);
+    TEST_ASSERT_TRUE(strlen(payload) > DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN);
+
+    dci_test_bootstrap();
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      device_control_ingest_handle_mqtt("cp/v1/dev/node_1/result", payload));
+
+    TEST_ASSERT_EQUAL(ESP_OK, device_control_ingest_get_device("node_1", &state));
+    TEST_ASSERT_EQUAL_STRING("iface-1", state.result_request_id);
+    TEST_ASSERT_EQUAL_STRING("describe_interface", state.result_command);
+    TEST_ASSERT_EQUAL_STRING("done", state.result_status);
+    TEST_ASSERT_EQUAL_STRING("", state.result_data_json);
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      device_control_ingest_take_describe_interface_data("node_1",
+                                                                         "iface-1",
+                                                                         describe_json,
+                                                                         sizeof(describe_json)));
+    TEST_ASSERT_NOT_NULL(strstr(describe_json, "\"device_description\""));
+    TEST_ASSERT_NOT_NULL(strstr(describe_json, large_name));
+    describe_json[0] = '\0';
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
+                      device_control_ingest_take_describe_interface_data("node_1",
+                                                                         "iface-1",
+                                                                         describe_json,
+                                                                         sizeof(describe_json)));
+}
+
 void register_device_control_ingest_tests(void)
 {
     RUN_TEST(test_control_ingest_parses_heartbeat_status_diag_result);
@@ -129,4 +216,7 @@ void register_device_control_ingest_tests(void)
     RUN_TEST(test_control_ingest_online_window_uses_last_seen);
     RUN_TEST(test_control_ingest_parses_native_device_event);
     RUN_TEST(test_control_ingest_event_does_not_overwrite_last_result);
+    RUN_TEST(test_control_ingest_preserves_started_result_status);
+    RUN_TEST(test_control_ingest_keeps_small_result_data_in_steady_state);
+    RUN_TEST(test_control_ingest_routes_describe_interface_data_to_transient_cache);
 }

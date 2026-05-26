@@ -16,6 +16,15 @@ typedef struct {
 } dci_slot_t;
 
 typedef struct {
+    bool in_use;
+    uint64_t rx_ms;
+    char device_id[QUEST_ID_MAX_LEN];
+    char request_id[DEVICE_CONTROL_INGEST_REQUEST_ID_MAX_LEN];
+    char *data_json;
+    size_t data_len;
+} dci_describe_interface_cache_entry_t;
+
+typedef struct {
     char device_id[QUEST_ID_MAX_LEN];
     uint64_t last_seen_ms;
     bool has_status;
@@ -37,10 +46,17 @@ extern StaticSemaphore_t dci_s_lock_storage;
 extern portMUX_TYPE dci_s_lock_init_lock;
 extern uint32_t dci_s_generation;
 extern char dci_s_last_changed_device_id[QUEST_ID_MAX_LEN];
+extern dci_describe_interface_cache_entry_t dci_s_describe_interface_cache[];
 
 uint64_t dci_now_ms(void);
 dci_slot_t *dci_find_slot_locked(const char *device_id);
 dci_slot_t *dci_alloc_slot_locked(const char *device_id);
+void dci_clear_describe_interface_cache_locked(void);
+esp_err_t dci_store_describe_interface_data_locked(const char *device_id,
+                                                   const char *request_id,
+                                                   const char *json,
+                                                   size_t json_len,
+                                                   uint64_t rx_ms);
 
 void dci_capture_event_snapshot(const device_control_ingest_device_t *state,
                                 bool control_is_event,

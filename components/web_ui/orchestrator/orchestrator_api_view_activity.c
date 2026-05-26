@@ -30,6 +30,7 @@ cJSON *orchestrator_api_view_audit_recent(const orchestrator_audit_entry_t *entr
         cJSON_AddStringToObject(item, "source", entry->source);
         cJSON_AddStringToObject(item, "device_id", entry->device_id);
         cJSON_AddStringToObject(item, "action_id", entry->action_id);
+        cJSON_AddStringToObject(item, "request_id", entry->request_id);
         cJSON_AddBoolToObject(item, "success", entry->success);
         cJSON_AddStringToObject(item, "error_code", entry->error_code);
         cJSON_AddItemToArray(items, item);
@@ -70,6 +71,7 @@ cJSON *orchestrator_api_view_timeline_recent(const orchestrator_timeline_entry_t
         cJSON_AddStringToObject(item, "source", entry->source);
         cJSON_AddStringToObject(item, "room_id", entry->room_id);
         cJSON_AddStringToObject(item, "device_id", entry->device_id);
+        cJSON_AddStringToObject(item, "request_id", entry->request_id);
         cJSON_AddStringToObject(item, "title", entry->title);
         cJSON_AddStringToObject(item, "details", entry->details);
         cJSON_AddItemToArray(items, item);

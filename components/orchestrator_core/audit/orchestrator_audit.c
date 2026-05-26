@@ -60,6 +60,7 @@ esp_err_t orchestrator_audit_init(void)
 esp_err_t orchestrator_audit_log_device_action(const char *source,
                                                const char *device_id,
                                                const char *action_id,
+                                               const char *request_id,
                                                bool success,
                                                const char *error_code)
 {
@@ -80,6 +81,7 @@ esp_err_t orchestrator_audit_log_device_action(const char *source,
     audit_str_copy(entry->source, sizeof(entry->source), source);
     audit_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     audit_str_copy(entry->action_id, sizeof(entry->action_id), action_id);
+    audit_str_copy(entry->request_id, sizeof(entry->request_id), request_id);
     entry->success = success;
     audit_str_copy(entry->error_code, sizeof(entry->error_code), error_code);
 

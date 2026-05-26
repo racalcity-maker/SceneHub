@@ -142,6 +142,7 @@ esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(audio, "fmt", a_status.fmt);
 
     cJSON_AddStringToObject(web, "username", cfg->web.username);
+    cJSON_AddBoolToObject(web, "password_initialized", cfg->web.password_initialized);
     cJSON_AddStringToObject(web_operator, "username", cfg->web_user.username);
 
     cJSON_AddBoolToObject(sd, "ok", sd_ok);

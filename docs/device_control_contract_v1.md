@@ -114,7 +114,7 @@ Rules:
 - Nodes must treat `request_id` as the idempotency key. If the same command with
   the same `request_id` is received again, the node must not repeat unsafe
   physical side effects. It should republish the last known result, or publish
-  `accepted` if the original work is still running.
+  `accepted` or `started` if the original work is still running.
 - Nodes may ignore stale duplicate commands whose terminal result was already
   published and whose local duplicate cache expired, but they must not execute
   them as fresh commands with the same `request_id`.
@@ -181,10 +181,11 @@ Accepted result for long-running work:
 
 Rules:
 
-- `status` is `done`, `failed`, `rejected`, or `accepted`.
-- `accepted` is only for long-running commands that will publish a later
-  terminal `done`, `failed`, or `rejected`.
+- `status` is `done`, `failed`, `rejected`, `accepted`, or `started`.
+- `accepted` and `started` are non-terminal states for commands that will
+  publish a later terminal `done`, `failed`, or `rejected`.
 - `accepted` never advances a `result_required` scenario step.
+- `started` never advances a `result_required` scenario step.
 - Only terminal `done` advances a `result_required` scenario step.
 - `failed`, `rejected`, or timeout fail the step.
 - `failed` and `rejected` must include `error.code`.
@@ -231,8 +232,8 @@ Boot identity:
 Inflight commands:
 
 - If a node reconnects while executing a command, it should publish `accepted`
-  for the existing `request_id` if execution is still active, then publish a
-  terminal result when complete.
+  or `started` for the existing `request_id` if execution is still active, then
+  publish a terminal result when complete.
 - If a node rebooted and lost command state, it should publish `failed` with
   `error.code=internal_error` when it can identify the lost request. If it cannot
   identify the request, SceneHub will time out the command.
@@ -485,7 +486,7 @@ Recommended optional commands:
 - builds a command envelope using `command` and merged args;
 - sends to `cp/v1/dev/{client_id}/control/command`;
 - waits for terminal result when `policy.result_required=true`;
-- ignores `accepted` for advancement;
+- ignores `accepted` and `started` for advancement;
 - advances only on terminal `done`;
 - fails the scenario step on `failed`, `rejected`, or timeout.
 

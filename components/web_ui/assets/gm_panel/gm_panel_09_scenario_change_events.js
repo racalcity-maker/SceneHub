@@ -433,9 +433,13 @@ const draft=scenarioWorkingDraft();
 if(!draft)return false;
 const steps=scenarioActiveSteps(draft);
 if(Number.isFinite(index)&&steps[index]){
-const params=steps[index].params&&typeof steps[index].params==='object'?steps[index].params:{};
+const step=steps[index];
+if(String(step.device_id||'')!=='system_audio'||String(step.command_id||'')!=='play'){
+return gmHandleScenarioStepParamInput(stepParamChannel,false);
+}
+const params=step.params&&typeof step.params==='object'?step.params:{};
 params.channel=stepParamChannel.value||'effect';
-steps[index].params=scenarioNormalizeAudioParams(params);
+step.params=scenarioNormalizeAudioParams(params);
 }
 gmScenarioChangeCommitDraft(draft,index);
 return true;
@@ -575,7 +579,8 @@ const steps=scenarioActiveSteps(draft);
 if(!Number.isFinite(index)||!steps[index])return false;
 const step=steps[index];
 const key=field.dataset.stepParam||'';
-if(!key||key==='channel')return false;
+if(!key)return false;
+if(key==='channel'&&String(step.device_id||'')==='system_audio'&&String(step.command_id||'')==='play')return false;
 const params=step.params&&typeof step.params==='object'?{...step.params}:{};
 const typeAttr=(field.getAttribute('type')||'').toLowerCase();
 const paramType=field.dataset.stepParamType||'';

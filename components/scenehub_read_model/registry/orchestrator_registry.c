@@ -158,11 +158,7 @@ static void orch_registry_event_handler(const scenehub_event_t *message)
     if (!message) {
         return;
     }
-    if (message->type == SCENEHUB_EVENT_DEVICE_CONFIG_CHANGED ||
-        message->type == SCENEHUB_EVENT_RUNTIME_CONTROL ||
-        scenehub_event_is_device_status(message) ||
-        scenehub_event_is_device_runtime(message) ||
-        scenehub_event_is_device_control(message)) {
+    if (message->type == SCENEHUB_EVENT_DEVICE_CONFIG_CHANGED) {
         orch_cache_mark_invalidate_pending();
     }
 }

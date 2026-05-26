@@ -1325,6 +1325,88 @@ static void test_web_ui_device_save_accepts_large_compact_manifest_body(void)
     cJSON_Delete(root);
 }
 
+static void test_web_ui_quest_devices_handler_can_omit_or_include_manifest_json(void)
+{
+    cJSON *root = NULL;
+    cJSON *manifest = NULL;
+    cJSON *device = NULL;
+    cJSON *resources = NULL;
+    cJSON *commands = NULL;
+    cJSON *events = NULL;
+    cJSON *schemas = NULL;
+    cJSON *response = NULL;
+    cJSON *devices = NULL;
+    cJSON *first = NULL;
+    char *body = NULL;
+
+    handler_bootstrap();
+
+    root = cJSON_CreateObject();
+    TEST_ASSERT_NOT_NULL(root);
+    cJSON_AddStringToObject(root, "id", "compact_node");
+    cJSON_AddStringToObject(root, "client_id", "compact_node");
+    cJSON_AddStringToObject(root, "name", "Compact Node");
+    cJSON_AddBoolToObject(root, "enabled", true);
+    cJSON_AddItemToObject(root, "commands", cJSON_CreateArray());
+    cJSON_AddItemToObject(root, "events", cJSON_CreateArray());
+
+    manifest = cJSON_AddObjectToObject(root, "device_description");
+    TEST_ASSERT_NOT_NULL(manifest);
+    cJSON_AddNumberToObject(manifest, "manifest_version", 2);
+    cJSON_AddStringToObject(manifest, "format", "compact_resources");
+    cJSON_AddStringToObject(manifest, "node_kind", "scenehub_node");
+    cJSON_AddStringToObject(manifest, "capability_contract", "scenehub.node.compact.v1");
+    device = cJSON_AddObjectToObject(manifest, "device");
+    TEST_ASSERT_NOT_NULL(device);
+    cJSON_AddStringToObject(device, "id", "compact_node");
+    cJSON_AddStringToObject(device, "name", "Compact Node");
+    cJSON_AddStringToObject(device, "kind", "scenehub_node");
+    resources = cJSON_AddObjectToObject(manifest, "resources");
+    TEST_ASSERT_NOT_NULL(resources);
+    cJSON_AddItemToObject(resources, "relays", cJSON_CreateArray());
+    cJSON_AddItemToObject(resources, "mosfets", cJSON_CreateArray());
+    cJSON_AddItemToObject(resources, "inputs", cJSON_CreateArray());
+    cJSON_AddItemToObject(resources, "outputs", cJSON_CreateArray());
+    cJSON_AddItemToObject(resources, "led_strips", cJSON_CreateArray());
+    commands = cJSON_AddArrayToObject(manifest, "command_templates");
+    TEST_ASSERT_NOT_NULL(commands);
+    events = cJSON_AddArrayToObject(manifest, "event_templates");
+    TEST_ASSERT_NOT_NULL(events);
+    schemas = cJSON_AddObjectToObject(manifest, "schemas");
+    TEST_ASSERT_NOT_NULL(schemas);
+    cJSON_AddItemToObject(schemas, "none", cJSON_CreateArray());
+
+    body = cJSON_PrintUnformatted(root);
+    TEST_ASSERT_NOT_NULL(body);
+    http_test_reset_request(NULL, body);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_quest_device_save_handler(&s_http_req));
+    cJSON_free(body);
+    cJSON_Delete(root);
+
+    http_test_reset_request("include_system=1&include_manifest_json=0", NULL);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_quest_devices_handler(&s_http_req));
+    response = http_test_parse_response();
+    TEST_ASSERT_TRUE(cJSON_IsTrue(cJSON_GetObjectItem(response, "ok")));
+    TEST_ASSERT_TRUE(cJSON_IsFalse(cJSON_GetObjectItem(response, "include_manifest_json")));
+    devices = cJSON_GetObjectItem(response, "devices");
+    TEST_ASSERT_TRUE(cJSON_IsArray(devices));
+    first = cJSON_GetArrayItem(devices, 0);
+    TEST_ASSERT_TRUE(cJSON_IsObject(first));
+    TEST_ASSERT_NULL(cJSON_GetObjectItem(first, "device_description"));
+    TEST_ASSERT_TRUE(cJSON_IsObject(cJSON_GetObjectItem(first, "manifest_summary")));
+    cJSON_Delete(response);
+
+    http_test_reset_request("include_system=1&include_manifest_json=1", NULL);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_quest_devices_handler(&s_http_req));
+    response = http_test_parse_response();
+    TEST_ASSERT_TRUE(cJSON_IsTrue(cJSON_GetObjectItem(response, "include_manifest_json")));
+    devices = cJSON_GetObjectItem(response, "devices");
+    TEST_ASSERT_TRUE(cJSON_IsArray(devices));
+    first = cJSON_GetArrayItem(devices, 0);
+    TEST_ASSERT_TRUE(cJSON_IsObject(cJSON_GetObjectItem(first, "device_description")));
+    cJSON_Delete(response);
+}
+
 void register_web_ui_handler_tests(void)
 {
     RUN_TEST(test_web_ui_handler_timer_start_validates_query_and_returns_accepted_json);
@@ -1352,5 +1434,6 @@ void register_web_ui_handler_tests(void)
     RUN_TEST(test_web_ui_store_handlers_use_shared_operation_envelopes);
     RUN_TEST(test_web_ui_device_handlers_reject_bad_body_before_persistence);
     RUN_TEST(test_web_ui_device_save_accepts_large_compact_manifest_body);
+    RUN_TEST(test_web_ui_quest_devices_handler_can_omit_or_include_manifest_json);
     web_ui_http_reset_adapter_for_test();
 }

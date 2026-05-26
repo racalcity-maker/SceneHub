@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "node_config.h"
@@ -14,9 +15,16 @@ typedef struct {
     node_provisioning_mode_t mode;
     bool ap_started;
     bool web_started;
+    char ap_ssid[33];
+    char ap_password[17];
     bool sta_got_ip;
     bool sta_disconnected;
     uint16_t sta_disconnect_reason;
+    bool auto_close_supported;
+    bool auto_close_running;
+    bool auto_close_keep_open;
+    uint32_t auto_close_timeout_sec;
+    uint32_t auto_close_remaining_sec;
 } node_provisioning_status_t;
 
 typedef void (*node_provisioning_got_ip_cb_t)(const node_config_t *config, void *ctx);

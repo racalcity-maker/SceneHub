@@ -6,6 +6,16 @@ All notable project changes are documented in this file.
 
 ### Added
 
+- Added bootstrap web-auth hardening with salted password hashes, an explicit
+  `password_initialized` flag, and a forced first-login password-change flow
+  for the local admin account.
+- Added a controller-side HTTP method/payload hygiene policy in
+  `docs/API_HTTP_POLICY.md` and aligned mutable Wi-Fi, MQTT and logging config
+  paths with `POST` plus body payloads.
+- Added node-side provisioning auto-close for normal provisioned boots: the
+  local setup surface now times out after five minutes unless the current boot
+  explicitly requests `Keep setup open`.
+
 - Added a dedicated Node `describe_interface` refactor plan documenting the
   current large-payload producer/consumer path, persistent manifest ownership,
   and the staged split between transport-sized metadata responses and compact
@@ -49,6 +59,18 @@ All notable project changes are documented in this file.
 - Added a dedicated GM runtime event-driven migration plan and runtime inbox/deadline-timer infrastructure in `gm_core`.
 
 ### Changed
+
+- Changed manual HTTP device-command responses to use a dispatch-envelope
+  model. Successful async remote dispatch now returns `status=accepted` plus
+  `request_id`; hub audit and timeline entries carry that same correlation key.
+- Changed the embedded and legacy admin entry flow so admin bootstrap stays out
+  of normal GM/admin navigation until the first password change is completed.
+- Changed node provisioning AP behavior to use WPA2-PSK credentials derived
+  from device MAC instead of an open AP.
+- Split the SceneHub Node runtime further along intended ownership seams:
+  `node_control`, `node_hw_led`, and `node_config` are now broken into smaller
+  compile units, and provisioning writes/resets/restart go through
+  `node_admin_control` instead of mutating config directly from HTTP handlers.
 
 - Expanded SceneHub Node compact-manifest support across hub and node:
   node manifests now advertise richer relay/MOSFET/output/LED capabilities,

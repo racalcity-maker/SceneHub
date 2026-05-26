@@ -33,6 +33,7 @@ static const int RUNTIME_RECONNECT_DELAY_SEC = 30;
 static const int64_t RUNTIME_RECONNECT_DELAY_US = 30000000LL;
 static bool s_ap_mode = false;
 static bool s_connected_once = false;
+static bool s_force_ap_setup_boot = false;
 static SemaphoreHandle_t s_state_mutex = NULL;
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static TaskHandle_t s_ap_stop_task = NULL;
@@ -271,11 +272,8 @@ static void on_wifi_event(void *arg, esp_event_base_t event_base, int32_t event_
             s_retry_count++;
             ESP_LOGW(TAG, "retry connect (%d/%d)", s_retry_count, MAX_RETRY);
         } else {
-            ESP_LOGE(TAG, "failed to connect after retries");
-            if (!ap_mode_value()) {
-                const app_config_t *cfg = config_store_get();
-                start_ap_mode(cfg->wifi.hostname);
-            }
+            ESP_LOGE(TAG, "failed to connect after retries; continuing STA reconnect without AP fallback");
+            schedule_runtime_reconnect();
         }
         error_monitor_set_wifi_connected(false);
     }
@@ -397,7 +395,10 @@ esp_err_t network_start(void)
     }
     state_unlock();
 
-    if (have_sta) {
+    if (s_force_ap_setup_boot) {
+        ESP_LOGW(TAG, "boot setup request active; starting setup AP");
+        start_ap_mode(cfg->wifi.hostname);
+    } else if (have_sta) {
         wifi_config_t wifi_cfg;
         build_sta_config(cfg, &wifi_cfg);
 
@@ -416,6 +417,7 @@ esp_err_t network_start(void)
         ESP_ERROR_CHECK(esp_wifi_start());
         error_monitor_set_wifi_connected(false);
     } else {
+        ESP_LOGW(TAG, "Wi-Fi SSID empty; starting setup AP");
         start_ap_mode(cfg->wifi.hostname);
     }
     return ESP_OK;
@@ -429,8 +431,7 @@ esp_err_t network_apply_wifi_config(void)
     }
     bool have_sta = cfg->wifi.ssid[0] != '\0';
     if (!have_sta) {
-        ESP_LOGW(TAG, "Wi-Fi SSID empty, enabling AP mode only");
-        start_ap_mode(cfg->wifi.hostname);
+        ESP_LOGW(TAG, "Wi-Fi SSID empty; AP setup is not auto-enabled");
         return ESP_OK;
     }
 
@@ -517,4 +518,9 @@ esp_err_t network_stop_ap(void)
 bool network_is_ap_mode(void)
 {
     return ap_mode_value();
+}
+
+void network_request_setup_ap_boot(void)
+{
+    s_force_ap_setup_boot = true;
 }

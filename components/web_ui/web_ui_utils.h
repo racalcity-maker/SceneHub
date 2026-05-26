@@ -40,6 +40,7 @@ void web_ui_http_reset_adapter_for_test(void);
 esp_err_t web_ui_send_ok(httpd_req_t *req, const char *mime, const char *body);
 esp_err_t web_ui_send_json(httpd_req_t *req, cJSON *root);
 bool web_ui_scenehub_control_is_done(esp_err_t call_err, const scenehub_control_result_t *result);
+bool web_ui_scenehub_control_is_success(esp_err_t call_err, const scenehub_control_result_t *result);
 esp_err_t web_ui_send_scenehub_control_ack(httpd_req_t *req);
 esp_err_t web_ui_send_scenehub_control_error(httpd_req_t *req,
                                              esp_err_t call_err,
@@ -88,7 +89,8 @@ esp_err_t web_ui_send_device_command_result_json(httpd_req_t *req,
                                                  const char *device_id,
                                                  const char *device_name,
                                                  const char *command_id,
-                                                 const char *command_label);
+                                                 const char *command_label,
+                                                 const scenehub_control_result_t *result);
 esp_err_t web_ui_send_scenario_validation_result_json(httpd_req_t *req,
                                                       const char *scenario_id,
                                                       const room_scenario_validation_report_t *report);

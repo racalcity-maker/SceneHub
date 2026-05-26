@@ -62,6 +62,12 @@ Required result envelope:
 }
 ```
 
+Long-running commands may return:
+
+- `started` when the runtime accepted and launched the action;
+- `done` for immediate commands that have already completed;
+- `failed` or `rejected` for unsuccessful commands.
+
 MQTT command handlers must use `request_id` as the idempotency key before
 executing physical side effects.
 
@@ -75,6 +81,11 @@ Current routes:
 - `GET /api/status`
 - `GET /api/config`
 - `POST /api/config`
+- `GET /api/led-config`
+- `POST /api/led-config`
+- `GET /api/led-effects-schema`
+- `POST /api/led-preview`
+- `POST /api/provisioning/keep-open`
 - `POST /api/restart`
 - `POST /api/reset-wifi`
 - `POST /api/factory-reset`
@@ -85,6 +96,8 @@ Rules:
 - `POST /api/config` may accept Wi-Fi password and store it.
 - Config writes require full validation before save.
 - Config changes that affect Wi-Fi, MQTT or GPIO require restart/re-init.
+- `POST /api/provisioning/keep-open` is boot-local only and must not persist
+  an always-open provisioning mode.
 - If `pin_config_locked=true`, pin edits must be ignored or rejected.
 - Destructive actions require UI confirmation.
 
@@ -100,12 +113,13 @@ It accepts:
 
 It returns:
 
-- `done`, `failed` or `rejected`;
+- `done`, `started`, `failed` or `rejected`;
 - stable error code;
 - optional data JSON.
 
 It must not know whether the command came from MQTT, HTTP test route or future
-rule engine.
+rule engine for business-logic branching. It may accept source metadata for
+logging, diagnostics and explicitly separated local-preview commands.
 
 ## Error Codes
 
@@ -139,12 +153,18 @@ Breaking changes require a new explicit version or backward-compatible adapter.
 
 ## Payload Limits
 
-Recommended v1 limits:
+Current practical v1 limits are already above the original compact targets.
+Treat the older numbers as design targets rather than current enforced
+ceilings.
 
-- MQTT command payload: 4 KB maximum.
-- MQTT result/status/event payload: 4 KB maximum.
-- HTTP config request: 4 KB maximum.
-- `device_description`: 2 KB target for v1, expand only if needed.
+Current practical limits:
+
+- MQTT command payload: 14 KB maximum.
+- MQTT result/status/event payload: 14 KB maximum.
+- HTTP config request: 10 KB maximum.
+- `device_description`: beyond the old `2 KB` target; keep the compact manifest
+  identity and treat further growth as temporary budget pressure, not a final
+  architecture.
 
 Oversize payloads must be rejected cleanly.
 

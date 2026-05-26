@@ -2,9 +2,11 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "mqtt_client.h"
 #include "node_config.h"
 #include "node_control.h"
@@ -16,6 +18,7 @@
 #define NODE_MQTT_COMMAND_MAX 64
 #define NODE_MQTT_ARGS_MAX 1024
 #define NODE_MQTT_DUP_CACHE_SIZE 4
+#define NODE_MQTT_COMMAND_QUEUE_LEN 4
 #define NODE_MQTT_HEARTBEAT_MS 2000
 
 typedef struct {
@@ -25,6 +28,13 @@ typedef struct {
     char status[16];
     char error_code[32];
 } node_mqtt_duplicate_entry_t;
+
+typedef struct {
+    bool valid;
+    char request_id[NODE_MQTT_REQUEST_ID_MAX];
+    char command[NODE_MQTT_COMMAND_MAX];
+    char args_json[NODE_MQTT_ARGS_MAX];
+} node_mqtt_command_message_t;
 
 extern node_config_t g_node_mqtt_config;
 extern esp_mqtt_client_handle_t g_node_mqtt_client;
@@ -55,4 +65,5 @@ esp_err_t node_mqtt_publish_status_locked(void);
 esp_err_t node_mqtt_publish_event_locked(const char *event_name, const char *args_json);
 void node_mqtt_publish_heartbeat_and_status(bool include_status);
 
-void node_mqtt_handle_command_payload(const char *payload);
+bool node_mqtt_parse_command_payload(const char *payload, node_mqtt_command_message_t *out_message);
+void node_mqtt_process_command_message(const node_mqtt_command_message_t *message);

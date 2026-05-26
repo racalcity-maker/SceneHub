@@ -150,8 +150,28 @@ groups.set('device',existing);
 return Array.from(groups.values()).sort((a,b)=>String(a.label||'').localeCompare(String(b.label||'')));
 }
 
+function sidebarSourceDevices(){
+return questDevices().map(device=>scenarioNormalizeHardwareDevice({
+id:device.id||'',
+name:device.name||device.id||'',
+room_id:device.room_id||'',
+device_description:device.device_description,
+commands:Array.isArray(device.commands)?device.commands:[],
+events:Array.isArray(device.events)?device.events:[]
+})).filter(device=>device&&device.id);
+}
+
+function sidebarDeviceById(deviceId){
+return sidebarSourceDevices().find(device=>device.id===deviceId)||null;
+}
+
+function sidebarCommandById(deviceId,commandId){
+const device=sidebarDeviceById(deviceId);
+return device&&Array.isArray(device.commands)?device.commands.find(cmd=>cmd.id===commandId)||null:null;
+}
+
 function sidebarManualDevices(){
-return scenarioCatalogDevices().filter(device=>device&&device.id&&sidebarResourceGroupsForDevice(device).length);
+return sidebarSourceDevices().filter(device=>device&&device.id&&sidebarResourceGroupsForDevice(device).length);
 }
 
 function sidebarWizardDevice(){
@@ -289,19 +309,19 @@ return {device_name:resolved.device_name,resource_label:resolved.resource_label,
 
 function resolveSidebarPreset(preset){
 if(!preset||!preset.device_id||!preset.command_id)return null;
-const device=scenarioDeviceById(preset.device_id)||questDeviceById(preset.device_id);
+const device=sidebarDeviceById(preset.device_id)||questDeviceById(preset.device_id);
 const liveDevice=questDeviceById(preset.device_id)||device;
 if(!device)return null;
 const resources=sidebarResourceGroupsForDevice(device);
 const resource=resources.find(item=>item.key===preset.resource_key)||resources.find(item=>item.actions.some(action=>action.command_id===preset.command_id))||null;
-const action=resource&&resource.actions.find(item=>item.command_id===preset.command_id)||sidebarManualCommandsForDevice(device).find(cmd=>cmd.id===preset.command_id)&&{command_id:preset.command_id,label:scenarioCommandName(preset.device_id,preset.command_id),command:scenarioCommandById(preset.device_id,preset.command_id),params:preset.params&&typeof preset.params==='object'?preset.params:{},resource_label:preset.resource_label||'Device actions'};
-const command=action&&(action.command||scenarioCommandById(preset.device_id,preset.command_id))||scenarioCommandById(preset.device_id,preset.command_id);
+const action=resource&&resource.actions.find(item=>item.command_id===preset.command_id)||sidebarManualCommandsForDevice(device).find(cmd=>cmd.id===preset.command_id)&&{command_id:preset.command_id,label:(sidebarCommandById(preset.device_id,preset.command_id)&&sidebarCommandById(preset.device_id,preset.command_id).label)||preset.command_id,command:sidebarCommandById(preset.device_id,preset.command_id),params:preset.params&&typeof preset.params==='object'?preset.params:{},resource_label:preset.resource_label||'Device actions'};
+const command=action&&(action.command||sidebarCommandById(preset.device_id,preset.command_id))||sidebarCommandById(preset.device_id,preset.command_id);
 if(!command)return null;
 const params={...(action&&action.params&&typeof action.params==='object'?action.params:{}),...(preset.params&&typeof preset.params==='object'?preset.params:{})};
 const deviceName=questDeviceDisplayName(liveDevice||device);
 return {
 id:preset.id,
-label:preset.label||sidebarWizardLabel(device,resource,action||{label:scenarioCommandName(preset.device_id,preset.command_id)}),
+label:preset.label||sidebarWizardLabel(device,resource,action||{label:(command&&command.label)||preset.command_id}),
 device:liveDevice||device,
 device_id:device.id||preset.device_id,
 device_name:deviceName,

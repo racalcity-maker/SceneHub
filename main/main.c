@@ -22,6 +22,7 @@
 #include "room_scenario.h"
 #include "scenehub_state.h"
 #include "service_status.h"
+#include "system_reset_policy.h"
 #include "esp_task_wdt.h"
 #include <inttypes.h>
 #include <stdint.h>
@@ -282,6 +283,11 @@ void app_main(void)
     ESP_ERROR_CHECK(ota_manager_notify_boot());
     ESP_LOGI(TAG, "init config_store");
     ESP_ERROR_CHECK(config_store_init());
+    ESP_LOGI(TAG, "init system_reset_policy");
+    ESP_ERROR_CHECK(system_reset_policy_init());
+    if (system_reset_policy_boot_setup_requested()) {
+        network_request_setup_ap_boot();
+    }
     ESP_LOGI(TAG, "init service_status");
     ESP_ERROR_CHECK(service_status_init());
     ESP_LOGI(TAG, "init event_bus");

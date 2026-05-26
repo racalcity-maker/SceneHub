@@ -248,19 +248,19 @@ static esp_err_t register_httpd_routes(void)
         {.uri = "/api/ota/upload", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = ota_upload_handler},
         {.uri = "/api/ota/reboot", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = ota_reboot_handler},
         {.uri = "/api/ping", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = ping_handler},
-        {.uri = "/api/config/wifi", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = wifi_config_handler},
-        {.uri = "/api/config/mqtt", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = mqtt_config_handler},
+        {.uri = "/api/config/wifi", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = wifi_config_handler},
+        {.uri = "/api/config/mqtt", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = mqtt_config_handler},
         {.uri = "/api/config/mqtt_users", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = mqtt_users_handler},
-        {.uri = "/api/config/logging", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = logging_config_handler},
+        {.uri = "/api/config/logging", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = logging_config_handler},
         {.uri = "/api/wifi/scan", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = wifi_scan_handler},
-        {.uri = "/api/ap/stop", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = ap_stop_handler},
-        {.uri = "/api/audio/play", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_play_handler},
-        {.uri = "/api/audio/stop", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_stop_handler},
-        {.uri = "/api/audio/pause", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_pause_handler},
-        {.uri = "/api/audio/resume", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_resume_handler},
-        {.uri = "/api/audio/volume", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_volume_handler},
-        {.uri = "/api/audio/seek", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_seek_handler},
-        {.uri = "/api/publish", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = publish_handler},
+        {.uri = "/api/ap/stop", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = ap_stop_handler},
+        {.uri = "/api/audio/play", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_play_handler},
+        {.uri = "/api/audio/stop", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_stop_handler},
+        {.uri = "/api/audio/pause", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_pause_handler},
+        {.uri = "/api/audio/resume", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_resume_handler},
+        {.uri = "/api/audio/volume", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_volume_handler},
+        {.uri = "/api/audio/seek", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = audio_seek_handler},
+        {.uri = "/api/publish", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = publish_handler},
         {.uri = "/api/files", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = files_handler},
     };
     static web_route_t s_guarded_routes[WEB_ARRAY_SIZE(k_routes)];
@@ -359,7 +359,6 @@ esp_err_t web_ui_init(void)
     ESP_RETURN_ON_ERROR(web_ui_system_init(), TAG, "system handlers init failed");
     ESP_RETURN_ON_ERROR(web_sessions_init(), TAG, "sessions init failed");
 
-    web_auth_start_reset_monitor();
     return ESP_OK;
 }
 

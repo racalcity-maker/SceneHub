@@ -5,6 +5,7 @@
 
 #include "gm_api.h"
 #include "gm_control.h"
+#include "orchestrator_audit.h"
 #include "orch_room_view.h"
 #include "orchestrator_timeline.h"
 #include "scenehub_state.h"
@@ -73,12 +74,39 @@ void scenehub_control_set_result(scenehub_control_result_t *result,
     scenehub_control_copy(result->message, sizeof(result->message), message);
 }
 
+void scenehub_control_set_request_id(scenehub_control_result_t *result, const char *request_id)
+{
+    if (!result) {
+        return;
+    }
+    result->has_request_id = request_id && request_id[0];
+    scenehub_control_copy(result->request_id, sizeof(result->request_id), request_id);
+}
+
+void scenehub_control_set_remote_status(scenehub_control_result_t *result, const char *remote_status)
+{
+    if (!result) {
+        return;
+    }
+    result->has_remote_status = remote_status && remote_status[0];
+    scenehub_control_copy(result->remote_status, sizeof(result->remote_status), remote_status);
+}
+
 void scenehub_control_finish_success_with_invalidation(scenehub_control_result_t *result,
                                                        scenehub_state_slice_t slice,
                                                        const char *target_id,
                                                        const char *reason)
 {
     scenehub_control_set_result(result, SCENEHUB_CONTROL_STATUS_DONE, ESP_OK, true, "", "");
+    scenehub_state_notify_invalidation(slice, target_id, reason);
+}
+
+void scenehub_control_finish_accepted_with_invalidation(scenehub_control_result_t *result,
+                                                        scenehub_state_slice_t slice,
+                                                        const char *target_id,
+                                                        const char *reason)
+{
+    scenehub_control_set_result(result, SCENEHUB_CONTROL_STATUS_ACCEPTED, ESP_OK, true, "", "");
     scenehub_state_notify_invalidation(slice, target_id, reason);
 }
 
@@ -139,6 +167,7 @@ void scenehub_control_log_timer(const char *source,
                                     (source && source[0]) ? source : "internal",
                                     room_id ? room_id : "",
                                     "",
+                                    "",
                                     title ? title : "Timer changed",
                                     details ? details : "");
 }
@@ -146,9 +175,16 @@ void scenehub_control_log_timer(const char *source,
 void scenehub_control_log_device_action(const char *source,
                                         const char *device_id,
                                         bool warning,
-                                        const char *command_id)
+                                        const char *command_id,
+                                        const char *request_id)
 {
     orchestrator_timeline_severity_t severity = ORCH_TIMELINE_SEVERITY_INFO;
+    (void)orchestrator_audit_log_device_action((source && source[0]) ? source : "internal",
+                                               device_id ? device_id : "",
+                                               command_id ? command_id : "",
+                                               request_id ? request_id : "",
+                                               true,
+                                               "");
     if (warning) {
         severity = ORCH_TIMELINE_SEVERITY_WARNING;
     }
@@ -157,6 +193,7 @@ void scenehub_control_log_device_action(const char *source,
                                     (source && source[0]) ? source : "internal",
                                     "",
                                     device_id ? device_id : "",
+                                    request_id ? request_id : "",
                                     "Quest device command",
                                     command_id ? command_id : "");
 }

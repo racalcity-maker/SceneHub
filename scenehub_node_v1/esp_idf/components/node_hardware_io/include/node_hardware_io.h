@@ -12,17 +12,18 @@ typedef enum {
     NODE_HW_OUTPUT_UNIVERSAL_IO,
 } node_hw_output_kind_t;
 
-typedef enum {
-    NODE_HW_LED_EFFECT_BLINK = 0,
-    NODE_HW_LED_EFFECT_BREATHE,
-    NODE_HW_LED_EFFECT_RAINBOW,
-    NODE_HW_LED_EFFECT_COLOR_WIPE,
-    NODE_HW_LED_EFFECT_SCANNER,
-    NODE_HW_LED_EFFECT_THEATER,
-    NODE_HW_LED_EFFECT_STROBE,
-} node_hw_led_effect_t;
+typedef node_led_effect_id_t node_hw_led_effect_t;
+
+#define NODE_HW_LED_EFFECT_BLINK NODE_LED_EFFECT_BLINK
+#define NODE_HW_LED_EFFECT_BREATHE NODE_LED_EFFECT_BREATHE
+#define NODE_HW_LED_EFFECT_RAINBOW NODE_LED_EFFECT_RAINBOW
+#define NODE_HW_LED_EFFECT_COLOR_WIPE NODE_LED_EFFECT_COLOR_WIPE
+#define NODE_HW_LED_EFFECT_SCANNER NODE_LED_EFFECT_SCANNER
+#define NODE_HW_LED_EFFECT_THEATER NODE_LED_EFFECT_THEATER_CHASE
+#define NODE_HW_LED_EFFECT_STROBE NODE_LED_EFFECT_STROBE
 
 typedef struct {
+    char source[16];
     uint8_t red;
     uint8_t green;
     uint8_t blue;
@@ -31,10 +32,19 @@ typedef struct {
     uint8_t green2;
     uint8_t blue2;
     uint8_t white2;
+    uint8_t bg_red;
+    uint8_t bg_green;
+    uint8_t bg_blue;
+    uint8_t bg_white;
     uint8_t brightness;
     uint32_t duration_ms;
     uint32_t step_ms;
     uint32_t count;
+    uint16_t size;
+    uint16_t intensity;
+    uint16_t density;
+    uint16_t fade;
+    node_led_palette_mode_t palette_mode;
 } node_hw_led_effect_config_t;
 
 typedef struct {

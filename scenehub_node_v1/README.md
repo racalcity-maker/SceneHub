@@ -63,6 +63,14 @@ Provisioning requirements are tracked in
 `docs/PROVISIONING_AND_CONFIG.md`. The first firmware slice should include AP
 first setup, a small local web UI and reset-pin recovery before field use.
 
+Current provisioning/security baseline:
+
+- setup AP uses WPA2-PSK with device-derived credentials
+- the local provisioning UI auto-closes after 5 minutes on normal provisioned
+  boots
+- first-time `provisioning_required` boots stay open until setup is complete
+- a boot-local `Keep setup open` override exists in the provisioning UI
+
 ## What Can Be Reused From SceneHub
 
 Reuse as implementation guidance:

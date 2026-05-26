@@ -36,6 +36,9 @@ not repeated; only unresolved risks and deferred work are tracked below.
 - Keep routine active-room runtime updates event-driven through `ws_runtime`.
   Fixed polling should only be fallback/recovery behavior, not the normal live
   path.
+- Keep room-runtime asset preparation summary opt-in. Live refresh should stay
+  on `include_assets=0`; only explicit detail/editor flows should request
+  asset-ready counts.
 - Finish compact runtime read DTOs so routine runtime detail does not pass
   through broader domain/session structs than needed.
 - Keep stable scenario layout, live runtime counters and asset readiness as
@@ -58,12 +61,6 @@ not repeated; only unresolved risks and deferred work are tracked below.
 - Complete the deferred `gm_core` decomposition so the component stops acting as
   the default owner of runtime state, command dispatch glue, profile/sidebar
   storage helpers, and legacy application facades at the same time.
-- Rework manual GM device-command execution so HTTP handlers do not synchronously
-  run transport and device-control work inside the `httpd` task. Preferred
-  direction: accept the command through a narrow control API, enqueue execution
-  in a dedicated control worker/context, return an accepted/request-id style
-  result, and let UI wait through runtime/WS updates instead of coupling live
-  command execution to HTTP task stack limits.
 - Replace the transitional scenario layout path with a compact read-model DTO.
   Today the HTTP handler calls the read model for lookup, but the isolated
   layout writer still serializes `room_scenario_t`.
