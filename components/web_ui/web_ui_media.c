@@ -42,6 +42,9 @@ esp_err_t files_handler(httpd_req_t *req)
     char q[320];
     char path_enc[256] = {0};
     char dir_path[256] = SD_STORAGE_ROOT_PATH;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    size_t item_count = 0;
+    char detail[64] = {0};
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
         httpd_query_key_value(q, "path", path_enc, sizeof(path_enc));
     }
@@ -111,39 +114,9 @@ esp_err_t files_handler(httpd_req_t *req)
             }
         }
         long size_bytes = (is_dir || !stat_ok) ? 0 : st.st_size;
+        /* Keep directory listing metadata-only: opening each WAV here
+         * competes with the audio reader on the same FAT/SD transport. */
         int dur = 0;
-        if (!is_dir) {
-            size_t nlen = strlen(n);
-            const char *ext = n + nlen - 4;
-            if (strcasecmp(ext, ".wav") == 0) {
-                FILE *wf = fopen(full, "rb");
-                if (wf) {
-                    struct __attribute__((packed)) wav_header {
-                        char riff[4];
-                        uint32_t size;
-                        char wave[4];
-                        char fmt[4];
-                        uint32_t fmt_size;
-                        uint16_t audio_format;
-                        uint16_t num_channels;
-                        uint32_t sample_rate;
-                        uint32_t byte_rate;
-                        uint16_t block_align;
-                        uint16_t bits_per_sample;
-                        char data_id[4];
-                        uint32_t data_size;
-                    } hdr;
-                    if (fread(&hdr, 1, sizeof(hdr), wf) == sizeof(hdr) &&
-                        strncmp(hdr.riff, "RIFF", 4) == 0 &&
-                        strncmp(hdr.wave, "WAVE", 4) == 0 &&
-                        hdr.audio_format == 1 &&
-                        hdr.byte_rate > 0) {
-                        dur = hdr.data_size / (int)hdr.byte_rate;
-                    }
-                    fclose(wf);
-                }
-            }
-        }
         cJSON *obj = cJSON_CreateObject();
         if (!obj) {
             cJSON_Delete(root);
@@ -155,8 +128,11 @@ esp_err_t files_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(obj, "dur", dur);
         cJSON_AddBoolToObject(obj, "dir", is_dir);
         cJSON_AddItemToArray(root, obj);
+        item_count++;
     }
     closedir(d);
+    snprintf(detail, sizeof(detail), "items=%u", (unsigned)item_count);
+    sd_storage_trace_log("web_ui", "list", dir_path, sd_storage_trace_now_ms() - started_ms, detail);
     return WEB_HTTP_CHECK(web_ui_send_json(req, root));
 }
 

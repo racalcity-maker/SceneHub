@@ -15,6 +15,8 @@
 #define WS_RUNTIME_URI "/api/ws"
 #define WS_RUNTIME_MAX_CLIENTS 2
 #define WS_RUNTIME_MAX_INCOMING_FRAME 512
+#define WS_RUNTIME_ENVELOPE_JSON_MAX 512
+#define WS_RUNTIME_PAYLOAD_JSON_MAX 320
 
 static const char *TAG = "ws_runtime";
 
@@ -43,6 +45,8 @@ static uint32_t s_snapshot_generation = 1;
 static SemaphoreHandle_t s_state_mutex = NULL;
 static StaticSemaphore_t s_state_mutex_storage;
 static portMUX_TYPE s_state_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static char s_ws_envelope_json[WS_RUNTIME_ENVELOPE_JSON_MAX];
+static char s_ws_payload_json[WS_RUNTIME_PAYLOAD_JSON_MAX];
 
 static esp_err_t ws_runtime_state_lock(void)
 {
@@ -129,20 +133,18 @@ static esp_err_t send_text_to_fd(int fd, const char *text)
     return httpd_ws_send_frame_async(s_server, fd, &frame);
 }
 
-static esp_err_t send_envelope_to_fd(int fd, const char *type, const char *payload_json)
+static esp_err_t send_envelope_to_fd_locked(int fd, const char *type, const char *payload_json)
 {
     if (type == NULL || payload_json == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    char json[512];
-
     uint32_t seq = ++s_ws_seq;
     uint32_t now_ms = ws_runtime_now_ms();
 
     int written = snprintf(
-        json,
-        sizeof(json),
+        s_ws_envelope_json,
+        sizeof(s_ws_envelope_json),
         "{\"type\":\"%s\","
         "\"seq\":%lu,"
         "\"schema_version\":1,"
@@ -156,32 +158,28 @@ static esp_err_t send_envelope_to_fd(int fd, const char *type, const char *paylo
         payload_json
     );
 
-    if (written < 0 || written >= (int)sizeof(json)) {
+    if (written < 0 || written >= (int)sizeof(s_ws_envelope_json)) {
         ESP_LOGW(TAG, "ws envelope too large for type=%s", type);
         return ESP_ERR_NO_MEM;
     }
 
-    return send_text_to_fd(fd, json);
+    return send_text_to_fd(fd, s_ws_envelope_json);
 }
 
-static esp_err_t broadcast_envelope(const char *type, const char *payload_json)
+static esp_err_t broadcast_envelope_locked(const char *type, const char *payload_json)
 {
     if (s_server == NULL || type == NULL || payload_json == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
     esp_err_t last_err = ESP_OK;
-    esp_err_t err = ws_runtime_state_lock();
-    if (err != ESP_OK) {
-        return err;
-    }
 
     for (int i = 0; i < WS_RUNTIME_MAX_CLIENTS; ++i) {
         if (!s_clients[i].active || !s_clients[i].subscribed) {
             continue;
         }
 
-        err = send_envelope_to_fd(s_clients[i].fd, type, payload_json);
+        esp_err_t err = send_envelope_to_fd_locked(s_clients[i].fd, type, payload_json);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "broadcast failed fd=%d: %s", s_clients[i].fd, esp_err_to_name(err));
             remove_client(s_clients[i].fd);
@@ -189,7 +187,6 @@ static esp_err_t broadcast_envelope(const char *type, const char *payload_json)
         }
     }
 
-    ws_runtime_state_unlock();
     return last_err;
 }
 
@@ -209,7 +206,7 @@ static esp_err_t send_error_to_fd(int fd, const char *message)
 
 static esp_err_t send_connection_ready_to_fd(int fd)
 {
-    return send_envelope_to_fd(fd, "connection.ready",
+    return send_envelope_to_fd_locked(fd, "connection.ready",
         "{"
             "\"device_id\":\"scenehub-main\","
             "\"api_version\":1"
@@ -219,21 +216,21 @@ static esp_err_t send_connection_ready_to_fd(int fd)
 
 static esp_err_t send_subscribed_to_fd(int fd)
 {
-    return send_envelope_to_fd(fd, "subscription.ready",
+    return send_envelope_to_fd_locked(fd, "subscription.ready",
         "{\"ok\":true}"
     );
 }
 
 static esp_err_t send_unsubscribed_to_fd(int fd)
 {
-    return send_envelope_to_fd(fd, "subscription.closed",
+    return send_envelope_to_fd_locked(fd, "subscription.closed",
         "{\"ok\":true}"
     );
 }
 
 static esp_err_t send_pong_to_fd(int fd)
 {
-    return send_envelope_to_fd(fd, "pong",
+    return send_envelope_to_fd_locked(fd, "pong",
         "{\"ok\":true}"
     );
 }
@@ -438,15 +435,18 @@ esp_err_t ws_runtime_broadcast_json(const char *json)
 
 esp_err_t ws_runtime_broadcast_versions_changed(const ws_runtime_versions_changed_t *versions)
 {
-    char payload[256];
-
     if (!versions) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    esp_err_t err = ws_runtime_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+
     snprintf(
-        payload,
-        sizeof(payload),
+        s_ws_payload_json,
+        sizeof(s_ws_payload_json),
         "{\"generation\":%lu,"
         "\"rooms\":%lu,"
         "\"devices\":%lu,"
@@ -467,12 +467,13 @@ esp_err_t ws_runtime_broadcast_versions_changed(const ws_runtime_versions_change
         (unsigned long)versions->runtime_generation
     );
 
-    return broadcast_envelope("gm.versions.changed", payload);
+    err = broadcast_envelope_locked("gm.versions.changed", s_ws_payload_json);
+    ws_runtime_state_unlock();
+    return err;
 }
 
 esp_err_t ws_runtime_broadcast_invalidation(const ws_runtime_invalidation_t *invalidation)
 {
-    char payload[320];
     int written = 0;
     const char *slice = NULL;
     const char *target_id = NULL;
@@ -488,8 +489,13 @@ esp_err_t ws_runtime_broadcast_invalidation(const ws_runtime_invalidation_t *inv
     scope = invalidation->scope;
     reason = invalidation->reason ? invalidation->reason : "";
 
-    written = snprintf(payload,
-                       sizeof(payload),
+    esp_err_t err = ws_runtime_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    written = snprintf(s_ws_payload_json,
+                       sizeof(s_ws_payload_json),
                        "{\"slice\":\"%s\","
                        "\"target_id\":\"%s\","
                        "\"scope\":\"%s\","
@@ -500,17 +506,19 @@ esp_err_t ws_runtime_broadcast_invalidation(const ws_runtime_invalidation_t *inv
                        scope,
                        (unsigned long)invalidation->generation,
                        reason);
-    if (written < 0 || written >= (int)sizeof(payload)) {
+    if (written < 0 || written >= (int)sizeof(s_ws_payload_json)) {
+        ws_runtime_state_unlock();
         ESP_LOGW(TAG, "ws invalidation payload too large for slice=%s", slice);
         return ESP_ERR_NO_MEM;
     }
 
-    return broadcast_envelope("gm.invalidate", payload);
+    err = broadcast_envelope_locked("gm.invalidate", s_ws_payload_json);
+    ws_runtime_state_unlock();
+    return err;
 }
 
 esp_err_t ws_runtime_broadcast_resync_required(const ws_runtime_resync_required_t *resync)
 {
-    char payload[256];
     int written = 0;
     const char *reason = NULL;
     const char *target_id = NULL;
@@ -522,20 +530,28 @@ esp_err_t ws_runtime_broadcast_resync_required(const ws_runtime_resync_required_
     reason = resync->reason ? resync->reason : "";
     target_id = resync->target_id ? resync->target_id : "";
 
-    written = snprintf(payload,
-                       sizeof(payload),
+    esp_err_t err = ws_runtime_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    written = snprintf(s_ws_payload_json,
+                       sizeof(s_ws_payload_json),
                        "{\"target_id\":\"%s\","
                        "\"generation\":%lu,"
                        "\"reason\":\"%s\"}",
                        target_id,
                        (unsigned long)resync->generation,
                        reason);
-    if (written < 0 || written >= (int)sizeof(payload)) {
+    if (written < 0 || written >= (int)sizeof(s_ws_payload_json)) {
+        ws_runtime_state_unlock();
         ESP_LOGW(TAG, "ws resync payload too large");
         return ESP_ERR_NO_MEM;
     }
 
-    return broadcast_envelope("gm.resync.required", payload);
+    err = broadcast_envelope_locked("gm.resync.required", s_ws_payload_json);
+    ws_runtime_state_unlock();
+    return err;
 }
 
 #else

@@ -18,8 +18,9 @@ setStatus(`Unknown UI action: ${action}`,'state-fault');
 return true;
 }
 try{
-if(el.dataset.confirm&&!confirm(el.dataset.confirm))return true;
-await handler(el,e);
+const confirmed=!!el.dataset.confirm;
+if(confirmed&&!confirm(el.dataset.confirm))return true;
+await handler(el,e,confirmed);
 }
 catch(err){
 setStatus(err.message||'command failed','state-fault');
@@ -27,7 +28,7 @@ setStatus(err.message||'command failed','state-fault');
 return true;
 }
 
-gmRegisterAction('manual.device.command',async el=>{
+gmRegisterAction('manual.device.command',async (el,_e,confirmed)=>{
 let params=undefined;
 if(el.dataset.params){
 try{
@@ -37,7 +38,7 @@ catch(err){
 throw new Error('Invalid preset parameters');
 }
 }
-await runManualDeviceCommand(el.dataset.deviceId||'',el.dataset.commandId||'',params);
+await runManualDeviceCommand(el.dataset.deviceId||'',el.dataset.commandId||'',params,confirmed);
 });
 
 gmRegisterAction('room.game',async el=>{
@@ -128,10 +129,8 @@ await loadGMAudioFiles(true);
 
 gmRegisterAction('scenario.edit',async el=>{
 if(!confirmDiscardScenario())return;
-scenarioEditor.scenario_id=el.dataset.scenarioId||'';
-if(scenarioEditor.room_id&&scenarioEditor.scenario_id){
-await ensureRoomScenarioDetail(scenarioEditor.room_id,scenarioEditor.scenario_id);
-}
+const scenarioId=el.dataset.scenarioId||'';
+scenarioEditor.scenario_id=scenarioId;
 scenarioEditor.open=true;
 scenarioEditor.expanded_step=-1;
 scenarioEditor.expanded_v2_action='';
@@ -140,6 +139,16 @@ clearScenarioDirty();
 const original=roomScenarioDetailById(scenarioEditor.room_id,scenarioEditor.scenario_id)||null;
 if(original)scenarioSetLoadedDraft(original,scenarioEditor.room_id);
 render();
+if(scenarioEditor.room_id&&scenarioId&&!original){
+ensureRoomScenarioDetail(scenarioEditor.room_id,scenarioId).then(detail=>{
+if(!detail)return;
+if(!scenarioEditor.open||String(scenarioEditor.scenario_id||'')!==String(scenarioId))return;
+scenarioSetLoadedDraft(detail,scenarioEditor.room_id);
+render();
+}).catch(err=>{
+setStatus(err.message||'scenario load failed','state-fault');
+});
+}
 });
 
 gmRegisterAction('scenario.new',async()=>{
@@ -153,6 +162,14 @@ clearScenarioDirty();
 scenarioEditor.draft={id:'',name:'',room_id:scenarioEditor.room_id,branches:[defaultScenarioBranch(0,[])]};
 scenarioEditor.original_scenario=null;
 skipNextScenarioDomSync();
+render();
+});
+
+gmRegisterAction('scenario.cancel',async()=>{
+if(!confirmDiscardScenario())return;
+scenarioEditor.open=false;
+scenarioEditor.scenario_id='';
+clearScenarioDirty();
 render();
 });
 
@@ -232,6 +249,14 @@ clearProfileDirty();
 render();
 });
 
+gmRegisterAction('profile.cancel',async()=>{
+if(!confirmDiscardProfile())return;
+profileEditor.open=false;
+profileEditor.profile_id='';
+clearProfileDirty();
+render();
+});
+
 gmRegisterAction('profile.delete',async el=>{
 if(!confirmDiscardProfile())return;
 await deleteProfileEditor(el.dataset.profileId||'',true);
@@ -252,8 +277,12 @@ questDeviceEditor.device_id=el.dataset.deviceId||'';
 questDeviceEditor.open=true;
 questDeviceEditor.draft=null;
 clearQuestDeviceDirty();
-await loadQuestDevices(true);
 render();
+loadQuestDevices(true).then(()=>{
+if(currentView==='device_setup'&&questDeviceEditor.open)render();
+}).catch(err=>{
+setStatus(err.message||'device load failed','state-fault');
+});
 });
 
 gmRegisterAction('quest.device.new',async()=>{
@@ -261,6 +290,14 @@ if(!confirmDiscardQuestDevice())return;
 questDeviceEditor.device_id='';
 questDeviceEditor.open=true;
 questDeviceEditor.draft=newQuestDeviceDraft();
+clearQuestDeviceDirty();
+render();
+});
+
+gmRegisterAction('quest.device.cancel',async()=>{
+if(!confirmDiscardQuestDevice())return;
+questDeviceEditor.device_id='';
+questDeviceEditor.open=false;
 clearQuestDeviceDirty();
 render();
 });
@@ -275,7 +312,7 @@ applyQuestDeviceDiscovery();
 
 gmRegisterAction('sidebar.preset.new',async()=>{
 if(!isAdmin())return;
-resetSidebarPresetWizard();
+openSidebarPresetWizard();
 render();
 });
 

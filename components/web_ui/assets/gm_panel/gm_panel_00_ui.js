@@ -82,3 +82,12 @@ function uiDetails(opts){
 opts=opts||{};
 return `<details class='scenario-advanced' ${opts.open?'open':''}><summary>${esc(opts.summary||'Details')}</summary>${opts.content||''}</details>`;
 }
+
+function uiOverlayCard(opts){
+opts=opts||{};
+const closeAction=opts.closeAction||'';
+const modalClass=['overlay-card',opts.className||''].filter(Boolean).join(' ');
+const backdropAction=closeAction?` data-action='${esc(closeAction)}'`:'';
+const closeButton=closeAction?uiButton({label:opts.closeLabel||'Close',action:closeAction}):'';
+return `<div class='overlay-shell'${opts.dataset?` ${uiDataset(opts.dataset)}`:''}><div class='overlay-backdrop'${backdropAction}></div><section class='${esc(modalClass)}'>${opts.header!==false?`<div class='card-head'><div>${opts.title?`<h2 class='section-title'>${esc(opts.title)}</h2>`:''}${opts.subtitle?`<div class='card-sub'>${esc(opts.subtitle)}</div>`:''}</div>${closeButton?`<div class='actions'>${closeButton}</div>`:''}</div>`:''}${opts.content||''}</section></div>`;
+}

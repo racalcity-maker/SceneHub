@@ -111,6 +111,30 @@ function hardwareIoAvailable(deviceId,commandId){
 return hardwareIoServiceAvailable()&&!!hardwareIoCommand(deviceId,commandId);
 }
 
+function hardwareIoCurrentSection(){
+const value=String(hardwareIoView||'relays');
+return ['relays','mosfets','io'].includes(value)?value:'relays';
+}
+
+function hardwareIoSetSection(view){
+hardwareIoView=['relays','mosfets','io'].includes(String(view||''))?String(view):'relays';
+}
+
+function hardwareIoMosfetPane(channel){
+const key=String(channel||'');
+const views=hardwareIoMosfetViews&&typeof hardwareIoMosfetViews==='object'?hardwareIoMosfetViews:{};
+const value=String(views[key]||'set');
+return ['set','fade','pulse','effects'].includes(value)?value:'set';
+}
+
+function hardwareIoSetMosfetPane(channel,view){
+const key=String(channel||'');
+if(!key)return;
+const next={...(hardwareIoMosfetViews&&typeof hardwareIoMosfetViews==='object'?hardwareIoMosfetViews:{})};
+next[key]=['set','fade','pulse','effects'].includes(String(view||''))?String(view):'set';
+hardwareIoMosfetViews=next;
+}
+
 function hardwareIoFormStore(){
 if(!gmHardwareIo.forms||typeof gmHardwareIo.forms!=='object')gmHardwareIo.forms={};
 return gmHardwareIo.forms;
@@ -168,26 +192,73 @@ confirm:opts.confirm||'',
 });
 }
 
+function hardwareIoSegmentTabs(active,items){
+return `<div class='hardware-io-segments'>${items.map(item=>uiButton({label:item.label,kind:`tab-btn hardware-io-segment ${active===item.id?'active':''}`.trim(),action:item.action||'hardware.view',dataset:item.dataset||{view:item.id}})).join('')}</div>`;
+}
+
+function hardwareIoSectionStats(){
+const relays=(gmHardwareIo&&gmHardwareIo.data&&Array.isArray(gmHardwareIo.data.relays)?gmHardwareIo.data.relays:[]);
+const mosfets=(gmHardwareIo&&gmHardwareIo.data&&Array.isArray(gmHardwareIo.data.mosfets)?gmHardwareIo.data.mosfets:[]);
+const ios=(gmHardwareIo&&gmHardwareIo.data&&Array.isArray(gmHardwareIo.data.ios)?gmHardwareIo.data.ios:[]);
+return {
+relayActive:relays.filter(item=>item&&item.enabled&&item.on).length,
+relayDisabled:relays.filter(item=>item&&!item.enabled).length,
+mosfetActive:mosfets.filter(item=>item&&item.enabled&&((Number(item.value)||0)>0||item.fade_active||item.pulse_active||item.effect_active)).length,
+mosfetDisabled:mosfets.filter(item=>item&&!item.enabled).length,
+ioActive:ios.filter(item=>item&&item.enabled&&item.active).length,
+ioInput:ios.filter(item=>hardwareIoGpioModeText(item&&item.mode)==='input').length,
+ioOutput:ios.filter(item=>hardwareIoGpioModeText(item&&item.mode)==='output').length
+};
+}
+
+function renderHardwareIoToolbar(){
+const section=hardwareIoCurrentSection();
+const stats=hardwareIoSectionStats();
+const available=hardwareIoServiceAvailable();
+const summary=section==='relays'
+?`<span>Relays <strong>4</strong></span><span>Active <strong>${esc(stats.relayActive)}</strong></span><span>Disabled <strong>${esc(stats.relayDisabled)}</strong></span>`
+:section==='mosfets'
+?`<span>MOSFETs <strong>4</strong></span><span>Active <strong>${esc(stats.mosfetActive)}</strong></span><span>Disabled <strong>${esc(stats.mosfetDisabled)}</strong></span>`
+:`<span>IO <strong>4</strong></span><span>Inputs <strong>${esc(stats.ioInput)}</strong></span><span>Outputs <strong>${esc(stats.ioOutput)}</strong></span><span>Active <strong>${esc(stats.ioActive)}</strong></span>`;
+const globalActions=[
+uiButton({label:'Refresh status',action:'hardware.status.refresh'})
+];
+if(section==='mosfets'&&hardwareIoAvailable(HARDWARE_IO_MOSFET_DEVICE,'all_off')){
+globalActions.unshift(hardwareIoButton('All MOSFET off',HARDWARE_IO_MOSFET_DEVICE,'all_off',{}, {kind:'danger',noForm:true}));
+}
+if(section==='relays'&&hardwareIoAvailable(HARDWARE_IO_RELAY_DEVICE,'all_off')){
+globalActions.unshift(hardwareIoButton('All relays off',HARDWARE_IO_RELAY_DEVICE,'all_off',{}, {kind:'danger',noForm:true}));
+}
+return `<section class='card hardware-io-hero'><div class='hardware-io-hero-top'><div><h2 class='section-title'>Hardware status</h2><div class='card-sub'>${esc(gmHardwareIo.loading?'Loading hardware status...':hardwareIoServiceMessage())}</div></div><div class='actions'>${available?status('ok'):status('fault')}${globalActions.join('')}</div></div>${hardwareIoSegmentTabs(section,[{id:'relays',label:'Relays'},{id:'mosfets',label:'MOSFET'},{id:'io',label:'IO'}])}<div class='observed-summary hardware-io-summary'>${summary}</div></section>`;
+}
+
 function hardwareIoRelayChannel(channel){
 const scope=`relay_${channel}`;
 const pulseSchema=HARDWARE_IO_SCHEMAS.relayPulse;
 const channelStatus=hardwareIoStatusItem('relays',channel);
 const disabled=channelStatus?channelStatus.enabled===false:false;
-return `<section class='builder-step' data-hardware-form='relay' data-hardware-schema='relayPulse' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>Relay ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('relays',channel))}</div></div>${hardwareIoRelayStatusBadge(channel)}</div><div class='field-grid'>${renderFormFields(pulseSchema,hardwareIoFormModel(scope,{duration_ms:1000}),scope)}</div>${uiActions([
+const advancedKey=`hardware-io:relay:${channel}:advanced`;
+return `<section class='builder-step compact-step hardware-io-card hardware-io-relay-card' data-hardware-channel='relay' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>Relay ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('relays',channel))}</div></div>${hardwareIoRelayStatusBadge(channel)}</div>${uiActions([
 hardwareIoButton('On',HARDWARE_IO_RELAY_DEVICE,'set',{channel,on:true},{kind:'approve',disabled,noForm:true}),
 hardwareIoButton('Off',HARDWARE_IO_RELAY_DEVICE,'set',{channel,on:false},{disabled,noForm:true}),
 hardwareIoButton('Pulse',HARDWARE_IO_RELAY_DEVICE,'pulse',{channel},{kind:'approve',disabled}),
-hardwareIoButton('Blink',HARDWARE_IO_RELAY_DEVICE,'blink',{channel},{kind:'approve',disabled}),
 hardwareIoButton('Toggle',HARDWARE_IO_RELAY_DEVICE,'toggle',{channel},{disabled,noForm:true}),
-])}</section>`;
+])}<details class='scenario-advanced compact-advanced hardware-io-advanced' ${detailsAttrs(advancedKey,false)}><summary>Pulse timing and blink</summary><div data-hardware-form='relay' data-hardware-schema='relayPulse' data-hardware-scope='${esc(scope)}'><div class='field-grid'>${renderFormFields(pulseSchema,hardwareIoFormModel(scope,{duration_ms:1000,on_ms:500,off_ms:500,count:3}),scope)}</div>${uiActions([
+hardwareIoButton('Blink',HARDWARE_IO_RELAY_DEVICE,'blink',{channel},{kind:'approve',disabled}),
+])}</div></details></section>`;
 }
 
 function hardwareIoMosfetChannel(channel){
 const scope=`mosfet_${channel}`;
-const effectsKey=`hardware-io:mosfet:${channel}:effects`;
 const channelStatus=hardwareIoStatusItem('mosfets',channel);
 const disabled=channelStatus?channelStatus.enabled===false:false;
-return `<section class='builder-step compact-step' data-hardware-channel='mosfet' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>MOSFET ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('mosfets',channel))}</div></div>${hardwareIoMosfetStatusBadge(channel)}</div><div class='grid cols-3'><div data-hardware-form='mosfet-set' data-hardware-schema='mosfetSet' data-hardware-scope='${esc(scope)}_set'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetSet,hardwareIoFormModel(`${scope}_set`,{value:255}),`${scope}_set`)}${uiActions([hardwareIoButton('Set',HARDWARE_IO_MOSFET_DEVICE,'set',{channel},{kind:'approve',disabled}),hardwareIoButton('Off',HARDWARE_IO_MOSFET_DEVICE,'set',{channel,value:0},{kind:'danger',disabled,noForm:true})])}</div><div data-hardware-form='mosfet-fade' data-hardware-schema='mosfetFade' data-hardware-scope='${esc(scope)}_fade'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetFade,hardwareIoFormModel(`${scope}_fade`,{target:255,duration_ms:1000}),`${scope}_fade`)}${uiActions([hardwareIoButton('Fade',HARDWARE_IO_MOSFET_DEVICE,'fade',{channel},{disabled})])}</div><div data-hardware-form='mosfet-pulse' data-hardware-schema='mosfetPulse' data-hardware-scope='${esc(scope)}_pulse'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetPulse,hardwareIoFormModel(`${scope}_pulse`,{value:255,duration_ms:1000}),`${scope}_pulse`)}${uiActions([hardwareIoButton('Pulse',HARDWARE_IO_MOSFET_DEVICE,'pulse',{channel},{disabled})])}</div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(effectsKey,false)}><summary>Effects</summary><div class='grid cols-2'><div data-hardware-form='mosfet-blink' data-hardware-schema='mosfetBlink' data-hardware-scope='${esc(scope)}_blink'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetBlink,hardwareIoFormModel(`${scope}_blink`,{value:255,on_ms:500,off_ms:500,count:3}),`${scope}_blink`)}${uiActions([hardwareIoButton('Blink',HARDWARE_IO_MOSFET_DEVICE,'blink',{channel,final_value:0},{disabled})])}</div><div data-hardware-form='mosfet-breathe' data-hardware-schema='mosfetBreathe' data-hardware-scope='${esc(scope)}_breathe'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetBreathe,hardwareIoFormModel(`${scope}_breathe`,{min:0,max:255,fade_ms:1000,hold_ms:0,count:3}),`${scope}_breathe`)}${uiActions([hardwareIoButton('Breathe',HARDWARE_IO_MOSFET_DEVICE,'breathe',{channel,final_value:0},{disabled})])}</div></div><div class='row-meta'>Count 0 repeats until Set, Off, Fade, Pulse, All off, Stop game or Reset game.</div></details></section>`;
+const pane=hardwareIoMosfetPane(channel);
+const setPane=`<div data-hardware-form='mosfet-set' data-hardware-schema='mosfetSet' data-hardware-scope='${esc(scope)}_set'><div class='field-grid hardware-io-inline-fields'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetSet,hardwareIoFormModel(`${scope}_set`,{value:255}),`${scope}_set`)}</div>${uiActions([hardwareIoButton('Set',HARDWARE_IO_MOSFET_DEVICE,'set',{channel},{kind:'approve',disabled}),hardwareIoButton('Off',HARDWARE_IO_MOSFET_DEVICE,'set',{channel,value:0},{kind:'danger',disabled,noForm:true})])}</div>`;
+const fadePane=`<div data-hardware-form='mosfet-fade' data-hardware-schema='mosfetFade' data-hardware-scope='${esc(scope)}_fade'><div class='field-grid hardware-io-inline-fields'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetFade,hardwareIoFormModel(`${scope}_fade`,{target:255,duration_ms:1000}),`${scope}_fade`)}</div>${uiActions([hardwareIoButton('Fade',HARDWARE_IO_MOSFET_DEVICE,'fade',{channel},{disabled})])}</div>`;
+const pulsePane=`<div data-hardware-form='mosfet-pulse' data-hardware-schema='mosfetPulse' data-hardware-scope='${esc(scope)}_pulse'><div class='field-grid hardware-io-inline-fields'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetPulse,hardwareIoFormModel(`${scope}_pulse`,{value:255,duration_ms:1000}),`${scope}_pulse`)}</div>${uiActions([hardwareIoButton('Pulse',HARDWARE_IO_MOSFET_DEVICE,'pulse',{channel},{disabled})])}</div>`;
+const effectsPane=`<div class='grid cols-2 hardware-io-effects-grid'><div class='hardware-io-subcard' data-hardware-form='mosfet-blink' data-hardware-schema='mosfetBlink' data-hardware-scope='${esc(scope)}_blink'><div class='hardware-io-subtitle'>Blink</div><div class='field-grid'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetBlink,hardwareIoFormModel(`${scope}_blink`,{value:255,on_ms:500,off_ms:500,count:3}),`${scope}_blink`)}</div>${uiActions([hardwareIoButton('Blink',HARDWARE_IO_MOSFET_DEVICE,'blink',{channel,final_value:0},{disabled})])}</div><div class='hardware-io-subcard' data-hardware-form='mosfet-breathe' data-hardware-schema='mosfetBreathe' data-hardware-scope='${esc(scope)}_breathe'><div class='hardware-io-subtitle'>Breathe</div><div class='field-grid'>${renderFormFields(HARDWARE_IO_SCHEMAS.mosfetBreathe,hardwareIoFormModel(`${scope}_breathe`,{min:0,max:255,fade_ms:1000,hold_ms:0,count:3}),`${scope}_breathe`)}</div>${uiActions([hardwareIoButton('Breathe',HARDWARE_IO_MOSFET_DEVICE,'breathe',{channel,final_value:0},{disabled})])}</div></div><div class='row-meta'>Count 0 repeats until Set, Off, Fade, Pulse, All off, Stop game or Reset game.</div>`;
+const content=pane==='fade'?fadePane:(pane==='pulse'?pulsePane:(pane==='effects'?effectsPane:setPane));
+return `<section class='builder-step compact-step hardware-io-card hardware-io-mosfet-card' data-hardware-channel='mosfet' data-hardware-scope='${esc(scope)}'><div class='builder-step-head'><div><div class='builder-step-title'>MOSFET ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('mosfets',channel))}</div></div>${hardwareIoMosfetStatusBadge(channel)}</div>${hardwareIoSegmentTabs(pane,[{id:'set',label:'Set',action:'hardware.mosfet.view',dataset:{channel,view:'set'}},{id:'fade',label:'Fade',action:'hardware.mosfet.view',dataset:{channel,view:'fade'}},{id:'pulse',label:'Pulse',action:'hardware.mosfet.view',dataset:{channel,view:'pulse'}},{id:'effects',label:'Effects',action:'hardware.mosfet.view',dataset:{channel,view:'effects'}}])}<div class='hardware-io-mode-pane'>${content}</div></section>`;
 }
 
 function hardwareIoGpioChannel(channel){
@@ -198,15 +269,17 @@ const disabled=!item||!item.enabled||mode!=='output';
 const modeDisabled=!item||Number(item.gpio)<0||!hardwareIoServiceAvailable();
 const events=['changed','active','inactive','high','low'].map(name=>`ch${channel}_${name}`).join(', ');
 const modeControls=`<div class='field-grid'><label><span>Mode</span><select data-hardware-io-mode='${esc(channel)}' ${modeDisabled?'disabled':''}>${hardwareIoGpioModeOptions(item&&item.mode)}</select></label></div>${uiActions([uiButton({label:'Apply mode',action:'hardware.io.mode',dataset:{channel},disabled:modeDisabled})])}`;
-const outputControls=mode==='output'?`<div data-hardware-form='io' data-hardware-schema='ioPulse' data-hardware-scope='${esc(scope)}'><div class='field-grid'>${renderFormFields(HARDWARE_IO_SCHEMAS.ioPulse,hardwareIoFormModel(scope,{duration_ms:1000}),scope)}</div>${uiActions([
+const advancedKey=`hardware-io:io:${channel}:advanced`;
+const outputControls=mode==='output'?`<div class='hardware-io-output-actions'>${uiActions([
 hardwareIoButton('Active',HARDWARE_IO_IO_DEVICE,'set',{channel,active:true},{kind:'approve',disabled,noForm:true}),
 hardwareIoButton('Inactive',HARDWARE_IO_IO_DEVICE,'set',{channel,active:false},{disabled,noForm:true}),
+hardwareIoButton('Toggle',HARDWARE_IO_IO_DEVICE,'toggle',{channel},{disabled,noForm:true}),
+])}</div><details class='scenario-advanced compact-advanced hardware-io-advanced' ${detailsAttrs(advancedKey,false)}><summary>Pulse and blink</summary><div data-hardware-form='io' data-hardware-schema='ioPulse' data-hardware-scope='${esc(scope)}'><div class='field-grid'>${renderFormFields(HARDWARE_IO_SCHEMAS.ioPulse,hardwareIoFormModel(scope,{duration_ms:1000,on_ms:500,off_ms:500,count:3}),scope)}</div>${uiActions([
 hardwareIoButton('Pulse active',HARDWARE_IO_IO_DEVICE,'pulse',{channel,active:true},{kind:'approve',disabled}),
 hardwareIoButton('Blink',HARDWARE_IO_IO_DEVICE,'blink',{channel},{kind:'approve',disabled}),
-hardwareIoButton('Toggle',HARDWARE_IO_IO_DEVICE,'toggle',{channel},{disabled,noForm:true}),
-])}</div>`:'';
+])}</div></details>`:'';
 const inputHint=modeDisabled?`<div class='row-meta'>Board channel is not assigned.</div>`:(mode==='input'?`<div class='row-meta'>Main scenario events: ${esc(`ch${channel}_active, ch${channel}_inactive`)}. All input events: ${esc(events)}</div>`:`<div class='row-meta'>Switch to input to use ${esc(`ch${channel}_active`)} / ${esc(`ch${channel}_inactive`)} in scenarios.</div>`);
-return `<section class='builder-step'><div class='builder-step-head'><div><div class='builder-step-title'>IO ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('ios',channel))}</div></div>${hardwareIoGpioStatusBadge(channel)}</div>${modeControls}<div class='kvs'><div class='kv'><span class='k'>Mode</span><span class='v'>${esc(mode)}</span></div><div class='kv'><span class='k'>Physical</span><span class='v'>${esc(item&&item.physical_high?'HIGH':'LOW')}</span></div></div>${outputControls}${inputHint}</section>`;
+return `<section class='builder-step compact-step hardware-io-card hardware-io-io-card'><div class='builder-step-head'><div><div class='builder-step-title'>IO ${esc(channel)}</div><div class='row-meta'>${esc(hardwareIoChannelMeta('ios',channel))}</div></div>${hardwareIoGpioStatusBadge(channel)}</div>${modeControls}<div class='kvs hardware-io-kvs'><div class='kv'><span class='k'>Mode</span><span class='v'>${esc(mode)}</span></div><div class='kv'><span class='k'>Physical</span><span class='v'>${esc(item&&item.physical_high?'HIGH':'LOW')}</span></div></div>${outputControls}${inputHint}</section>`;
 }
 
 function renderHardwareIoHeader(){
@@ -222,33 +295,22 @@ content,
 });
 }
 
-function renderHardwareIoDeviceSummary(deviceId,title,subtitle,statusHtml){
-const dev=questDeviceById(deviceId);
-const missingNotice=dev?'':`<div class='row-meta bad-text'>${esc(title)} quest device is missing. Hardware status is visible, but commands are unavailable.</div>`;
-const content=`<div class='kvs'><div class='kv'><span class='k'>Device</span><span class='v'>${esc(deviceId)}</span></div><div class='kv'><span class='k'>Commands</span><span class='v'>${esc(dev&&Array.isArray(dev.commands)?dev.commands.length:0)}</span></div></div>${missingNotice}`;
-return uiCard({title,subtitle,status:statusHtml,content});
-}
-
-function renderHardwareIoSummaryCards(){
-const relay=questDeviceById(HARDWARE_IO_RELAY_DEVICE);
-const mosfet=questDeviceById(HARDWARE_IO_MOSFET_DEVICE);
-const io=questDeviceById(HARDWARE_IO_IO_DEVICE);
-const relayStatus=relay?status(questDeviceHealth(relay)):`<span class='status state-fault'>missing</span>`;
-const mosfetStatus=mosfet?status(questDeviceHealth(mosfet)):`<span class='status state-fault'>missing</span>`;
-const ioStatus=io?status(questDeviceHealth(io)):`<span class='status state-fault'>missing</span>`;
-return `<div class='grid cols-2'>${renderHardwareIoDeviceSummary(HARDWARE_IO_RELAY_DEVICE,'Relay channels','Relay 1-4 outputs.',relayStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_MOSFET_DEVICE,'MOSFET channels','MOSFET 1-4 PWM outputs.',mosfetStatus)}${renderHardwareIoDeviceSummary(HARDWARE_IO_IO_DEVICE,'IO channels','IO 1-4 configurable input/output channels.',ioStatus)}</div>`;
-}
-
 function renderHardwareRelaySection(){
-return `<section><h2 class='section-title'>Relays</h2><div class='grid cols-2'>${[1,2,3,4].map(hardwareIoRelayChannel).join('')}</div></section>`;
+const dev=questDeviceById(HARDWARE_IO_RELAY_DEVICE);
+const missingNotice=dev?'':`<div class='row-meta bad-text'>Relay quest device is missing. Status is visible, but relay commands are unavailable.</div>`;
+return `<section class='hardware-io-section'><div class='card-head'><div><h2 class='section-title'>Relay channels</h2><div class='card-sub'>Quick operator controls for relay outputs 1-4.</div></div>${dev?status(questDeviceHealth(dev)):`<span class='status state-fault'>missing</span>`}</div>${missingNotice}<div class='grid cols-2 hardware-io-grid'>${[1,2,3,4].map(hardwareIoRelayChannel).join('')}</div></section>`;
 }
 
 function renderHardwareMosfetSection(){
-return `<section><div class='card-head'><h2 class='section-title'>MOSFET PWM</h2><div class='actions'>${hardwareIoButton('All off',HARDWARE_IO_MOSFET_DEVICE,'all_off',{}, {kind:'danger'})}</div></div><div class='list'>${[1,2,3,4].map(hardwareIoMosfetChannel).join('')}</div></section>`;
+const dev=questDeviceById(HARDWARE_IO_MOSFET_DEVICE);
+const missingNotice=dev?'':`<div class='row-meta bad-text'>MOSFET quest device is missing. Status is visible, but PWM commands are unavailable.</div>`;
+return `<section class='hardware-io-section'><div class='card-head'><div><h2 class='section-title'>MOSFET PWM</h2><div class='card-sub'>Switch modes per channel instead of showing every form at once.</div></div>${dev?status(questDeviceHealth(dev)):`<span class='status state-fault'>missing</span>`}</div>${missingNotice}<div class='list hardware-io-list'>${[1,2,3,4].map(hardwareIoMosfetChannel).join('')}</div></section>`;
 }
 
 function renderHardwareGpioSection(){
-return `<section><h2 class='section-title'>IO channels</h2><div class='grid cols-2'>${[1,2,3,4].map(hardwareIoGpioChannel).join('')}</div></section>`;
+const dev=questDeviceById(HARDWARE_IO_IO_DEVICE);
+const missingNotice=dev?'':`<div class='row-meta bad-text'>IO quest device is missing. Status is visible, but channel commands are unavailable.</div>`;
+return `<section class='hardware-io-section'><div class='card-head'><div><h2 class='section-title'>IO channels</h2><div class='card-sub'>Inputs focus on status and events. Output controls appear only for output mode.</div></div>${dev?status(questDeviceHealth(dev)):`<span class='status state-fault'>missing</span>`}</div>${missingNotice}<div class='grid cols-2 hardware-io-grid'>${[1,2,3,4].map(hardwareIoGpioChannel).join('')}</div></section>`;
 }
 
 function renderHardwareIoView(){
@@ -256,13 +318,9 @@ setPage('Hardware IO','Relay, MOSFET and IO channels');
 if(!gmHardwareIo.loaded&&!gmHardwareIo.loading){
 setTimeout(()=>loadHardwareIoStatus(true),0);
 }
-return [
-renderHardwareIoHeader(),
-renderHardwareIoSummaryCards(),
-renderHardwareRelaySection(),
-renderHardwareMosfetSection(),
-renderHardwareGpioSection(),
-].join('<div style="height:14px"></div>');
+const section=hardwareIoCurrentSection();
+const body=section==='mosfets'?renderHardwareMosfetSection():(section==='io'?renderHardwareGpioSection():renderHardwareRelaySection());
+return `<div class='hardware-io-view'>${renderHardwareIoToolbar()}${body}</div>`;
 }
 
 gmRegisterAction('hardware.command',async el=>{
@@ -292,4 +350,18 @@ setGMStatus('IO mode updated','gm-ok');
 gmRegisterAction('hardware.status.refresh',async()=>{
 await loadHardwareIoStatus(true);
 setGMStatus('Hardware status updated','gm-ok');
+});
+
+gmRegisterAction('hardware.view',async el=>{
+hardwareIoCaptureForms();
+hardwareIoSetSection(el.dataset.view||'relays');
+clearTransientFieldDirty();
+render();
+});
+
+gmRegisterAction('hardware.mosfet.view',async el=>{
+hardwareIoCaptureForms();
+hardwareIoSetMosfetPane(el.dataset.channel||'',el.dataset.view||'set');
+clearTransientFieldDirty();
+render();
 });

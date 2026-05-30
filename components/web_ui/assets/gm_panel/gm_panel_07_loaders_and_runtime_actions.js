@@ -2,8 +2,11 @@
 const GM_STATIC_TTL_MS=30000;
 const gmLoadTimes={observed:0,audit:0,timeline:0,questDevices:0,sidebarPresets:0,roomScenarios:0,roomProfiles:0,scenarioCatalogs:0};
 const gmRuntimeRenderKeys={};
+const gmRoomCardRenderKeys={};
+const gmRoomTimerMinutesDraft={};
 const gmRuntimeRequestSeq={};
 const gmRoomScenarioDetailRequestSeq={};
+const gmRoomScenarioDetailPending={};
 let gmRoomsRuntimeRequestSeq=0;
 const gmLocalRuntimeRefreshUntil={};
 const gmRuntimeLastRefreshAt={};
@@ -39,6 +42,11 @@ return fields.some(field=>(prev[field]||0)!==(next[field]||0));
 
 function gmCurrentViewUsesQuestDeviceStatic(){
 return ['room','devices','observed','device_setup','scenarios','hardware_io'].includes(currentView);
+}
+
+function gmCurrentViewNeedsQuestDeviceFullRender(){
+if(currentView==='room'&&roomTab==='control')return false;
+return gmCurrentViewUsesQuestDeviceStatic();
 }
 
 function gmCurrentViewNeedsQuestDeviceManifest(){
@@ -118,6 +126,10 @@ gmMarkStaticLoaded('sidebarPresets');
 }
 }
 
+async function loadGMSidebarStaticData(force){
+await loadSidebarPresets(force);
+}
+
 function gmAudioFileItems(){
 return gmAudioFiles&&Array.isArray(gmAudioFiles.items)?gmAudioFiles.items:[];
 }
@@ -164,9 +176,8 @@ gmAudioFiles.loaded=false;
 finally{
 gmAudioFiles.loading=false;
 if(currentView==='scenarios'){
-const canRefreshAudioControls=!hasFocusedEditableControl();
-if(shouldDeferAutoRender()&&!canRefreshAudioControls){
-gmAutoRenderDeferred=true;
+if(shouldDeferAutoRender()){
+gmQueueDeferredRender('full');
 }
 else{
 render();
@@ -247,15 +258,22 @@ pruneRoomScenarioDetails(roomId,[]);
 }
 normalizeRoomScenarioSelection(roomId);
 if(currentView==='room'&&currentRoomId===roomId){
-await ensureRoomActiveScenarioDetail(roomId);
+scheduleRoomActiveScenarioDetail(roomId);
 }
 }
 
 async function ensureRoomScenarioDetail(roomId,scenarioId,force){
 if(!roomId||!scenarioId)return null;
-if(force)invalidateRoomScenarioDetail(roomId,scenarioId);
+const key=roomScenarioDetailKey(roomId,scenarioId);
+if(force){
+invalidateRoomScenarioDetail(roomId,scenarioId);
+delete gmRoomScenarioDetailPending[key];
+}
 const cached=roomScenarioDetailById(roomId,scenarioId);
 if(cached&&roomScenarioHasDetail(cached))return cached;
+if(!force&&gmRoomScenarioDetailPending[key])return await gmRoomScenarioDetailPending[key];
+let requestPromise=null;
+requestPromise=(async()=>{
 const requestSeq=(gmRoomScenarioDetailRequestSeq[roomId]||0)+1;
 gmRoomScenarioDetailRequestSeq[roomId]=requestSeq;
 try{
@@ -275,7 +293,42 @@ return detail;
 }
 catch(err){
 }
+finally{
+if(gmRoomScenarioDetailPending[key]===requestPromise)delete gmRoomScenarioDetailPending[key];
+}
 return null;
+})();
+gmRoomScenarioDetailPending[key]=requestPromise;
+return await requestPromise;
+}
+
+function applyLoadedRoomScenarioDetail(roomId,scenarioId,detail){
+if(!detail)return;
+if(currentView==='room'&&currentRoomId===roomId&&roomTab==='control'){
+delete gmRuntimeRenderKeys[roomId];
+if(shouldDeferAutoRender())gmQueueDeferredRender('runtime',roomId);
+else if(!renderRoomRuntimePanel(roomId))render();
+return;
+}
+if(currentView==='scenarios'&&scenarioEditor.open&&scenarioEditor.room_id===roomId&&scenarioEditor.scenario_id===scenarioId&&!scenarioEditor.dirty){
+scenarioSetLoadedDraft(detail,roomId);
+if(shouldDeferAutoRender())gmQueueDeferredRender('full');
+else render();
+}
+}
+
+function scheduleRoomScenarioDetailLoad(roomId,scenarioId,force){
+if(!roomId||!scenarioId)return;
+ensureRoomScenarioDetail(roomId,scenarioId,force).then(detail=>{
+applyLoadedRoomScenarioDetail(roomId,scenarioId,detail);
+}).catch(()=>{});
+}
+
+function scheduleRoomActiveScenarioDetail(roomId,force){
+if(!roomId)return;
+const activeScenarioId=roomActiveScenarioId(roomId);
+if(!activeScenarioId)return;
+scheduleRoomScenarioDetailLoad(roomId,activeScenarioId,force);
 }
 
 async function ensureRoomActiveScenarioDetail(roomId){
@@ -311,20 +364,23 @@ if(!roomId){
 await loadRoomScenarios(true);
 if(isAdmin())await loadScenarioEditorCatalogs(true);
 await ensureOpenScenarioEditorDetail();
-render();
+if(shouldDeferAutoRender())gmQueueDeferredRender('full');
+else render();
 return;
 }
 await loadRoomScenariosForRoom(roomId,true);
 if(currentView==='scenarios'){
 await ensureOpenScenarioEditorDetail();
-render();
+if(shouldDeferAutoRender())gmQueueDeferredRender('full');
+else render();
 return;
 }
 if(roomById(roomId)){
 await loadGMRuntimeOnly(roomId,false);
 return;
 }
-render();
+if(shouldDeferAutoRender())gmQueueDeferredRender('full');
+else render();
 }
 
 async function loadRoomProfiles(force){
@@ -378,7 +434,8 @@ return '';
 async function refreshRoomProfilesAfterMutation(roomId){
 if(!roomId){
 await loadRoomProfiles(true);
-render();
+if(shouldDeferAutoRender())gmQueueDeferredRender('full');
+else render();
 return;
 }
 await loadRoomProfilesForRoom(roomId,true);
@@ -386,7 +443,8 @@ if(roomById(roomId)){
 await loadGMRuntimeOnly(roomId,false);
 return;
 }
-render();
+if(shouldDeferAutoRender())gmQueueDeferredRender('full');
+else render();
 }
 
 async function loadScenarioEditorCatalogs(force){
@@ -427,15 +485,15 @@ await Promise.all([loadQuestDevices(true),loadScenarioEditorCatalogs(true)]);
 else{
 await loadQuestDevices(true);
 }
-render();
+if(shouldDeferAutoRender())gmQueueDeferredRender('full');
+else render();
 }
 
 async function loadGMLightStaticData(force){
-await Promise.all([loadObserved(force),loadQuestDevices(force),loadSidebarPresets(force)]);
+await Promise.all([loadObserved(force),loadQuestDevices(force)]);
 }
 
 async function loadGMViewData(force){
-await loadSidebarPresets(force);
 if(currentView==='audit')await loadAudit(force);
 else if(currentView==='timeline')await loadTimeline(force);
 else if(currentView==='scenarios'){
@@ -449,6 +507,6 @@ else if(currentView==='devices')await Promise.all([loadObserved(force),loadQuest
 }
 
 async function loadGMStaticData(force){
-await loadGMLightStaticData(force);
+await Promise.all([loadGMLightStaticData(force),loadGMSidebarStaticData(force)]);
 await loadGMViewData(force);
 }

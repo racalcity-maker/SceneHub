@@ -84,7 +84,10 @@ esp_err_t room_catalog_save_to_path_locked(const char *path)
     char *printed = NULL;
     FILE *f = NULL;
     char tmp[192] = {0};
+    size_t len = 0;
     esp_err_t err = ESP_OK;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    char detail[64] = {0};
     if (!path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -114,7 +117,7 @@ esp_err_t room_catalog_save_to_path_locked(const char *path)
         cJSON_free(printed);
         return ESP_FAIL;
     }
-    size_t len = strlen(printed);
+    len = strlen(printed);
     if (fwrite(printed, 1, len, f) != len) {
         fclose(f);
         unlink(tmp);
@@ -132,6 +135,8 @@ esp_err_t room_catalog_save_to_path_locked(const char *path)
         unlink(tmp);
         return ESP_FAIL;
     }
+    snprintf(detail, sizeof(detail), "bytes=%u", (unsigned)len);
+    sd_storage_trace_log("room_catalog", "save", path, sd_storage_trace_now_ms() - started_ms, detail);
     return ESP_OK;
 }
 
@@ -143,6 +148,8 @@ esp_err_t room_catalog_load_from_path_locked(const char *path)
     size_t bytes_read = 0;
     cJSON *root = NULL;
     esp_err_t err = ESP_OK;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    char detail[64] = {0};
     if (!path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -183,5 +190,7 @@ esp_err_t room_catalog_load_from_path_locked(const char *path)
     }
     err = room_catalog_import_json(root);
     cJSON_Delete(root);
+    snprintf(detail, sizeof(detail), "bytes=%u result=%s", (unsigned)bytes_read, esp_err_to_name(err));
+    sd_storage_trace_log("room_catalog", "load", path, sd_storage_trace_now_ms() - started_ms, detail);
     return err;
 }

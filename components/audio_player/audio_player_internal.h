@@ -62,6 +62,12 @@ typedef struct {
     EventBits_t stop_bit;
     int *bitrate_kbps;
     int *volume_percent;
+    size_t last_bytes_done;
+    uint32_t last_loop_gap_ms;
+    long last_read_offset;
+    uint32_t last_read_elapsed_ms;
+    long last_slow_read_offset;
+    uint32_t last_slow_read_elapsed_ms;
 } audio_reader_ctx_t;
 
 typedef enum {
@@ -121,4 +127,14 @@ bool audio_player_reader_stop_requested(const audio_reader_ctx_t *ctx);
 void audio_player_reader_wait_while_paused(const audio_reader_ctx_t *ctx);
 int *audio_player_reader_bitrate_ptr(const audio_reader_ctx_t *ctx);
 int audio_player_reader_volume(const audio_reader_ctx_t *ctx);
+bool audio_player_runtime_reader_snapshot(audio_player_channel_t channel,
+                                          char *path,
+                                          size_t path_len,
+                                          size_t *bytes_done,
+                                          uint32_t *loop_gap_ms,
+                                          long *read_offset,
+                                          uint32_t *read_elapsed_ms,
+                                          long *slow_read_offset,
+                                          uint32_t *slow_read_elapsed_ms);
+size_t audio_player_wav_decode_chunk_frames(const audio_info_t *info);
 void audio_player_reader_task(void *param);

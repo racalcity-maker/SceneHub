@@ -5,7 +5,7 @@ await loadGMRuntimeOnly(roomId,forceFullRender);
 if(roomId)gmLocalRuntimeRefreshUntil[roomId]=Date.now()+400;
 }
 
-async function runManualDeviceCommand(deviceId,commandId,paramsOverride){
+async function runManualDeviceCommand(deviceId,commandId,paramsOverride,confirmed){
 if(!deviceId||!commandId)throw new Error('Manual button is incomplete');
 setGMStatus('Triggering button...');
 const command=scenarioCommandById(deviceId,commandId);
@@ -20,7 +20,7 @@ else if(command&&typeof defaultParamsForCommand==='function'){
 const defaults=defaultParamsForCommand(scenarioDeviceById(deviceId)||questDeviceById(deviceId),command);
 if(defaults&&typeof defaults==='object'&&Object.keys(defaults).length)body.params=defaults;
 }
-const res=await api.device.runCommand(body.device_id,body.command_id,body.params);
+const res=await api.device.runCommand(body.device_id,body.command_id,body.params,!!confirmed);
 await gmExpectOk(res);
 setGMStatus('Button sent','gm-ok');
 }
@@ -95,6 +95,7 @@ throw new Error('Unsupported timer action');
 if(!res.ok){
 throw new Error((await res.text().catch(()=>''))||('HTTP '+res.status));
 }
+if(action==='start'&&roomId)delete gmRoomTimerMinutesDraft[roomId];
 clearTransientFieldDirty();
 await refreshAfterRuntimeAction(roomId,false);
 setGMStatus('Timer updated','gm-ok');

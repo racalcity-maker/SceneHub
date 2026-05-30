@@ -19,6 +19,8 @@
 static TaskHandle_t s_state_watcher_task = NULL;
 static SemaphoreHandle_t s_state_mutex = NULL;
 static StaticSemaphore_t s_state_mutex_storage;
+static SemaphoreHandle_t s_state_broadcast_mutex = NULL;
+static StaticSemaphore_t s_state_broadcast_mutex_storage;
 static portMUX_TYPE s_state_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_last_combined_generation = 0;
 static uint32_t s_last_ingest_generation = 0;
@@ -38,6 +40,7 @@ typedef struct {
 } scenehub_state_pending_invalidation_t;
 
 static scenehub_state_pending_invalidation_t s_pending_explicit[SCENEHUB_STATE_MAX_PENDING_EXPLICIT];
+static scenehub_state_pending_invalidation_t s_broadcast_explicit[SCENEHUB_STATE_MAX_PENDING_EXPLICIT];
 
 static esp_err_t scenehub_state_lock(void)
 {
@@ -58,6 +61,28 @@ static void scenehub_state_unlock(void)
 {
     if (s_state_mutex) {
         xSemaphoreGive(s_state_mutex);
+    }
+}
+
+static esp_err_t scenehub_state_broadcast_lock(void)
+{
+    if (!s_state_broadcast_mutex) {
+        portENTER_CRITICAL(&s_state_mutex_init_lock);
+        if (!s_state_broadcast_mutex) {
+            s_state_broadcast_mutex = xSemaphoreCreateMutexStatic(&s_state_broadcast_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_state_mutex_init_lock);
+        if (!s_state_broadcast_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return xSemaphoreTake(s_state_broadcast_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static void scenehub_state_broadcast_unlock(void)
+{
+    if (s_state_broadcast_mutex) {
+        xSemaphoreGive(s_state_broadcast_mutex);
     }
 }
 
@@ -447,7 +472,6 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
 {
     scenehub_state_versions_t versions = {0};
     ws_runtime_versions_changed_t payload = {0};
-    scenehub_state_pending_invalidation_t explicit_items[SCENEHUB_STATE_MAX_PENDING_EXPLICIT] = {0};
     size_t explicit_count = 0;
     uint32_t change_mask = 0;
     uint32_t explicit_mask = 0;
@@ -461,7 +485,12 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
         orchestrator_registry_invalidate();
     }
 
+    if (scenehub_state_broadcast_lock() != ESP_OK) {
+        return;
+    }
+
     if (scenehub_state_lock() != ESP_OK) {
+        scenehub_state_broadcast_unlock();
         return;
     }
 
@@ -475,6 +504,7 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
         s_pending_invalidation_mask == 0 &&
         s_pending_explicit_count == 0) {
         scenehub_state_unlock();
+        scenehub_state_broadcast_unlock();
         return;
     }
 
@@ -486,6 +516,7 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
         (now_ms - s_last_ws_broadcast_at_ms) < SCENEHUB_STATE_WS_MIN_INTERVAL_MS) {
         s_ws_broadcast_pending = true;
         scenehub_state_unlock();
+        scenehub_state_broadcast_unlock();
         return;
     }
 
@@ -504,17 +535,18 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
         .static_generation = versions.static_generation,
         .runtime_generation = versions.runtime_generation,
     };
-    explicit_count = scenehub_state_copy_pending_explicit_locked(explicit_items,
+    explicit_count = scenehub_state_copy_pending_explicit_locked(s_broadcast_explicit,
                                                                  SCENEHUB_STATE_MAX_PENDING_EXPLICIT);
-    explicit_mask = scenehub_state_pending_explicit_mask(explicit_items, explicit_count);
+    explicit_mask = scenehub_state_pending_explicit_mask(s_broadcast_explicit, explicit_count);
     coarse_mask = s_pending_invalidation_mask & ~explicit_mask;
     s_pending_explicit_count = 0;
     s_pending_invalidation_mask = 0;
     scenehub_state_unlock();
 
     (void)ws_runtime_broadcast_versions_changed(&payload);
-    scenehub_state_broadcast_explicit_invalidations(explicit_items, explicit_count, &versions);
+    scenehub_state_broadcast_explicit_invalidations(s_broadcast_explicit, explicit_count, &versions);
     scenehub_state_broadcast_invalidation(coarse_mask, &versions);
+    scenehub_state_broadcast_unlock();
 }
 
 static void scenehub_state_watcher_task(void *ctx)

@@ -9,28 +9,38 @@ return;
 if(gmVersionsKey(versions)===gmVersionsKey(prev))return;
 gmLastVersions=versions;
 if(gmVersionChanged(prev,versions,['rooms'])){
-await loadGMFullSnapshot(true,true,{forceStatic:true});
+gmStatTag('render.full.request','versions.rooms');
+await loadGMFullSnapshot(true,false,{forceStatic:true,reason:'versions.rooms'});
 return;
 }
 let shouldRender=false;
 let shouldPatchSidebar=false;
-if(gmVersionChanged(prev,versions,['devices','ingest'])){
-const deviceRefreshes=[loadObserved(true),loadQuestDevices(true)];
-if(currentView==='scenarios'&&isAdmin())deviceRefreshes.push(loadScenarioEditorCatalogs(true));
-await Promise.all(deviceRefreshes);
+	if(gmVersionChanged(prev,versions,['devices','ingest'])){
+		gmStatTag('versions.change','devices_or_ingest');
+		if(currentView==='room'||currentView==='rooms'){
+			gmStatTag('render.full.request','versions.devices_room_snapshot');
+			await loadGMFullSnapshot(true,false,{forceStatic:true,reason:'versions.devices_room_snapshot'});
+			return;
+		}
+		const deviceRefreshes=[loadObserved(true),loadQuestDevices(true)];
+		if(currentView==='scenarios'&&isAdmin())deviceRefreshes.push(loadScenarioEditorCatalogs(true));
+		await Promise.all(deviceRefreshes);
 shouldPatchSidebar=true;
-shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
+shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 if(currentView==='scenarios'&&isAdmin())shouldRender=true;
 }
 if(gmVersionChanged(prev,versions,['scenarios'])){
+gmStatTag('versions.change','scenarios');
 await loadRoomScenarios(true);
 shouldRender=shouldRender||gmCurrentViewUsesScenarioStatic();
 }
 if(gmVersionChanged(prev,versions,['profiles'])){
+gmStatTag('versions.change','profiles');
 await loadRoomProfiles(true);
 shouldRender=shouldRender||gmCurrentViewUsesProfileStatic();
 }
 if(gmVersionChanged(prev,versions,['session','runtime'])){
+gmStatTag('versions.change','session_or_runtime');
 if(currentView==='room'&&roomTab==='control'&&currentRoomId){
 await loadGMRuntimeOnly(currentRoomId,false);
 }
@@ -44,28 +54,31 @@ return;
 }
 }
 if(shouldRender){
+gmStatTag('render.full.request','versions.static_refresh');
 if(shouldDeferAutoRender()){
-gmAutoRenderDeferred=true;
-renderRightSidebar(shouldPatchSidebar);
+gmQueueDeferredRender('full','',shouldPatchSidebar);
 }
 else{
 render();
 }
 }
 else if(shouldPatchSidebar){
-renderRightSidebar(true);
+if(shouldDeferAutoRender())gmQueueDeferredRender('sidebar','',true);
+else renderRightSidebar(false);
 }
 }
 
 async function refreshGMByInvalidationSlices(items){
 const values=Array.isArray(items)?items.filter(Boolean):[];
 const slices=values.map(item=>typeof item==='string'?item:String(item.slice||'')).filter(Boolean);
+Array.from(new Set(slices)).forEach(slice=>gmStatTag('invalidate.slice',slice));
 const roomScenarioTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.scenarios'?(item.target_id||''):'').filter(Boolean)));
 const roomProfileTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.profiles'?(item.target_id||''):'').filter(Boolean)));
 const roomRuntimeTargets=Array.from(new Set(values.map(item=>item&&item.slice==='room.runtime'?(item.target_id||''):'').filter(Boolean)));
 if(!slices.length)return;
 if(slices.includes('full.snapshot')||slices.includes('room.catalog')){
-await loadGMFullSnapshot(true,true,{forceStatic:true});
+gmStatTag('render.full.request',slices.includes('full.snapshot')?'invalidate.full_snapshot':'invalidate.room_catalog');
+await loadGMFullSnapshot(true,false,{forceStatic:true,reason:slices.includes('full.snapshot')?'invalidate.full_snapshot':'invalidate.room_catalog'});
 return;
 }
 const needsDeviceCatalog=slices.includes('devices.catalog');
@@ -81,20 +94,30 @@ const localRuntimeRefreshUntil=(currentRoomId&&gmLocalRuntimeRefreshUntil[curren
 const localRuntimeRefreshActive=currentView==='room'&&roomTab==='control'&&currentRoomId&&Date.now()<localRuntimeRefreshUntil;
 const runtimeRefreshRecent=currentView==='room'&&roomTab==='control'&&currentRoomId&&Date.now()-((currentRoomId&&gmRuntimeLastRefreshAt[currentRoomId])||0)<900;
 
-if(needsDeviceCatalog){
-if(isAdmin()){
-await Promise.all([loadQuestDevices(true),loadScenarioEditorCatalogs(true)]);
-}
+	if(needsDeviceCatalog){
+		if(currentView==='room'||currentView==='rooms'){
+			gmStatTag('render.full.request','invalidate.devices_catalog_room_snapshot');
+			await loadGMFullSnapshot(true,false,{forceStatic:true,reason:'invalidate.devices_catalog_room_snapshot'});
+			return;
+		}
+		if(isAdmin()){
+			await Promise.all([loadQuestDevices(true),loadScenarioEditorCatalogs(true)]);
+		}
 else{
 await loadQuestDevices(true);
 }
 shouldPatchSidebar=true;
-shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
+shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 }
-if(needsDeviceRuntime){
-await loadObserved(true);
-shouldPatchSidebar=true;
-shouldRender=shouldRender||gmCurrentViewUsesQuestDeviceStatic();
+	if(needsDeviceRuntime){
+		if(currentView==='room'||currentView==='rooms'){
+			gmStatTag('render.full.request','invalidate.devices_runtime_room_snapshot');
+			await loadGMFullSnapshot(true,false,{forceStatic:true,reason:'invalidate.devices_runtime_room_snapshot'});
+			return;
+		}
+		await loadObserved(true);
+		shouldPatchSidebar=true;
+		shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 }
 if(needsSidebarPresets){
 await loadSidebarPresets(true);
@@ -148,15 +171,16 @@ await loadGMSystemSummaryOnly(false);
 return;
 }
 if(shouldRender){
+gmStatTag('render.full.request','invalidate.static_refresh');
 if(shouldDeferAutoRender()){
-gmAutoRenderDeferred=true;
-renderRightSidebar(shouldPatchSidebar);
+gmQueueDeferredRender('full','',shouldPatchSidebar);
 }
 else{
 render();
 }
 }
 else if(shouldPatchSidebar){
-renderRightSidebar(true);
+if(shouldDeferAutoRender())gmQueueDeferredRender('sidebar','',true);
+else renderRightSidebar(false);
 }
 }

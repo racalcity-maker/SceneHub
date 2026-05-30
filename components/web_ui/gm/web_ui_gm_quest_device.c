@@ -375,8 +375,10 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
     cJSON *root = NULL;
     const cJSON *device_id_item = NULL;
     const cJSON *command_id_item = NULL;
+    const cJSON *confirmed_item = NULL;
     const char *device_id = NULL;
     const char *command_id = NULL;
+    bool confirmed = false;
     char device_id_buf[QUEST_DEVICE_ID_MAX_LEN] = {0};
     char command_id_buf[QUEST_DEVICE_COMMAND_ID_MAX_LEN] = {0};
     char params_json[ROOM_SCENARIO_COMMAND_PARAMS_JSON_MAX_LEN] = {0};
@@ -388,8 +390,10 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
     }
     device_id_item = cJSON_GetObjectItemCaseSensitive(root, "device_id");
     command_id_item = cJSON_GetObjectItemCaseSensitive(root, "command_id");
+    confirmed_item = cJSON_GetObjectItemCaseSensitive(root, "confirmed");
     device_id = cJSON_IsString(device_id_item) ? device_id_item->valuestring : NULL;
     command_id = cJSON_IsString(command_id_item) ? command_id_item->valuestring : NULL;
+    confirmed = cJSON_IsTrue(confirmed_item);
     if (!device_id || !device_id[0] || !command_id || !command_id[0]) {
         cJSON_Delete(root);
         return gm_qd_send_error(req, ESP_ERR_INVALID_ARG);
@@ -405,6 +409,7 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
                                               device_id_buf,
                                               command_id_buf,
                                               params_json,
+                                              confirmed,
                                               &info,
                                               &result);
     if (!web_ui_scenehub_control_is_success(err, &result)) {

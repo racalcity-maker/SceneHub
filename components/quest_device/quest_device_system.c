@@ -237,7 +237,7 @@ static void qd_system_relay_pulse_command(quest_device_command_t *cmd)
     qd_system_copy(cmd->label, sizeof(cmd->label), "Relay pulse");
     qd_system_copy(cmd->capability, sizeof(cmd->capability), "relay");
     qd_system_copy(cmd->command, sizeof(cmd->command), "relay.pulse");
-    qd_system_copy(cmd->default_args_json, sizeof(cmd->default_args_json), "{\"channel\":1,\"duration_ms\":1000}");
+    qd_system_copy(cmd->default_args_json, sizeof(cmd->default_args_json), "{\"channel\":1,\"duration_ms\":500}");
     qd_system_command_set_policy(cmd, true, true, false, false, QUEST_DEVICE_COMMAND_TIMEOUT_DEFAULT_MS, "normal");
     qd_system_relay_channel_param(cmd);
     cmd->params[cmd->param_count++] = (quest_device_command_param_t) {

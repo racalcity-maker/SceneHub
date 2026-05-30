@@ -240,6 +240,29 @@ Successful deletes are persisted immediately to `/sdcard/quest/quest_devices.jso
 
 ### `POST /api/gm/device/command/run`
 
+Manual device-command dispatch is a write-side envelope. For async remote
+commands the response confirms dispatch acceptance, not terminal device
+completion.
+
+Request body:
+
+```json
+{
+  "device_id": "scenehub_node_s3",
+  "command_id": "led.effect",
+  "params": {"channel": "led_strip_1", "effect": "pulse"},
+  "confirmed": true
+}
+```
+
+Notes:
+
+- `confirmed` is optional for ordinary manual commands.
+- If the target command policy has `requires_confirmation=true`, manual HTTP
+  callers must send `"confirmed": true`.
+- Scenario/runtime execution does not use this field; this contract applies to
+  the manual HTTP/device-control path only.
+
 User-readable. Executes a saved quest-device command capability as a manual operator action.
 
 Request:

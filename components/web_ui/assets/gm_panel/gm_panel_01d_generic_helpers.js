@@ -35,6 +35,27 @@ function ago(ms){if(!ms)return 'never';const age=Math.max(0,Math.floor((performa
 function audioBaseName(path){if(!path)return '';const parts=String(path).split('/').filter(Boolean);return parts.length?parts[parts.length-1]:path;}
 function audioDirName(path){if(!path)return '/';const raw=String(path);const idx=raw.lastIndexOf('/');if(idx<0)return '/';return raw.slice(0,idx)||'/';}
 function compactText(value,max){const text=String(value||'');const limit=Math.max(8,Number(max)||32);return text.length>limit?`${text.slice(0,limit-1)}...`:text;}
+function fmtLogTimestamp(value){
+const n=Math.max(0,Number(value)||0);
+if(!n)return '0:00.000';
+if(n>1000000000000){
+return new Date(n).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+const totalMs=Math.floor(n);
+const totalSec=Math.floor(totalMs/1000);
+const min=Math.floor(totalSec/60);
+const sec=totalSec%60;
+const ms=String(totalMs%1000).padStart(3,'0');
+return `${min}:${String(sec).padStart(2,'0')}.${ms}`;
+}
+function fmtLogTimestampMeta(value){
+const n=Math.max(0,Number(value)||0);
+if(!n)return 'session';
+if(n>1000000000000){
+return new Date(n).toLocaleDateString([]);
+}
+return `${n} ms`;
+}
 function roomById(id){return (gmState&&Array.isArray(gmState.rooms)?gmState.rooms:[]).find(r=>r.room_id===id)||null;}
 function deviceById(id){return (gmState&&Array.isArray(gmState.devices)?gmState.devices:[]).find(d=>d.device_id===id)||null;}
 function roomName(id){const r=roomById(id);return r&&(r.title||r.name||r.room_id)||id||'No room';}

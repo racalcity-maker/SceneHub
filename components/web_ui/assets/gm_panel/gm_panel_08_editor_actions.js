@@ -359,14 +359,13 @@ return;
 }
 setGMStatus('Saving scenario...');
 const res=await api.room.scenarioSave(scenario);
-await gmExpectOk(res);
-const savedScenario=JSON.parse(JSON.stringify(scenario));
+const savePayload=await gmReadJson(res);
+const savedScenario=savePayload&&savePayload.scenario?scenarioEditableJson(savePayload.scenario,scenario.room_id):JSON.parse(JSON.stringify(scenario));
 scenarioEditor.scenario_id=scenario.id;
 scenarioEditor.open=true;
-invalidateRoomScenarioDetail(scenario.room_id,scenario.id);
+setRoomScenarioDetail(scenario.room_id,savedScenario);
+scenarioSetLoadedDraft(savedScenario,scenario.room_id);
 await refreshRoomScenariosAfterMutation(scenario.room_id);
-const refreshed=await ensureRoomScenarioDetail(scenario.room_id,scenario.id,true);
-scenarioSetLoadedDraft(refreshed||savedScenario,scenario.room_id);
 setGMStatus('Scenario saved','gm-ok');
 }
 

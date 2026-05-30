@@ -135,6 +135,30 @@ static void test_audio_player_asset_prepare_caches_missing_path_status(void)
     TEST_ASSERT_EQUAL_STRING(path, info.path);
 }
 
+static void test_audio_player_wav_decode_chunk_frames_stays_within_output_capacity(void)
+{
+    audio_info_t info = {
+        .fmt = AUDIO_FMT_WAV,
+        .sample_rate = 44100,
+        .channels = 2,
+        .bits_per_sample = 16,
+    };
+
+    TEST_ASSERT_EQUAL_UINT32(512, audio_player_wav_decode_chunk_frames(&info));
+
+    info.sample_rate = 32000;
+    TEST_ASSERT_EQUAL_UINT32(372, audio_player_wav_decode_chunk_frames(&info));
+
+    info.sample_rate = 22050;
+    TEST_ASSERT_EQUAL_UINT32(256, audio_player_wav_decode_chunk_frames(&info));
+
+    info.sample_rate = 11025;
+    TEST_ASSERT_EQUAL_UINT32(128, audio_player_wav_decode_chunk_frames(&info));
+
+    info.sample_rate = 64;
+    TEST_ASSERT_EQUAL_UINT32(0, audio_player_wav_decode_chunk_frames(&info));
+}
+
 void register_audio_player_state_tests(void)
 {
     RUN_TEST(test_audio_player_volume_clamps_and_updates_status);
@@ -143,4 +167,5 @@ void register_audio_player_state_tests(void)
     RUN_TEST(test_audio_player_seek_state_requires_active_path);
     RUN_TEST(test_audio_player_format_mapping_handles_known_and_unknown_formats);
     RUN_TEST(test_audio_player_asset_prepare_caches_missing_path_status);
+    RUN_TEST(test_audio_player_wav_decode_chunk_frames_stays_within_output_capacity);
 }

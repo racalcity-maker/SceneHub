@@ -97,9 +97,85 @@ if(isCurrent&&(branchState==='running'||branchState==='waiting'||branchState==='
 return 'pending';
 }
 function scenarioProgressIcon(state){if(state==='done')return '&#10003;';if(state==='current')return '&rarr;';if(state==='error')return '!';return '';}
+function scenarioReactiveTriggerLabel(branch){
+const trigger=branch&&branch.trigger&&typeof branch.trigger==='object'?branch.trigger:{};
+const kind=String(trigger.kind||'device_event').toLowerCase();
+if(kind==='device_event'){
+const device=deviceDisplayName(trigger.device_id||'');
+const event=questDeviceEventName(trigger.device_id||'',trigger.event_id||'');
+return compactText(`${device}: ${event}`,40);
+}
+if(kind==='flag_changed')return compactText(`Flag: ${trigger.flag_name||'flag'}`,36);
+if(kind==='operator_event')return compactText(`Operator: ${trigger.event_id||trigger.operator_event||'event'}`,36);
+if(kind==='runtime_event')return compactText(`Runtime: ${trigger.event_id||trigger.runtime_event||'event'}`,36);
+return compactText(branch&&branch.name||'Reactive trigger',36);
+}
+function scenarioProgressStepCompactText(step){
+if(!step)return 'Step';
+const type=scenarioStepTypeValue(step);
+if(type==='DEVICE_COMMAND'&&String(step.device_id||'')==='system_audio'){
+const file=audioBaseName(step&&step.params&&step.params.file||'');
+return compactText(file||scenarioStepSummaryText(step)||'Audio',34);
+}
+if(type==='DEVICE_COMMAND'){
+const device=deviceDisplayName(step.device_id);
+const command=questDeviceCommandName(step.device_id,step.command_id);
+return compactText(`${device}: ${command}`,40);
+}
+if(type==='WAIT_DEVICE_EVENT'){
+return compactText(`Wait ${deviceDisplayName(step.device_id)}: ${questDeviceEventName(step.device_id,step.event_id)}`,40);
+}
+if(type==='WAIT_TIME')return compactText(waitTimeLabel(step.duration_ms),20);
+if(type==='OPERATOR_APPROVAL')return compactText(step.prompt||step.operator_prompt||step.label||'Operator approval',34);
+if(type==='SHOW_OPERATOR_MESSAGE')return compactText(step.message||'Operator message',34);
+if(type==='SET_FLAG')return compactText(`Set ${step.flag_name||'flag'}`,24);
+if(type==='WAIT_FLAGS')return compactText(`Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`,24);
+if(type==='END_GAME')return 'End game';
+if(typeof scenarioStepSummaryText==='function')return compactText(scenarioStepSummaryText(step),40);
+return compactText(scenarioStepText(step),40);
+}
 function scenarioProgressBranches(room,scenarioOrSteps){if(room&&Array.isArray(room.scenario_branches)&&room.scenario_branches.some(branch=>Array.isArray(branch&&branch.steps)&&branch.steps.length))return room.scenario_branches.map((branch,index)=>({id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type:String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal',enabled:branch.active!==false,required_for_completion:branch.required_for_completion!==false,trigger:branch.trigger||null,current_step_text:branch.current_step_text||'',wait_summary:branch.wait_summary||'',steps:Array.isArray(branch.steps)?branch.steps:[]}));if(scenarioOrSteps&&Array.isArray(scenarioOrSteps.branches)&&scenarioOrSteps.branches.length)return scenarioOrSteps.branches.map((branch,index)=>{const type=String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal';return {id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type,enabled:branch.enabled!==false,required_for_completion:type==='normal'&&branch.required_for_completion!==false,trigger:branch.trigger||null,steps:scenarioBranchDisplaySteps(branch)};});const steps=Array.isArray(scenarioOrSteps)?scenarioOrSteps:(scenarioOrSteps&&Array.isArray(scenarioOrSteps.steps)?scenarioOrSteps.steps:[]);return steps.length?[{id:'main',name:'Main',type:'normal',enabled:true,required_for_completion:true,steps}]:[];}
 function scenarioProgressBranchRuntime(room,branch,index){const runtimes=Array.isArray(room&&room.scenario_branches)?room.scenario_branches:[];const byIndex=runtimes.find(item=>Number(item.index)===index);if(byIndex)return byIndex;const branchId=branch&&branch.id||'';if(branchId)return runtimes.find(item=>(item.id||'')===branchId)||null;return null;}
-function renderScenarioProgressStep(room,step,index,globalIndex,branchRuntime){const disabled=step&&step.enabled===false;const state=disabled?'disabled':scenarioProgressBranchState(room,branchRuntime,index,globalIndex);const text=step&&step.text||scenarioStepText(step);return `<div class='scenario-progress-step ${state}'><span class='scenario-progress-icon'>${scenarioProgressIcon(state)}</span><span class='scenario-progress-index'>${esc(index+1)}.</span><span class='scenario-progress-text'>${esc(text)}</span>${disabled?`<span class='badge'>disabled</span>`:''}</div>`;}
+function renderScenarioProgressStep(room,step,index,globalIndex,branchRuntime){const disabled=step&&step.enabled===false;const state=disabled?'disabled':scenarioProgressBranchState(room,branchRuntime,index,globalIndex);const visual=typeof scenarioStepVisualType==='function'?scenarioStepVisualType(step):'command';const icon=typeof scenarioStepIcon==='function'?scenarioStepIcon(step):scenarioProgressIcon(state);const text=scenarioProgressStepCompactText(step);const fullText=(typeof scenarioStepSummaryText==='function'?scenarioStepSummaryText(step):scenarioStepText(step))||text;return `<div class='scenario-progress-step ${state} scenario-step-${esc(visual)}' title='${esc(fullText)}'><span class='scenario-progress-index'>${esc(index+1)}.</span><span class='scenario-step-icon scenario-progress-type-icon'>${icon}</span><span class='scenario-progress-text'>${esc(text)}</span>${disabled?`<span class='badge'>disabled</span>`:''}</div>`;}
+function scenarioProgressBranchDomId(room,item){
+const branch=item&&item.branch||{};
+const roomId=room&&room.room_id||item&&item.room&&item.room.room_id||'room';
+const type=branch.type==='reactive'?'reactive':'flow';
+return `${roomId}:${type}:${branch.id||item&&item.index||0}`;
+}
+function scenarioProgressBranchRenderKey(item){
+const room=item&&item.room||null;
+const branch=item&&item.branch||{};
+const branchRuntime=item&&item.runtime||null;
+const start=Number(item&&item.start)||0;
+const steps=Array.isArray(branch.steps)?branch.steps:[];
+const stepStates=steps.map((step,stepIndex)=>{
+const disabled=step&&step.enabled===false;
+const state=disabled?'disabled':scenarioProgressBranchState(room,branchRuntime,stepIndex,start+stepIndex);
+const text=step&&step.text||scenarioStepText(step);
+return `${step&&step.id||stepIndex}:${disabled?'0':'1'}:${state}:${text}`;
+}).join('~');
+const runtimeSteps=Array.isArray(branchRuntime&&branchRuntime.steps)?branchRuntime.steps.map(step=>{
+return `${Number(step&&step.index)}:${String(step&&step.state||'')}:${String(step&&step.wait_type||'')}`;
+}).join('~'):'';
+return runtimeRenderHash([
+String(branch.id||item&&item.index||''),
+String(branch.name||''),
+String(branch.type||'normal'),
+branch.enabled===false?'0':'1',
+branch.required_for_completion===false?'0':'1',
+String(branchRuntime&&branchRuntime.state||''),
+String(branchRuntime&&branchRuntime.wait_type||''),
+String(branchRuntime&&branchRuntime.wait_summary||branch.wait_summary||''),
+String(branchRuntime&&branchRuntime.current_step_text||branch.current_step_text||''),
+String(branchRuntime&&((branchRuntime.done_steps??branchRuntime.completed_step_count)||0)||0),
+String(branchRuntime&&branchRuntime.failed_step_index!==undefined&&branchRuntime.failed_step_index!==null?branchRuntime.failed_step_index:''),
+String(branchRuntime&&branchRuntime.current_step_local_index!==undefined&&branchRuntime.current_step_local_index!==null?branchRuntime.current_step_local_index:''),
+String(branchRuntime&&branchRuntime.current_step_index!==undefined&&branchRuntime.current_step_index!==null?branchRuntime.current_step_index:''),
+stepStates,
+runtimeSteps
+].join('|'));
+}
 function scenarioBranchDoneCount(room,branch,branchRuntime,globalStart){
 const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
 const total=steps.length;
@@ -140,26 +216,43 @@ const waitType=(branchRuntime&&branchRuntime.wait_type)||'none';
 const waitText=scenarioBranchWaitText(branchRuntime,branch);
 const done=scenarioBranchDoneCount(room,branch,branchRuntime,item.start);
 const current=scenarioBranchCurrentStep(branch,branchRuntime);
-const detailsKey=`room-progress-steps:${room&&room.room_id||'room'}:${branch.id||item.index}`;
 const unit=branch.type==='reactive'?'actions':'steps';
-const meta=branch.type==='reactive'?`${esc(done)} / ${esc(steps.length)} ${esc(unit)} / ${esc(scenarioProgressTypeLabel(branch))}`:`${esc(done)} / ${esc(steps.length)} ${esc(unit)} / ${esc(scenarioProgressTypeLabel(branch))}${waitType&&waitType!=='none'?` / waiting ${esc(waitText)}`:''}`;
+const progressLabel=`${done} / ${steps.length} ${unit}`;
+const metaParts=[scenarioProgressTypeLabel(branch)];
+if(waitType&&waitType!=='none'&&state==='waiting')metaParts.push(`waiting ${waitText}`);
+const meta=metaParts.filter(Boolean).join(' / ');
 const actionRuntime=branch.type==='reactive'&&state==='waiting'&&(!waitType||waitType==='none')?null:branchRuntime;
-return `<section class='scenario-progress-branch ${!branch.enabled?'disabled':''} ${branch.type==='reactive'?'reactive':''} ${state}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(branch.name||branch.id||`Branch ${item.index+1}`)}</div><span class='badge'>${esc(state)}</span></div><div class='row-meta'>${meta}</div><div class='scenario-progress-current'>${esc(current)}</div>${scenarioProgressBar(done,steps.length)}</div></div><details class='scenario-progress-step-details' ${detailsAttrs(detailsKey,false)}><summary>Show ${esc(unit)}</summary><div class='scenario-progress'>${steps.length?steps.map((step,stepIndex)=>renderScenarioProgressStep(room,step,stepIndex,item.start+stepIndex,actionRuntime)).join(''):`<div class='empty'>No ${esc(unit)}</div>`}</div></details></section>`;
+const fullStepsHtml=steps.length?steps.map((step,stepIndex)=>renderScenarioProgressStep(room,step,stepIndex,item.start+stepIndex,actionRuntime)).join(''):`<div class='empty'>No ${esc(unit)}</div>`;
+if(branch.type==='reactive'){
+const triggerLabel=scenarioReactiveTriggerLabel(branch);
+return `<section class='scenario-progress-branch reactive compact-reaction ${!branch.enabled?'disabled':''} ${state}' data-scenario-progress-branch='${esc(scenarioProgressBranchDomId(room,item))}' data-scenario-progress-branch-key='${esc(scenarioProgressBranchRenderKey(item))}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(triggerLabel)}</div><div class='scenario-progress-branch-headside'><span class='scenario-progress-count'>${esc(progressLabel)}</span><span class='badge'>${esc(state)}</span></div></div></div></div></section>`;
+}
+return `<section class='scenario-progress-branch ${!branch.enabled?'disabled':''} ${branch.type==='reactive'?'reactive':''} ${state}' data-scenario-progress-branch='${esc(scenarioProgressBranchDomId(room,item))}' data-scenario-progress-branch-key='${esc(scenarioProgressBranchRenderKey(item))}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(branch.name||branch.id||`Branch ${item.index+1}`)}</div><div class='scenario-progress-branch-headside'><span class='scenario-progress-count'>${esc(progressLabel)}</span><span class='badge'>${esc(state)}</span></div></div>${meta?`<div class='row-meta'>${esc(meta)}</div>`:''}<div class='scenario-progress-current'>${esc(current)}</div></div></div><div class='scenario-progress-step-details scenario-progress-step-details-static'><div class='scenario-progress'>${fullStepsHtml}</div></div></section>`;
 }
 function renderScenarioProgressSection(title,items,mode){
 if(!items.length)return '';
-return `<div class='scenario-progress-section'><div class='scenario-progress-section-title'>${esc(title)}</div><div class='scenario-progress-branches ${esc(mode||'flow')}'>${items.map(item=>renderScenarioProgressBranch(item.room,item)).join('')}</div></div>`;
+return `<div class='scenario-progress-section' data-scenario-progress-section='${esc(mode||'flow')}'><div class='scenario-progress-section-title'>${esc(title)}</div><div class='scenario-progress-branches ${esc(mode||'flow')}' data-scenario-progress-branches='${esc(mode||'flow')}'>${items.map(item=>renderScenarioProgressBranch(item.room,item)).join('')}</div></div>`;
 }
-function renderScenarioProgress(room,scenarioOrSteps){
+function scenarioProgressData(room,scenarioOrSteps){
 const branches=scenarioProgressBranches(room,scenarioOrSteps);
- if(!branches.length){
- const total=Math.max(0,Number(room&&room.scenario_total_steps)||0);
- const done=Math.max(0,Number(room&&room.scenario_done_steps)||0);
- const current=roomCurrentScenarioText(room)||'No active step';
- if(!total)return `<div class='scenario-progress empty'>No scenario steps</div>`;
- return `<div class='scenario-progress-wrap'><div class='scenario-progress-overview'><div><div class='scenario-progress-overview-title'>${esc(done)} / ${esc(total)} steps</div><div class='row-meta'>Current: ${esc(current)}</div></div>${scenarioProgressBar(done,total)}</div><div class='row-meta'>Detailed step layout loads in the Scenarios view.</div></div>`;
- }
- let offset=0;
+if(!branches.length){
+const total=Math.max(0,Number(room&&room.scenario_total_steps)||0);
+const done=Math.max(0,Number(room&&room.scenario_done_steps)||0);
+const current=roomCurrentScenarioText(room)||'No active step';
+return {
+room,
+mode:total?'summary':'empty',
+total,
+done,
+activeText:current,
+items:[],
+flow:[],
+reactions:[],
+progressItems:[],
+hasRuntimeDetails:false
+};
+}
+let offset=0;
 const items=branches.map((branch,index)=>{
 const steps=Array.isArray(branch.steps)?branch.steps:[];
 const branchRuntime=scenarioProgressBranchRuntime(room,branch,index);
@@ -175,12 +268,61 @@ const total=Math.max(scenarioTotalStepCount(room),progressItems.reduce((sum,item
 const done=hasRuntimeDetails
 ?progressItems.reduce((sum,item)=>sum+scenarioBranchDoneCount(room,item.branch,item.runtime,item.start),0)
 :scenarioDoneStepCount(room);
-const active=items.find(item=>item.runtime&&(item.runtime.state==='waiting'||item.runtime.state==='running'||item.runtime.state==='error'));
+const active=progressItems.find(item=>item.runtime&&(item.runtime.state==='waiting'||item.runtime.state==='running'||item.runtime.state==='error'))
+||items.find(item=>item.runtime&&(item.runtime.state==='waiting'||item.runtime.state==='running'||item.runtime.state==='error'));
 const activeText=active?`${active.branch.name||active.branch.id}: ${scenarioBranchCurrentStep(active.branch,active.runtime)}`:(roomCurrentScenarioText(room)||'No active branch');
-if(!hasRuntimeDetails){
-return `<div class='scenario-progress-wrap'><div class='scenario-progress-overview'><div><div class='scenario-progress-overview-title'>${esc(done)} / ${esc(total)} steps</div><div class='row-meta'>Current: ${esc(activeText)}</div></div>${scenarioProgressBar(done,total)}</div>${renderScenarioProgressSection('Scenario layout',progressItems,'flow')}${renderScenarioProgressSection('Reaction branches',reactions,'reactions')}</div>`;
+return {
+room,
+mode:hasRuntimeDetails?'runtime':'layout',
+total,
+done,
+activeText,
+items,
+flow,
+reactions,
+progressItems,
+hasRuntimeDetails
+};
 }
-return `<div class='scenario-progress-wrap'><div class='scenario-progress-overview'><div><div class='scenario-progress-overview-title'>${esc(done)} / ${esc(total)} steps</div><div class='row-meta'>Current: ${esc(activeText)}</div></div>${scenarioProgressBar(done,total)}</div>${renderScenarioActiveWaits(room,items)}${renderScenarioProgressSection('Flow branches',flow,'flow')}${renderScenarioProgressSection('Reaction branches',reactions,'reactions')}</div>`;
+
+function renderScenarioProgressOverviewHtml(data){
+if(!data||data.mode==='empty')return `<div class='scenario-progress empty'>No scenario steps</div>`;
+return `<div class='scenario-progress-overview'><div><div class='scenario-progress-overview-title'>${esc(data.done)} / ${esc(data.total)} steps</div><div class='row-meta'>Current: ${esc(data.activeText)}</div></div>${scenarioProgressBar(data.done,data.total)}</div>`;
+}
+
+function renderScenarioProgressOverviewCompactHtml(data){
+if(!data||data.mode==='empty')return `<div class='scenario-progress-overview compact'><div class='row-meta'>No scenario steps</div></div>`;
+return `<div class='scenario-progress-overview compact'><div><div class='scenario-progress-overview-title'>${esc(data.done)} / ${esc(data.total)} steps</div><div class='row-meta'>Current: ${esc(data.activeText)}</div></div>${scenarioProgressBar(data.done,data.total)}</div>`;
+}
+
+function renderScenarioProgressWaitsHtml(data){
+if(!data)return '';
+if(data.mode==='summary')return `<div class='row-meta'>Detailed step layout loads in the Scenarios view.</div>`;
+if(data.mode!=='runtime')return `<div class='row-meta'></div>`;
+return renderScenarioActiveWaits(data.room,data.items);
+}
+function scenarioProgressSectionItems(data,mode){
+if(!data||data.mode==='empty'||data.mode==='summary')return [];
+if(mode==='reactions')return Array.isArray(data.reactions)?data.reactions:[];
+if(data.mode==='layout')return Array.isArray(data.progressItems)?data.progressItems:[];
+return Array.isArray(data.flow)?data.flow:[];
+}
+
+function renderScenarioProgressFlowHtml(data){
+if(!data||data.mode==='empty'||data.mode==='summary')return '';
+return renderScenarioProgressSection('Flow branches',scenarioProgressSectionItems(data,'flow'),'flow');
+}
+
+function renderScenarioProgressReactionsHtml(data){
+if(!data||data.mode==='empty'||data.mode==='summary')return '';
+const items=scenarioProgressSectionItems(data,'reactions');
+if(!items.length)return '';
+return renderScenarioProgressSection(`Reactive branches (${items.length})`,items,'reactions');
+}
+
+function renderScenarioProgress(room,scenarioOrSteps){
+const data=scenarioProgressData(room,scenarioOrSteps);
+return `<div class='scenario-progress-wrap' data-room-scenario-progress-wrap='1'><div data-room-scenario-progress-overview='1'></div><div data-room-scenario-progress-waits='1'></div><div data-room-scenario-progress-reactions='1'>${renderScenarioProgressReactionsHtml(data)}</div><div data-room-scenario-progress-flow='1'>${renderScenarioProgressFlowHtml(data)}</div></div>`;
 }
 function scenarioValidationText(s){if(!s)return 'No scenario selected';const n=Number(s.validation_issue_count)||0;if(s.valid===false)return `${n||1} validation issue${n===1?'':'s'}`;return n?`Valid, ${n} warning${n===1?'':'s'}`:'Valid';}
 function scenarioIssueLocationText(issue){

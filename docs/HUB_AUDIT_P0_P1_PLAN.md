@@ -154,25 +154,21 @@ Current behavior:
 
 ## Still Open
 
-### P0.2 semantic gap: `requires_confirmation` and `danger_level`
+### P0.2 confirmation policy is now explicit for manual HTTP actions
 
-These fields are currently used as UI/log metadata, not as hard backend policy.
+The semantic gap around dangerous manual actions is now narrowed:
 
-Observed usage:
-
-- UI confirmation and danger rendering in `components/web_ui/assets/gm_panel/*`
-- warning/audit emphasis in `components/scenehub_control/scenehub_control_devices.c`
-
-What is missing:
-
-- no explicit backend confirmation token or confirm flag in the execution API
-- no server-side protected path that distinguishes confirmed from unconfirmed manual actions
+- `requires_confirmation` is enforced on the manual HTTP/device-control path
+- callers must send `confirmed=true` for commands whose policy has
+  `requires_confirmation=true`
+- `danger_level` remains UI/log metadata and is not a backend gate
 
 Conclusion:
 
-- do not silently invent backend enforcement for these two fields
-- if product requires hard enforcement, add an explicit API contract for
-  confirmation first
+- operator/admin confirmation is no longer only a frontend courtesy
+- direct API callers cannot bypass `requires_confirmation` by skipping the UI
+- scenario/runtime execution remains separate and is not gated by this manual
+  HTTP flag
 
 ### P0.3 write-side envelope remains intentionally dispatch-only
 
@@ -214,10 +210,8 @@ Conclusion:
 
 ## Next Actions
 
-1. Decide whether `requires_confirmation` and `danger_level` remain UI-only metadata or become hard backend policy.
-2. If backend enforcement is required, add an explicit confirmation field/token to the manual command API and only then enforce it server-side.
-3. Decide whether initial manual HTTP responses should ever expose early `remote_status` in addition to `status = accepted`.
-4. If richer manual lifecycle is required later, keep it additive and do not collapse write-side and remote statuses back into one field.
+1. Decide whether initial manual HTTP responses should ever expose early `remote_status` in addition to `status = accepted`.
+2. If richer manual lifecycle is required later, keep it additive and do not collapse write-side and remote statuses back into one field.
 5. Run targeted builds/tests for `tests/command_backend`, `tests/gm_session`, and `tests/web_ui_backend` when verification is allowed.
 6. Before larger device-count testing, verify that current throttling and
    heartbeat-generation narrowing are sufficient before introducing more

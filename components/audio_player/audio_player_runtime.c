@@ -273,6 +273,14 @@ static void handle_play(const audio_cmd_t *cmd)
     audio_player_channel_t channel = normalize_channel(cmd->channel);
     int volume = cmd->volume >= 0 ? cmd->volume : audio_player_runtime_volume();
 
+    ESP_LOGI(TAG,
+             "play request: channel=%d path=%s volume=%d repeat=%d seek=%.3f",
+             (int)channel,
+             cmd->path,
+             volume,
+             cmd->repeat ? 1 : 0,
+             (double)cmd->seek_ratio);
+
     if (!sd_storage_available()) {
         ESP_LOGE(TAG, "SD not mounted, beep");
         audio_player_output_play_tone(660, 150, volume);
@@ -430,13 +438,25 @@ esp_err_t audio_player_runtime_start(void)
 
 esp_err_t audio_player_runtime_enqueue(const audio_cmd_t *cmd)
 {
+    BaseType_t ok = pdFALSE;
+
     if (!cmd) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!s_queue) {
         return ESP_ERR_INVALID_STATE;
     }
-    return xQueueSend(s_queue, cmd, pdMS_TO_TICKS(50)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+    ok = xQueueSend(s_queue, cmd, pdMS_TO_TICKS(50));
+    if (ok == pdTRUE) {
+        return ESP_OK;
+    }
+
+    ESP_LOGW(TAG,
+             "audio enqueue timeout: type=%d channel=%d path=%s",
+             (int)cmd->type,
+             (int)cmd->channel,
+             cmd->path);
+    return ESP_ERR_TIMEOUT;
 }
 
 audio_reader_ctx_t *audio_player_runtime_create_reader_ctx(const audio_cmd_t *cmd)
@@ -632,4 +652,77 @@ int audio_player_reader_volume(const audio_reader_ctx_t *ctx)
         volume = 100;
     }
     return volume;
+}
+
+bool audio_player_runtime_reader_snapshot(audio_player_channel_t channel,
+                                          char *path,
+                                          size_t path_len,
+                                          size_t *bytes_done,
+                                          uint32_t *loop_gap_ms,
+                                          long *read_offset,
+                                          uint32_t *read_elapsed_ms,
+                                          long *slow_read_offset,
+                                          uint32_t *slow_read_elapsed_ms)
+{
+    bool ok = false;
+    channel = normalize_channel(channel);
+
+    if (runtime_lock()) {
+        audio_reader_ctx_t *ctx = &s_reader_ctxs[channel];
+        if (s_reader_ctx_in_use[channel]) {
+            if (path && path_len > 0) {
+                strncpy(path, ctx->cmd.path, path_len - 1);
+                path[path_len - 1] = 0;
+            }
+            if (bytes_done) {
+                *bytes_done = ctx->last_bytes_done;
+            }
+            if (loop_gap_ms) {
+                *loop_gap_ms = ctx->last_loop_gap_ms;
+            }
+            if (read_offset) {
+                *read_offset = ctx->last_read_offset;
+            }
+            if (read_elapsed_ms) {
+                *read_elapsed_ms = ctx->last_read_elapsed_ms;
+            }
+            if (slow_read_offset) {
+                *slow_read_offset = ctx->last_slow_read_offset;
+            }
+            if (slow_read_elapsed_ms) {
+                *slow_read_elapsed_ms = ctx->last_slow_read_elapsed_ms;
+            }
+            ok = true;
+        }
+        runtime_unlock();
+        return ok;
+    }
+
+    audio_reader_ctx_t *ctx = &s_reader_ctxs[channel];
+    if (!s_reader_ctx_in_use[channel]) {
+        return false;
+    }
+    if (path && path_len > 0) {
+        strncpy(path, ctx->cmd.path, path_len - 1);
+        path[path_len - 1] = 0;
+    }
+    if (bytes_done) {
+        *bytes_done = ctx->last_bytes_done;
+    }
+    if (loop_gap_ms) {
+        *loop_gap_ms = ctx->last_loop_gap_ms;
+    }
+    if (read_offset) {
+        *read_offset = ctx->last_read_offset;
+    }
+    if (read_elapsed_ms) {
+        *read_elapsed_ms = ctx->last_read_elapsed_ms;
+    }
+    if (slow_read_offset) {
+        *slow_read_offset = ctx->last_slow_read_offset;
+    }
+    if (slow_read_elapsed_ms) {
+        *slow_read_elapsed_ms = ctx->last_slow_read_elapsed_ms;
+    }
+    return true;
 }

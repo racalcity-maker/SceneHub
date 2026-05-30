@@ -10,7 +10,7 @@ function markControlDirty(el){if(!dirtyLockControl(el))return;gmInputDirty=true;
 function clearTransientFieldDirty(){gmInputDirty=false;document.querySelectorAll('#gm_content .gm-field-dirty,#gm_content .gm-field-editing').forEach(el=>{el.classList.remove('gm-field-dirty','gm-field-editing');});}
 function hasFocusedEditableControl(){const active=document.activeElement;return isEditableControl(active);}
 function hasDirtyEditableControls(){return gmInputDirty||!!document.querySelector('#gm_content .gm-field-dirty');}
-function shouldDeferAutoRender(){return !!(hasUnsavedEditorChanges()||hasFocusedEditableControl()||hasDirtyEditableControls());}
+function shouldDeferAutoRender(){return !!(gmInteractionActive||hasUnsavedEditorChanges()||hasFocusedEditableControl()||hasDirtyEditableControls());}
 function hasTransientFieldChanges(){return hasDirtyEditableControls();}
 function confirmDiscardTransientFields(){if(!hasTransientFieldChanges())return true;if(!confirm('Discard unsent field changes?'))return false;clearTransientFieldDirty();return true;}
 function hasUnsavedEditorChanges(){return !!(profileEditor.dirty||scenarioEditor.dirty||questDeviceEditor.dirty);}
@@ -25,6 +25,7 @@ function scenarioSetLoadedDraft(scenario,roomId){
 const editable=scenarioEditableJson(scenario,roomId||scenarioEditor.room_id);
 scenarioEditor.original_scenario=scenarioClone(editable);
 scenarioEditor.draft=scenarioClone(editable);
+scenarioEditor.active_branch=scenarioPreferredOpenBranchIndex(editable);
 scenarioEditor.dirty=false;
 scenarioEditor.validation_report=null;
 scenarioEditor.draft_revision=0;

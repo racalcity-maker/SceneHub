@@ -15,6 +15,7 @@
 #include "room_catalog.h"
 #include "room_scenario.h"
 #include "scenehub_device_command_resolver.h"
+#include "sd_storage.h"
 
 static const char *TAG = "gm_api";
 
@@ -289,6 +290,9 @@ static void gm_api_prepare_audio_args_json(const char *args_json)
 {
     gm_api_json_string_view_t file = {0};
     char path[QUEST_DEVICE_DEFAULT_ARGS_JSON_MAX_LEN] = {0};
+    uint32_t started_ms = 0;
+    esp_err_t err = ESP_OK;
+    char detail[64] = {0};
     if (!args_json || !args_json[0]) {
         return;
     }
@@ -296,7 +300,10 @@ static void gm_api_prepare_audio_args_json(const char *args_json)
         return;
     }
     if (gm_api_json_copy_string_view(&file, path, sizeof(path)) == ESP_OK && path[0]) {
-        (void)audio_player_prepare_path(path, NULL);
+        started_ms = sd_storage_trace_now_ms();
+        err = audio_player_prepare_path(path, NULL);
+        snprintf(detail, sizeof(detail), "result=%s", esp_err_to_name(err));
+        sd_storage_trace_log("gm_api", "warmup_prepare", path, sd_storage_trace_now_ms() - started_ms, detail);
     }
 }
 
@@ -402,6 +409,8 @@ static void gm_api_prepare_profile_assets_now(const char *profile_id,
     room_scenario_t *scenario = &s_api_prepare_scenario;
     char scenario_id[GM_GAME_PROFILE_SCENARIO_ID_MAX_LEN] = {0};
     esp_err_t err = ESP_OK;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    char detail[96] = {0};
     if (!profile_id || !profile_id[0]) {
         return;
     }
@@ -430,6 +439,13 @@ static void gm_api_prepare_profile_assets_now(const char *profile_id,
     if (err == ESP_OK) {
         gm_api_prepare_scenario_audio_assets(scenario, generation);
     }
+    snprintf(detail,
+             sizeof(detail),
+             "profile=%s scenario=%s result=%s",
+             profile_id,
+             scenario_id[0] ? scenario_id : "-",
+             esp_err_to_name(err));
+    sd_storage_trace_log("gm_api", "profile_warmup", profile_id, sd_storage_trace_now_ms() - started_ms, detail);
 }
 
 static void gm_api_prepare_profile_assets_job(void *ctx)

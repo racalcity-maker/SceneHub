@@ -3,18 +3,21 @@
 #include <math.h>
 #include <string.h>
 
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_check.h"
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "error_monitor.h"
+#include "sdkconfig.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-// I2S pins for PCM5102A. Configurable via menuconfig defaults.
+// I2S pins for the selected output driver. Configurable via menuconfig.
 #define I2S_BCK_PIN  CONFIG_SCENEHUB_I2S_BCK_PIN
 #define I2S_WS_PIN   CONFIG_SCENEHUB_I2S_WS_PIN
 #define I2S_DATA_PIN CONFIG_SCENEHUB_I2S_DATA_PIN
@@ -25,6 +28,12 @@
 #define AUDIO_FRAME_BYTES (AUDIO_CHANNELS * sizeof(int16_t))
 #define AUDIO_SILENCE_DRAIN_MS 50
 #define AUDIO_SILENCE_FRAMES 256
+#define AUDIO_I2S_WRITE_WARN_MS 80
+#define AUDIO_MAX98357A_WAKE_DELAY_MS 1
+
+#ifndef CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO
+#define CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO -1
+#endif
 
 static const char *TAG = "audio_player";
 
@@ -35,6 +44,106 @@ static SemaphoreHandle_t s_tone_lock = NULL;
 static portMUX_TYPE s_tone_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static DMA_ATTR int16_t s_silence_buf[AUDIO_SILENCE_FRAMES * AUDIO_CHANNELS];
 static DMA_ATTR int16_t s_tone_buf[256 * AUDIO_CHANNELS];
+static bool s_max98357a_sd_mode_ready = false;
+
+static const char *audio_output_driver_name(void)
+{
+#if CONFIG_SCENEHUB_AUDIO_OUTPUT_DRIVER_MAX98357A
+    return "MAX98357A";
+#elif CONFIG_SCENEHUB_AUDIO_OUTPUT_DRIVER_PCM5102A
+    return "PCM5102A";
+#else
+    return "unknown";
+#endif
+}
+
+static i2s_std_config_t audio_output_std_config(void)
+{
+    i2s_std_config_t std_cfg = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(AUDIO_BITS, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = I2S_BCK_PIN,
+            .ws = I2S_WS_PIN,
+            .dout = I2S_DATA_PIN,
+            .din = I2S_GPIO_UNUSED,
+        },
+    };
+
+#if CONFIG_SCENEHUB_AUDIO_OUTPUT_DRIVER_MAX98357A
+    // MAX98357A is used as an I2S DAC/amplifier and does not require MCLK.
+#elif CONFIG_SCENEHUB_AUDIO_OUTPUT_DRIVER_PCM5102A
+    // PCM5102A boards used in SceneHub are driven in standard I2S mode without MCLK.
+#endif
+
+    return std_cfg;
+}
+
+static bool audio_output_is_max98357a(void)
+{
+#if CONFIG_SCENEHUB_AUDIO_OUTPUT_DRIVER_MAX98357A
+    return true;
+#else
+    return false;
+#endif
+}
+
+static bool max98357a_sd_mode_configured(void)
+{
+    return audio_output_is_max98357a() &&
+           CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO >= 0;
+}
+
+static esp_err_t max98357a_sd_mode_init(void)
+{
+    esp_err_t err = ESP_OK;
+
+    if (!max98357a_sd_mode_configured()) {
+        s_max98357a_sd_mode_ready = false;
+        return ESP_OK;
+    }
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO)) {
+        ESP_LOGE(TAG,
+                 "invalid MAX98357A SD_MODE gpio=%d",
+                 CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    err = gpio_config(&cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = gpio_set_level((gpio_num_t)CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO, 0);
+    if (err != ESP_OK) {
+        return err;
+    }
+    s_max98357a_sd_mode_ready = true;
+    return ESP_OK;
+}
+
+static void max98357a_set_shutdown(bool shutdown)
+{
+    if (!s_max98357a_sd_mode_ready) {
+        return;
+    }
+    esp_err_t err = gpio_set_level((gpio_num_t)CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO,
+                                   shutdown ? 0 : 1);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "MAX98357A SD_MODE write failed: gpio=%d state=%d err=%s",
+                 CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO,
+                 shutdown ? 0 : 1,
+                 esp_err_to_name(err));
+    }
+}
 
 static esp_err_t output_ensure_lock(void)
 {
@@ -89,6 +198,10 @@ static esp_err_t output_enable_locked(void)
     esp_err_t err = i2s_channel_enable(s_tx_chan);
     if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
         s_tx_enabled = true;
+        if (audio_output_is_max98357a()) {
+            max98357a_set_shutdown(false);
+            vTaskDelay(pdMS_TO_TICKS(AUDIO_MAX98357A_WAKE_DELAY_MS));
+        }
         return ESP_OK;
     }
     return err;
@@ -97,7 +210,13 @@ static esp_err_t output_enable_locked(void)
 static void output_disable_locked(void)
 {
     if (!s_tx_chan || !s_tx_enabled) {
+        if (audio_output_is_max98357a()) {
+            max98357a_set_shutdown(true);
+        }
         return;
+    }
+    if (audio_output_is_max98357a()) {
+        max98357a_set_shutdown(true);
     }
     esp_err_t err = i2s_channel_disable(s_tx_chan);
     if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
@@ -138,26 +257,31 @@ static esp_err_t audio_player_output_setup(void)
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &s_tx_chan, NULL), TAG, "i2s new channel failed");
 
-    i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(AUDIO_BITS, I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = I2S_BCK_PIN,
-            .ws = I2S_WS_PIN,
-            .dout = I2S_DATA_PIN,
-            .din = I2S_GPIO_UNUSED,
-        },
-    };
+    i2s_std_config_t std_cfg = audio_output_std_config();
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_tx_chan, &std_cfg), TAG, "i2s std init failed");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_tx_chan), TAG, "i2s enable failed");
     s_tx_enabled = true;
+    if (audio_output_is_max98357a()) {
+        max98357a_set_shutdown(false);
+        vTaskDelay(pdMS_TO_TICKS(AUDIO_MAX98357A_WAKE_DELAY_MS));
+    }
+    ESP_LOGI(TAG,
+             "audio output ready: driver=%s bclk=%d ws=%d data=%d rate=%d sd_mode_gpio=%d",
+             audio_output_driver_name(),
+             I2S_BCK_PIN,
+             I2S_WS_PIN,
+             I2S_DATA_PIN,
+             AUDIO_SAMPLE_RATE,
+             max98357a_sd_mode_configured() ? CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO : -1);
     return ESP_OK;
 }
 
 esp_err_t audio_player_output_init(void)
 {
     ESP_RETURN_ON_ERROR(output_ensure_lock(), TAG, "output lock init failed");
+    if (audio_output_is_max98357a()) {
+        ESP_RETURN_ON_ERROR(max98357a_sd_mode_init(), TAG, "MAX98357A SD_MODE init failed");
+    }
     if (s_tx_chan) {
         return ESP_OK;
     }
@@ -304,6 +428,7 @@ esp_err_t audio_player_output_write(const void *data, size_t len, size_t *bytes_
     while (err == ESP_OK && total_written < len) {
         size_t written_now = 0;
         size_t remaining = len - total_written;
+        uint64_t write_started_us = 0;
 
         // Пишем только frame-aligned размер.
         remaining -= remaining % AUDIO_FRAME_BYTES;
@@ -311,6 +436,7 @@ esp_err_t audio_player_output_write(const void *data, size_t len, size_t *bytes_
             break;
         }
 
+        write_started_us = (uint64_t)esp_timer_get_time();
         err = i2s_channel_write(
             s_tx_chan,
             src + total_written,
@@ -318,6 +444,16 @@ esp_err_t audio_player_output_write(const void *data, size_t len, size_t *bytes_
             &written_now,
             timeout
         );
+        uint32_t write_elapsed_ms = (uint32_t)(((uint64_t)esp_timer_get_time() - write_started_us) / 1000ULL);
+
+        if (write_elapsed_ms >= AUDIO_I2S_WRITE_WARN_MS) {
+            ESP_LOGW(TAG,
+                     "slow i2s write: elapsed_ms=%lu written=%u remaining=%u timeout_ticks=%lu",
+                     (unsigned long)write_elapsed_ms,
+                     (unsigned)written_now,
+                     (unsigned)remaining,
+                     (unsigned long)timeout);
+        }
 
         if (written_now > 0) {
             // Самая важная защита.

@@ -6,6 +6,7 @@
 
 #include "esp_attr.h"
 #include "esp_timer.h"
+#include "sd_storage.h"
 
 #define AUDIO_ASSET_CACHE_MAX 48
 
@@ -158,6 +159,9 @@ esp_err_t audio_player_prepare_path(const char *path, audio_player_asset_info_t 
     FILE *f = NULL;
     uint8_t hdr[16] = {0};
     size_t n = 0;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    char detail[96] = {0};
+    esp_err_t result = ESP_OK;
 
     if (!path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
@@ -195,14 +199,26 @@ esp_err_t audio_player_prepare_path(const char *path, audio_player_asset_info_t 
 
     slot = audio_asset_cache_slot(path);
     if (!slot) {
-        return ESP_ERR_NO_MEM;
+        result = ESP_ERR_NO_MEM;
+        goto trace_and_return;
     }
     *slot = info;
     if (out) {
         *out = info;
     }
     s_audio_asset_generation++;
-    return ESP_OK;
+    result = ESP_OK;
+
+trace_and_return:
+    snprintf(detail,
+             sizeof(detail),
+             "status=%d fmt=%d size=%u result=%s",
+             (int)info.status,
+             (int)info.fmt,
+             (unsigned)info.size_bytes,
+             esp_err_to_name(result));
+    sd_storage_trace_log("audio_asset", "prepare", path, sd_storage_trace_now_ms() - started_ms, detail);
+    return result;
 }
 
 bool audio_player_asset_is_prepared(const char *path)

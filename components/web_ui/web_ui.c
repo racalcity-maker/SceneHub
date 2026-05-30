@@ -372,9 +372,6 @@ esp_err_t web_ui_start(void)
 }
 
 
-#if defined(ESP_ERR_HTTPD_RESP_SEND)
-#define HAS_HTTPD_RESP_SEND 1
-#endif
 #if defined(ESP_ERR_HTTPD_INVALID_RESP)
 #define HAS_HTTPD_INVALID_RESP 1
 #endif
@@ -387,15 +384,10 @@ void web_ui_report_httpd_error(esp_err_t err, const char *context)
     const char *ctx = (context && context[0]) ? context : "httpd";
     ESP_LOGE(TAG, "httpd error %s (0x%x) at %s", esp_err_to_name(err), err, ctx);
     bool fatal = (err == ESP_ERR_HTTPD_HANDLERS_FULL ||
-                  err == ESP_ERR_HTTPD_INVALID_REQ ||
                   err == ESP_ERR_HTTPD_ALLOC_MEM ||
-                  err == ESP_ERR_NO_MEM ||
-                  err == ESP_ERR_TIMEOUT);
+                  err == ESP_ERR_NO_MEM);
 #ifdef ESP_ERR_HTTPD_INVALID_STATE
     fatal = fatal || (err == ESP_ERR_HTTPD_INVALID_STATE);
-#endif
-#ifdef HAS_HTTPD_RESP_SEND
-    fatal = fatal || (err == ESP_ERR_HTTPD_RESP_SEND);
 #endif
 #ifdef HAS_HTTPD_INVALID_RESP
     fatal = fatal || (err == ESP_ERR_HTTPD_INVALID_RESP);

@@ -77,10 +77,11 @@ list:(includeSystem=true,includeManifestJson=false)=>gmGet(`/api/gm/devices?incl
 save:device=>gmPostJson('/api/gm/device/save',{device}),
 delete:deviceId=>gmPostJson('/api/gm/device/delete',{device_id:deviceId}),
 describeInterface:clientId=>gmPostJson('/api/gm/device/describe-interface',{client_id:clientId}),
-runCommand:(deviceId,commandId,params)=>gmPostJson('/api/gm/device/command/run',{
+runCommand:(deviceId,commandId,params,confirmed)=>gmPostJson('/api/gm/device/command/run',{
 device_id:deviceId,
 command_id:commandId,
 ...(params&&typeof params==='object'?{params}:{}),
+...(confirmed?{confirmed:true}:{}),
 }),
 },
 sidebarPresets:{

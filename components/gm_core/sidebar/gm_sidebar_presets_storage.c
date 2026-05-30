@@ -86,7 +86,10 @@ esp_err_t gm_sidebar_preset_save_to_path_locked(const char *path)
     char *printed = NULL;
     FILE *f = NULL;
     char tmp[192] = {0};
+    size_t len = 0;
     esp_err_t err = ESP_OK;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    char detail[64] = {0};
     if (!path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -116,14 +119,12 @@ esp_err_t gm_sidebar_preset_save_to_path_locked(const char *path)
         cJSON_free(printed);
         return ESP_FAIL;
     }
-    {
-        size_t len = strlen(printed);
-        if (fwrite(printed, 1, len, f) != len) {
-            fclose(f);
-            unlink(tmp);
-            cJSON_free(printed);
-            return ESP_FAIL;
-        }
+    len = strlen(printed);
+    if (fwrite(printed, 1, len, f) != len) {
+        fclose(f);
+        unlink(tmp);
+        cJSON_free(printed);
+        return ESP_FAIL;
     }
     if (fclose(f) != 0) {
         unlink(tmp);
@@ -136,6 +137,8 @@ esp_err_t gm_sidebar_preset_save_to_path_locked(const char *path)
         unlink(tmp);
         return ESP_FAIL;
     }
+    snprintf(detail, sizeof(detail), "bytes=%u", (unsigned)len);
+    sd_storage_trace_log("gm_sidebar", "save", path, sd_storage_trace_now_ms() - started_ms, detail);
     return ESP_OK;
 }
 
@@ -147,6 +150,8 @@ esp_err_t gm_sidebar_preset_load_from_path_locked(const char *path)
     size_t bytes_read = 0;
     cJSON *root = NULL;
     esp_err_t err = ESP_OK;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    char detail[64] = {0};
     if (!path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -187,6 +192,8 @@ esp_err_t gm_sidebar_preset_load_from_path_locked(const char *path)
     }
     err = gm_sidebar_preset_import_json_locked(root, NULL, 0);
     cJSON_Delete(root);
+    snprintf(detail, sizeof(detail), "bytes=%u result=%s", (unsigned)bytes_read, esp_err_to_name(err));
+    sd_storage_trace_log("gm_sidebar", "load", path, sd_storage_trace_now_ms() - started_ms, detail);
     return err;
 }
 

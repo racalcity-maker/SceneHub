@@ -15,6 +15,7 @@ markControlEditing(e.target);
 });
 content.addEventListener('focusout',e=>{
 unmarkControlEditing(e.target);
+if(gmAutoRenderDeferred&&!shouldDeferAutoRender())gmFlushDeferredRender();
 });
 document.addEventListener('toggle',e=>{
 const detail=e.target;
@@ -23,6 +24,13 @@ const key=detailsKeyFor(detail);
 if(key)gmOpenDetails[key]=detail.open;
 }
 ,true);
+}
+
+function gmReleaseAsyncSelectionControl(control){
+if(control&&typeof control.blur==='function'&&document.activeElement===control){
+control.blur();
+}
+if(gmAutoRenderDeferred&&!shouldDeferAutoRender())gmFlushDeferredRender();
 }
 
 async function gmHandleProfileRoomChange(editorRoom){
@@ -66,6 +74,7 @@ render();
 }
 
 async function gmHandleEditorChange(e){
+const control=e.target;
 const editorRoom=e.target.closest('select[data-profile-room-select]');
 const scenarioRoom=e.target.closest('select[data-scenario-room-select]');
 const deviceRoom=e.target.closest('select[data-device-room-filter]');
@@ -84,10 +93,12 @@ if(handleSidebarPresetFieldChange(sidebarPresetField))return;
 if(gmHandleScenarioEditorChange(e))return;
 if(profile&&profile.value){
 await selectRoomProfile(profile.dataset.roomProfileRoom||'',profile.value||'');
+gmReleaseAsyncSelectionControl(control);
 return;
 }
 if(scenario&&scenario.value){
 await selectRoomScenario(scenario.dataset.roomScenarioRoom||'',scenario.value||'');
+gmReleaseAsyncSelectionControl(control);
 return;
 }
 if(scenarioField)return;

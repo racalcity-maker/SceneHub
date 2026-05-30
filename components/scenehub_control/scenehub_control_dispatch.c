@@ -32,6 +32,7 @@ typedef struct {
     char command_id[QUEST_ID_MAX_LEN];
     char params_json[QUEST_PAYLOAD_MAX_LEN];
     char client_id[QUEST_ID_MAX_LEN];
+    bool confirmed;
     command_executor_dispatch_t *out_dispatch;
     bool *out_log_warning;
     scenehub_control_device_interface_info_t *out_interface_info;
@@ -312,6 +313,17 @@ static esp_err_t scenehub_control_dispatch_execute_device_command(
     if (err == ESP_OK && !s_dispatch_resolved_command->command.manual_allowed) {
         err = ESP_ERR_INVALID_STATE;
     }
+    if (err == ESP_OK &&
+        s_dispatch_resolved_command->command.requires_confirmation &&
+        !request->confirmed) {
+        scenehub_control_set_result(request->out_result,
+                                    SCENEHUB_CONTROL_STATUS_REJECTED,
+                                    ESP_ERR_INVALID_STATE,
+                                    false,
+                                    "confirmation_required",
+                                    "Action requires confirmation");
+        return ESP_OK;
+    }
     if (err != ESP_OK) {
         scenehub_control_fill_common_error(request->out_result, err);
         return ESP_OK;
@@ -433,6 +445,7 @@ esp_err_t scenehub_control_dispatch_device_command(
     const char *device_id,
     const char *command_id,
     const char *params_json,
+    bool confirmed,
     scenehub_control_device_command_info_t *out_info,
     command_executor_dispatch_t *out_dispatch,
     bool *out_log_warning,
@@ -450,6 +463,7 @@ esp_err_t scenehub_control_dispatch_device_command(
     if (params_json && params_json[0]) {
         scenehub_control_copy(request.params_json, sizeof(request.params_json), params_json);
     }
+    request.confirmed = confirmed;
     request.type = SCENEHUB_CONTROL_DISPATCH_REQ_DEVICE_COMMAND;
     request.out_command_info = out_info;
     request.out_dispatch = out_dispatch;

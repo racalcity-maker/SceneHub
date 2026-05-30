@@ -634,6 +634,8 @@ static esp_err_t gm_game_profile_save_to_path_locked(const char *path)
     FILE *file = NULL;
     size_t len = 0;
     esp_err_t err = ESP_OK;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    char detail[64] = {0};
     if (!path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -681,6 +683,8 @@ static esp_err_t gm_game_profile_save_to_path_locked(const char *path)
         unlink(tmp_path);
         return ESP_FAIL;
     }
+    snprintf(detail, sizeof(detail), "bytes=%u", (unsigned)len);
+    sd_storage_trace_log("gm_profile", "save", path, sd_storage_trace_now_ms() - started_ms, detail);
     return ESP_OK;
 }
 
@@ -745,6 +749,8 @@ static esp_err_t gm_game_profile_load_from_path_locked(const char *path)
     size_t bytes_read = 0;
     cJSON *root = NULL;
     esp_err_t err = ESP_OK;
+    uint32_t started_ms = sd_storage_trace_now_ms();
+    char detail[64] = {0};
     if (!path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -788,6 +794,8 @@ static esp_err_t gm_game_profile_load_from_path_locked(const char *path)
     }
     err = gm_game_profile_import_json(root);
     cJSON_Delete(root);
+    snprintf(detail, sizeof(detail), "bytes=%u result=%s", (unsigned)bytes_read, esp_err_to_name(err));
+    sd_storage_trace_log("gm_profile", "load", path, sd_storage_trace_now_ms() - started_ms, detail);
     return err;
 }
 

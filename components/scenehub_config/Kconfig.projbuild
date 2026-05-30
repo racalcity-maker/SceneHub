@@ -1,11 +1,41 @@
 menu "SceneHub Configuration"
 
+choice SCENEHUB_AUDIO_OUTPUT_DRIVER
+    prompt "Audio output driver"
+    default SCENEHUB_AUDIO_OUTPUT_DRIVER_MAX98357A
+    help
+        Select the I2S output device profile used by the built-in audio player.
+        Both profiles use standard I2S, but keeping an explicit selection lets
+        the firmware apply codec-specific setup and logging.
+
+config SCENEHUB_AUDIO_OUTPUT_DRIVER_PCM5102A
+    bool "PCM5102A DAC"
+    help
+        Use this when the I2S output is wired to a PCM5102A DAC module.
+
+config SCENEHUB_AUDIO_OUTPUT_DRIVER_MAX98357A
+    bool "MAX98357A amplifier"
+    help
+        Use this when the I2S output is wired to a MAX98357A DAC/amplifier.
+
+endchoice
+
+config SCENEHUB_MAX98357A_SD_MODE_GPIO
+    int "MAX98357A SD_MODE GPIO"
+    default -1
+    depends on SCENEHUB_AUDIO_OUTPUT_DRIVER_MAX98357A
+    help
+        Optional GPIO connected to MAX98357A SD_MODE.
+        Set to -1 when SD_MODE is hardwired and cannot be controlled by the ESP.
+        When connected, the audio output driver will force shutdown before
+        stopping I2S clocks and release shutdown after I2S is enabled.
+
 config SCENEHUB_I2S_BCK_PIN
     int "I2S BCLK GPIO"
     default 4
     help
-        GPIO used for the I2S bit clock (BCK) line that feeds the DAC/amplifier.
-        Set to the pin wired to your audio codec.
+        GPIO used for the I2S bit clock (BCK) line that feeds the selected
+        audio output driver.
 
 config SCENEHUB_I2S_WS_PIN
     int "I2S LRCK/WSEL GPIO"
@@ -17,7 +47,7 @@ config SCENEHUB_I2S_DATA_PIN
     int "I2S DATA GPIO"
     default 6
     help
-        GPIO used for the I2S data output towards the DAC.
+        GPIO used for the I2S data output towards the selected audio output device.
 
 config SCENEHUB_SD_MISO_PIN
     int "SD card MISO GPIO"

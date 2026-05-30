@@ -1,5 +1,6 @@
 #include "sd_storage.h"
 
+#include "config_store.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "driver/sdspi_host.h"
@@ -8,6 +9,7 @@
 #include "sdmmc_cmd.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "event_bus.h"
 
 // SD card (SPI mode) pins.
@@ -99,7 +101,7 @@ esp_err_t sd_storage_mount(void)
             .sclk_io_num = SD_PIN_CLK,
             .quadwp_io_num = -1,
             .quadhd_io_num = -1,
-            .max_transfer_sz = 4000,
+            .max_transfer_sz = 32768,
         };
         esp_err_t err = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
         if (err != ESP_OK) {
@@ -189,4 +191,33 @@ esp_err_t sd_storage_info(uint64_t *kb_total, uint64_t *kb_free)
 const char *sd_storage_root_path(void)
 {
     return SD_STORAGE_ROOT_PATH;
+}
+
+bool sd_storage_trace_enabled(void)
+{
+    const app_config_t *cfg = config_store_get();
+    return cfg && cfg->verbose_logging;
+}
+
+uint32_t sd_storage_trace_now_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
+
+void sd_storage_trace_log(const char *source,
+                          const char *op,
+                          const char *path,
+                          uint32_t elapsed_ms,
+                          const char *detail)
+{
+    if (!sd_storage_trace_enabled()) {
+        return;
+    }
+    ESP_LOGI(TAG,
+             "sd trace: src=%s op=%s path=%s elapsed_ms=%lu %s",
+             source ? source : "-",
+             op ? op : "-",
+             path && path[0] ? path : "-",
+             (unsigned long)elapsed_ms,
+             detail && detail[0] ? detail : "");
 }

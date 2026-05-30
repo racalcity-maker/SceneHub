@@ -41,23 +41,22 @@ function renderRoomsView(){
 setPage('Rooms','Room status and entry points');
 const rooms=(gmState&&Array.isArray(gmState.rooms))?gmState.rooms:[];
 const create=isAdmin()?`<div class='actions' style='margin-bottom:14px'>${uiButton({label:'Create room',action:'room.create'})}</div>`:'';
-return `${create}<div class='grid auto'>${rooms.length?rooms.map(roomCard).join(''):`<div class='card empty'>No rooms</div>`}</div>`;
+return `${create}<div class='grid auto' data-rooms-grid='1'>${rooms.length?rooms.map(roomCard).join(''):`<div class='card empty'>No rooms</div>`}</div>`;
 }
 
 function renderRoomView(){
 const room=roomById(currentRoomId)||((gmState&&gmState.rooms&&gmState.rooms[0])?gmState.rooms[0]:null);
 if(room)currentRoomId=room.room_id;
-setPage(room?`Room: ${room.title||room.room_id}`:'Room','Room control');
+if(room)setPage(`Room: ${room.title||room.room_id}`,'Room control',{titleHtml:`<div class='page-room-titlebar'><span class='page-room-title-text'>${esc(`Room: ${room.title||room.room_id}`)}</span><div class='page-room-tabs'>${tabs(roomTab,['control','overview','devices','issues'],'room')}</div></div>`});
+else setPage('Room','Room control');
 if(!room)return `<div class='card empty'>No room selected</div>`;
+if(roomTab==='control')return renderRoomControlView(room);
 const roomNameText=room.title||room.name||room.room_id;
-const adminActions=isAdmin()?`<div class='actions' style='margin-bottom:14px'>${uiButton({label:'Delete room',kind:'danger',action:'room.delete',dataset:{'room-id':room.room_id},confirm:`Delete room ${roomNameText}? This also removes profiles and scenarios for this room. Quest devices stay untouched.`})}</div>`:'';
+const deleteRoomAction=isAdmin()?`<div class='actions' style='margin-top:14px;justify-content:flex-end'>${uiButton({label:'Delete room',kind:'danger',action:'room.delete',dataset:{'room-id':room.room_id},confirm:`Delete room ${roomNameText}? This also removes profiles and scenarios for this room. Quest devices stay untouched.`})}</div>`:'';
 const devs=roomDevices(room.room_id);
 const questIds=roomScenarioDeviceIds(room);
 const questDevs=questIds.map(id=>questDeviceById(id)).filter(Boolean);
 const issues=roomRelatedIssues(room);
-const canReset=room.session_present;
-const canFinish=room.session_present&&room.session_state!=='finished';
-const canScenarioNext=(room.selected_scenario_id||room.running_scenario_id)&&(room.scenario_runtime_state==='running'||room.scenario_runtime_state==='waiting');
 let body='';
 if(roomTab==='overview'){
 body=`<div class='grid cols-2'><div class='card'><div class='card-head'><div><div class='card-title'>Room state</div><div class='card-sub'>${esc(room.title||room.name||'Room')}</div></div>${status(roomDerivedHealth(room))}</div><div class='kvs'><div class='kv'><span class='k'>Timer</span>${roomClockHtml(room,'span','v')}</div><div class='kv'><span class='k'>Session</span><span class='v'>${esc(room.session_state||'idle')}</span></div><div class='kv'><span class='k'>Scenario devices</span><span class='v'>${esc(Number(room&&room.scenario_device_count)||0)}</span></div><div class='kv'><span class='k'>Hints</span><span class='v'>${esc(room.hint_sent_count||0)}</span></div></div></div><div class='card'><h2 class='section-title'>Problems</h2><div class='list'>${issues.length?issues.slice(0,4).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>`;
@@ -69,15 +68,7 @@ body=`<section><h2 class='section-title'>Scenario devices</h2><div class='list'>
 else if(roomTab==='issues'){
 body=`<div class='list'>${issues.length?issues.map(issueRow).join(''):`<div class='card empty'>No issues for this room</div>`}</div>`;
 }
-else{
-body=`<div data-room-control-runtime='${esc(room.room_id)}'><div data-room-runtime-console='1'>${renderRoomOperatorConsole(room)}</div>${isAdmin()?`<div data-room-runtime-admin='1'>${renderRoomScenarioControl(room)}</div>`:''}</div><div class='grid cols-2'><div class='card'><h2 class='section-title'>Hint</h2><div class='hint-row'><input id='gm_hint_input' value='${esc(room.hint_message||'')}' placeholder='Hint for players / operator note'>${uiButton({label:'Send hint',action:'room.hint',dataset:{op:'send','room-id':room.room_id}})}${uiButton({label:'Clear',action:'room.hint',dataset:{op:'clear','room-id':room.room_id},disabled:!room.hint_active})}</div></div><div class='card'><h2 class='section-title'>Device issues</h2><div class='list'>${issues.length?issues.slice(0,5).map(issueRow).join(''):`<div class='empty'>No room issues</div>`}</div></div></div>${uiDetails({summary:'Emergency controls',content:uiActions([
-uiButton({label:'Stop game',action:'room.game',dataset:{op:'stop','room-id':room.room_id},disabled:!canFinish,confirm:'Stop this game session?'}),
-uiButton({label:'Reset timer',action:'room.timer',dataset:{op:'reset','room-id':room.room_id},disabled:!canReset}),
-uiButton({label:'Finish session',kind:'danger',action:'room.timer',dataset:{op:'finish','room-id':room.room_id},disabled:!canFinish}),
-uiButton({label:'Force next step',kind:'danger',action:'room.scenario.runtime',dataset:{op:'next','room-id':room.room_id},disabled:!canScenarioNext,confirm:'Force complete current scenario wait?'}),
-])})}`;
-}
-return `${adminActions}${tabs(roomTab,['control','overview','devices','issues'],'room')}<div>${body}</div>`;
+ return `<div>${body}</div>${roomTab!=='control'?deleteRoomAction:''}`;
 }
 
 function renderDevicesView(){
@@ -92,11 +83,11 @@ const observed=observedItems();
 const registered=observed.filter(o=>knownDeviceIds().has(o.device_id)).length;
 const fault=savedQuestDevices.filter(d=>questDeviceHealth(d)==='fault').length;
 const degraded=savedQuestDevices.filter(d=>questDeviceHealth(d)==='degraded').length;
-const setupAction=isAdmin()?uiButton({label:'Add device',action:'device.setup.open',dataset:{'device-id':'new'}}):'';
 const presets=sidebarPresets();
+const presetGroups=sidebarPresetAdminGroups();
 const legacyMigration=sidebarPresetMigrationPending()?`<div class='card'><div class='card-head'><div><h2 class='section-title'>Import legacy browser presets</h2><div class='card-sub'>Found ${esc(legacySidebarPresetCount())} quick action${legacySidebarPresetCount()===1?'':'s'} saved in this browser from the old localStorage model.</div></div><div class='actions'>${uiButton({label:'Import to controller',action:'sidebar.preset.import_legacy'})}</div></div><div class='row-meta'>Import them once into /sdcard/quest/gm_sidebar_presets.json so every browser sees the same operator sidebar.</div></div><div style='height:12px'></div>`:'';
-const presetRows=presets.length?presets.map((preset,index)=>renderSidebarPresetRow(preset,index,presets.length)).join(''):`<div class='manual-empty'>No quick actions yet. Add the first preset with the wizard.</div>`;
-return `<div class='observed-toolbar'><div class='observed-summary'><span>Quick actions <strong>${esc(presets.length)}</strong></span><span>Quest devices <strong>${esc(savedQuestDevices.length)}</strong></span><span>Observed <strong>${esc(observed.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Degraded <strong>${esc(degraded)}</strong></span><span>Offline/Fault <strong>${esc(fault)}</strong></span></div><div class='actions'>${setupAction}</div></div>${legacyMigration}<div class='device-preset-layout'><section class='card'><div class='card-head'><div><h2 class='section-title'>Sidebar quick actions</h2><div class='card-sub'>Only these presets are shown to the operator in the right sidebar.</div></div><div class='actions'>${uiButton({label:'New preset',action:'sidebar.preset.new'})}</div></div><div class='list'>${presetRows}</div></section><section>${renderSidebarPresetWizard()}</section></div>`;
+const presetRows=presetGroups.length?presetGroups.map(group=>renderSidebarPresetGroupCard(group,presets.length)).join(''):`<div class='manual-empty'>No quick actions yet. Add the first quick action.</div>`;
+return `<div class='observed-toolbar'><div class='observed-summary'><span>Quick actions <strong>${esc(presets.length)}</strong></span><span>Quest devices <strong>${esc(savedQuestDevices.length)}</strong></span><span>Observed <strong>${esc(observed.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Degraded <strong>${esc(degraded)}</strong></span><span>Offline/Fault <strong>${esc(fault)}</strong></span></div></div>${legacyMigration}<section class='card'><div class='card-head'><div><h2 class='section-title'>Sidebar quick actions</h2><div class='card-sub'>Only these presets are shown to the operator in the right sidebar.</div></div><div class='actions'>${uiButton({label:'New quick action',action:'sidebar.preset.new'})}</div></div><div class='admin-entity-grid'>${presetRows}</div></section>${renderSidebarPresetWizard()}`;
 }
 
 function renderObservedView(){
@@ -106,36 +97,50 @@ const all=observedItems();
 const items=all.filter(o=>observedFilter==='registered'?known.has(o.device_id):(observedFilter==='unregistered'?!known.has(o.device_id):true));
 const registered=all.filter(o=>known.has(o.device_id)).length;
 const unregistered=all.length-registered;
+const offline=all.filter(o=>String(o&&o.connectivity||'')==='offline').length;
 const rows=items.length?items.map(o=>{
 const reg=observedRegistration(o.device_id);
 const action=reg&&reg.via==='quest_device'?uiButton({label:'Setup',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':reg.device_id}}):(reg?`<span class='muted'>linked</span>`:uiButton({label:'Add',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':'new'}}));
-return `<tr><td><strong>${esc(observedDisplayName(o))}</strong><span>${esc(o.device_id||'')}</span></td><td>${status(o.connectivity)}</td><td><span class='badge ${reg?'selected-badge':''}'>${reg?'registered':'unregistered'}</span></td><td>${esc(o.fw_version||'n/a')}</td><td>${esc(o.mode||'')}</td><td>${esc(o.state||'')}</td><td>${esc(o.boot_id||'n/a')}</td><td class='observed-actions'>${action}</td></tr>`;
-}).join(''):`<tr><td colspan='8' class='observed-empty'>No observed clients</td></tr>`;
-return `<div class='observed-toolbar'><select class='scenario-select' data-observed-filter><option value='all' ${observedFilter==='all'?'selected':''}>All observed</option><option value='registered' ${observedFilter==='registered'?'selected':''}>Registered</option><option value='unregistered' ${observedFilter==='unregistered'?'selected':''}>Unregistered</option></select><div class='observed-summary'><span>Observed <strong>${esc(all.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Unregistered <strong>${esc(unregistered)}</strong></span></div></div><div class='observed-table-wrap'><table class='observed-table'><thead><tr><th>Client</th><th>Status</th><th>Link</th><th>FW</th><th>Mode</th><th>State</th><th>Boot</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+const clientMeta=[o.device_id||'',o.fw_version?`fw ${o.fw_version}`:'',o.mode||''].filter(Boolean).join(' / ');
+const stateMeta=[o.state||'idle',o.boot_id?`boot ${o.boot_id}`:''].filter(Boolean).join(' / ');
+return `<tr><td><strong>${esc(observedDisplayName(o))}</strong><span>${esc(clientMeta||o.device_id||'')}</span></td><td>${status(o.connectivity)}</td><td><span class='badge ${reg?'selected-badge':''}'>${reg?'registered':'unregistered'}</span></td><td><strong>${esc(o.state||'idle')}</strong><span>${esc(stateMeta||'no state')}</span></td><td class='observed-actions'>${action}</td></tr>`;
+}).join(''):`<tr><td colspan='5' class='observed-empty'>No observed clients</td></tr>`;
+return `<div class='ops-summary-strip observed-summary'><span>Observed <strong>${esc(all.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Unregistered <strong>${esc(unregistered)}</strong></span><span>Offline <strong>${esc(offline)}</strong></span></div><div class='observed-toolbar ops-toolbar'><select class='scenario-select' data-observed-filter><option value='all' ${observedFilter==='all'?'selected':''}>All observed</option><option value='registered' ${observedFilter==='registered'?'selected':''}>Registered</option><option value='unregistered' ${observedFilter==='unregistered'?'selected':''}>Unregistered</option></select><div class='row-meta'>Physical MQTT clients and their registration state.</div></div><div class='observed-table-wrap ops-table-wrap'><table class='observed-table ops-table'><thead><tr><th>Client</th><th>Status</th><th>Link</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function auditRow(a){
-return `<tr><td>${esc(a.timestamp_ms||0)}</td><td><span class='${a.success?'ok-text':'bad-text'}'>${a.success?'OK':'FAIL'}</span></td><td><strong>${esc(deviceDisplayName(a.device_id))}</strong><span>${esc(a.device_id||'')}</span></td><td>${esc(a.action_id||'action')}</td><td>${esc(a.source||'')}</td><td>${esc(a.error_code||'ok')}</td></tr>`;
+const resultClass=a.success?'ok-text':'bad-text';
+const resultText=a.success?'OK':'FAIL';
+const actionText=a.action_id||'action';
+const sourceText=[a.source||'system',a.error_code&&a.error_code!=='ok'?`error ${a.error_code}`:'ok'].filter(Boolean).join(' / ');
+return `<tr><td><strong>${esc(fmtLogTimestamp(a.timestamp_ms||0))}</strong><span>${esc(fmtLogTimestampMeta(a.timestamp_ms||0))}</span></td><td><span class='${resultClass}'>${resultText}</span></td><td><strong>${esc(actionText)}</strong><span>${esc(sourceText)}</span></td><td><strong>${esc(deviceDisplayName(a.device_id))}</strong><span>${esc(a.device_id||'')}</span></td></tr>`;
 }
 
 function renderAuditView(){
 setPage('Audit','Recent operator actions');
 const items=auditItems();
-return `<div class='observed-table-wrap'><table class='observed-table audit-table'><thead><tr><th>Time</th><th>Result</th><th>Device</th><th>Action</th><th>Source</th><th>Error</th></tr></thead><tbody>${items.length?items.map(auditRow).join(''):`<tr><td colspan='6' class='observed-empty'>No audit entries</td></tr>`}</tbody></table></div>`;
+const okCount=items.filter(item=>!!item&&item.success).length;
+const failCount=Math.max(0,items.length-okCount);
+const newestTs=items.reduce((max,item)=>Math.max(max,Number(item&&item.timestamp_ms||0)),0);
+const recentThreshold=Math.max(0,newestTs-300000);
+const recentCount=items.filter(item=>Number(item&&item.timestamp_ms||0)>=recentThreshold).length;
+return `<div class='ops-summary-strip observed-summary'><span>Total <strong>${esc(items.length)}</strong></span><span>OK <strong>${esc(okCount)}</strong></span><span>Fail <strong>${esc(failCount)}</strong></span><span>Recent window <strong>${esc(recentCount)}</strong></span></div><div class='observed-toolbar ops-toolbar'><div class='row-meta'>Recent operator actions with result and target.</div></div><div class='observed-table-wrap ops-table-wrap'><table class='observed-table audit-table ops-table'><thead><tr><th>When</th><th>Result</th><th>Action</th><th>Target</th></tr></thead><tbody>${items.length?items.map(auditRow).join(''):`<tr><td colspan='4' class='observed-empty'>No audit entries</td></tr>`}</tbody></table></div>`;
 }
 
 function timelineRow(t){
 const target=t.device_id||t.room_id||t.source||'';
 const targetName=t.device_id?deviceDisplayName(t.device_id):(t.room_id?roomName(t.room_id):target);
 const sev=t.severity||'info';
-const cls=sev==='error'?'bad-text':(sev==='warning'?'warn-text':'ok-text');
-return `<tr><td>${esc(t.timestamp_ms||0)}</td><td><span class='${cls}'>${esc(sev)}</span></td><td><strong>${esc(t.title||t.type)}</strong>${t.details?`<span>${esc(t.details)}</span>`:''}</td><td>${esc(targetName||'')}</td><td>${esc(t.type||'event')}</td><td>${esc(t.source||'system')}</td></tr>`;
+return `<article class='ops-feed-item timeline-feed-item ${esc(`severity-${sev}`)}'><div class='ops-feed-time'><strong>${esc(fmtLogTimestamp(t.timestamp_ms||0))}</strong><span>${esc(fmtLogTimestampMeta(t.timestamp_ms||0))}</span></div><div class='ops-feed-body'><div class='ops-feed-head timeline-feed-head'><span class='badge ${sev==='error'?'bad-badge':(sev==='warning'?'warn-badge':'selected-badge')}'>${esc(sev)}</span><strong>${esc(t.title||t.type||'event')}</strong>${t.details?`<span class='timeline-feed-inline'>${esc(t.details)}</span>`:''}</div><div class='ops-feed-meta timeline-feed-meta'><span>${esc(targetName||'system')}</span><span>${esc(t.type||'event')}</span><span>${esc(t.source||'system')}</span></div></div></article>`;
 }
 
 function renderTimelineView(){
 setPage('Timeline','Recent system events');
 const items=timelineItems();
-return `<div class='observed-table-wrap'><table class='observed-table timeline-table'><thead><tr><th>Time</th><th>Severity</th><th>Event</th><th>Target</th><th>Type</th><th>Source</th></tr></thead><tbody>${items.length?items.map(timelineRow).join(''):`<tr><td colspan='6' class='observed-empty'>No timeline events</td></tr>`}</tbody></table></div>`;
+const errorCount=items.filter(item=>String(item&&item.severity||'')==='error').length;
+const warningCount=items.filter(item=>String(item&&item.severity||'')==='warning').length;
+const infoCount=Math.max(0,items.length-errorCount-warningCount);
+return `<div class='ops-summary-strip observed-summary'><span>Total <strong>${esc(items.length)}</strong></span><span>Errors <strong>${esc(errorCount)}</strong></span><span>Warnings <strong>${esc(warningCount)}</strong></span><span>Info <strong>${esc(infoCount)}</strong></span></div><div class='observed-toolbar ops-toolbar'><div class='row-meta'>Recent system events, waits and device activity.</div></div><div class='ops-feed'>${items.length?items.map(timelineRow).join(''):`<div class='manual-empty'>No timeline events</div>`}</div>`;
 }
 
 function renderAdminPlaceholder(title,sub){

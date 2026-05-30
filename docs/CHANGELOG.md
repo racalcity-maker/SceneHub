@@ -41,6 +41,10 @@
   while the WebSocket is healthy, and `/api/gm/room/runtime` defaults to
   `include_assets=0` unless a caller explicitly asks for asset readiness
   detail.
+- Enforced `requires_confirmation` on the manual HTTP/device-control path:
+  commands that carry `requires_confirmation=true` now require
+  `"confirmed": true` in `POST /api/gm/device/command/run`, while
+  `danger_level` remains UI/log metadata.
 
 ## 2026-05-18
 

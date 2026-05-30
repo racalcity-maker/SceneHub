@@ -186,6 +186,7 @@ esp_err_t scenehub_control_device_command_run(const char *source,
                                               const char *device_id,
                                               const char *command_id,
                                               const char *params_json,
+                                              bool confirmed,
                                               scenehub_control_device_command_info_t *out_info,
                                               scenehub_control_result_t *out_result);
 esp_err_t scenehub_control_device_describe_interface(

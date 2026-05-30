@@ -29,6 +29,7 @@ static const char *web_ui_scenehub_control_status_text(esp_err_t err,
             return "404 Not Found";
         }
         if (strcmp(result->error_code, "action_disabled") == 0 ||
+            strcmp(result->error_code, "confirmation_required") == 0 ||
             strcmp(result->error_code, "invalid_state") == 0 ||
             strcmp(result->error_code, "room_unhealthy") == 0) {
             return "409 Conflict";

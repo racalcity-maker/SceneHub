@@ -20,9 +20,10 @@
 #define AUDIO_MIXER_IDLE_WAIT_MS 5
 #define AUDIO_MIXER_FADE_IN_MS 12
 #define AUDIO_MIXER_FADE_IN_FRAMES ((AUDIO_MIXER_SAMPLE_RATE * AUDIO_MIXER_FADE_IN_MS) / 1000)
-#define AUDIO_MIXER_PREROLL_FRAMES 4096
+#define AUDIO_MIXER_PREROLL_FRAMES 8192
 #define AUDIO_MIXER_PREROLL_BYTES (AUDIO_MIXER_PREROLL_FRAMES * AUDIO_MIXER_FRAME_BYTES)
 #define AUDIO_MIXER_IDLE_SILENCE_MS 35
+#define AUDIO_MIXER_STARVATION_LOG_MS 1000
 
 static const char *TAG = "audio_mixer";
 
@@ -43,6 +44,7 @@ static uint32_t s_fade_out_remaining[AUDIO_MIXER_CHANNEL_COUNT];
 static uint32_t s_fade_out_total[AUDIO_MIXER_CHANNEL_COUNT];
 static bool s_fade_out_muted[AUDIO_MIXER_CHANNEL_COUNT];
 static bool s_output_dirty = false;
+static TickType_t s_starvation_log_tick[AUDIO_MIXER_CHANNEL_COUNT];
 
 static bool mixer_lock(void)
 {
@@ -169,6 +171,67 @@ static void apply_fade_in(audio_mixer_channel_t channel, int16_t *pcm, size_t by
     s_fade_in_remaining[channel] = remaining;
 }
 
+static void maybe_log_starvation(audio_mixer_channel_t channel, bool read_attempted, size_t bytes_read)
+{
+    const char *name = channel == AUDIO_MIXER_CHANNEL_BACKGROUND ? "background" : "effect";
+    TickType_t now = xTaskGetTickCount();
+    char path[256] = {0};
+    size_t bytes_done = 0;
+    uint32_t loop_gap_ms = 0;
+    long read_offset = -1;
+    uint32_t read_elapsed_ms = 0;
+    long slow_read_offset = -1;
+    uint32_t slow_read_elapsed_ms = 0;
+
+    if (!read_attempted || bytes_read > 0 || channel < 0 || channel >= AUDIO_MIXER_CHANNEL_COUNT) {
+        if (channel >= 0 && channel < AUDIO_MIXER_CHANNEL_COUNT) {
+            s_starvation_log_tick[channel] = 0;
+        }
+        return;
+    }
+
+    if (s_starvation_log_tick[channel] != 0 &&
+        (now - s_starvation_log_tick[channel]) < pdMS_TO_TICKS(AUDIO_MIXER_STARVATION_LOG_MS)) {
+        return;
+    }
+
+    if (mixer_lock()) {
+        StreamBufferHandle_t stream = mixer_stream(channel);
+        size_t available = stream ? xStreamBufferBytesAvailable(stream) : 0;
+        bool active = s_active[channel];
+        bool primed = s_primed[channel];
+        uint32_t fade_out = s_fade_out_remaining[channel];
+        mixer_unlock();
+        (void)audio_player_runtime_reader_snapshot(
+            channel == AUDIO_MIXER_CHANNEL_BACKGROUND ? AUDIO_PLAYER_CHANNEL_BACKGROUND : AUDIO_PLAYER_CHANNEL_EFFECT,
+            path,
+            sizeof(path),
+            &bytes_done,
+            &loop_gap_ms,
+            &read_offset,
+            &read_elapsed_ms,
+            &slow_read_offset,
+            &slow_read_elapsed_ms
+        );
+        ESP_LOGW(TAG,
+                 "channel starvation: channel=%s active=%d primed=%d available=%u fade_out=%lu path=%s bytes_done=%u last_loop_gap_ms=%lu last_offset=%ld last_read_ms=%lu last_slow_offset=%ld last_slow_ms=%lu",
+                 name,
+                 active ? 1 : 0,
+                 primed ? 1 : 0,
+                 (unsigned)available,
+                 (unsigned long)fade_out,
+                 path[0] ? path : "-",
+                 (unsigned)bytes_done,
+                 (unsigned long)loop_gap_ms,
+                 read_offset,
+                 (unsigned long)read_elapsed_ms,
+                 slow_read_offset,
+                 (unsigned long)slow_read_elapsed_ms);
+    }
+
+    s_starvation_log_tick[channel] = now;
+}
+
 static bool apply_fade_out(audio_mixer_channel_t channel, int16_t *pcm, size_t bytes)
 {
     if (channel < 0 || channel >= AUDIO_MIXER_CHANNEL_COUNT || !pcm || bytes == 0) {
@@ -231,10 +294,14 @@ static void audio_mixer_task(void *param)
             continue;
         }
 
-        size_t bg_bytes = channel_should_read(AUDIO_MIXER_CHANNEL_BACKGROUND) ?
+        bool bg_should_read = channel_should_read(AUDIO_MIXER_CHANNEL_BACKGROUND);
+        bool fx_should_read = channel_should_read(AUDIO_MIXER_CHANNEL_EFFECT);
+        size_t bg_bytes = bg_should_read ?
             receive_pcm(AUDIO_MIXER_CHANNEL_BACKGROUND, s_bg_pcm, sizeof(s_bg_pcm)) : 0;
-        size_t fx_bytes = channel_should_read(AUDIO_MIXER_CHANNEL_EFFECT) ?
+        size_t fx_bytes = fx_should_read ?
             receive_pcm(AUDIO_MIXER_CHANNEL_EFFECT, s_fx_pcm, sizeof(s_fx_pcm)) : 0;
+        maybe_log_starvation(AUDIO_MIXER_CHANNEL_BACKGROUND, bg_should_read, bg_bytes);
+        maybe_log_starvation(AUDIO_MIXER_CHANNEL_EFFECT, fx_should_read, fx_bytes);
         if (bg_bytes == 0) {
             memset(s_bg_pcm, 0, sizeof(s_bg_pcm));
         }

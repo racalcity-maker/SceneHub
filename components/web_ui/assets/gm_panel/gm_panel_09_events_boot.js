@@ -1,6 +1,8 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 const GM_WS_RECONNECT_MS=3000;
-const GM_RUNTIME_HTTP_FALLBACK_MS=5000;
+const GM_WS_INVALIDATION_FLUSH_MS=450;
+const GM_RUNTIME_HTTP_FALLBACK_MS=8000;
+const GM_STATE_SNAPSHOT_POLL_MS=20000;
 const GM_WS_POLL_SUPPRESS_MS=30000;
 let gmWsSocket=null;
 let gmWsReconnectTimer=0;
@@ -40,6 +42,8 @@ gmWsFlushTimer=window.setTimeout(async()=>{
 const slices=Array.from(gmWsPendingSlices.values());
 gmWsPendingSlices.clear();
 gmWsFlushTimer=0;
+gmStatInc('ws.invalidate_flush');
+gmStatInc('ws.invalidate_slice',slices.length);
 try{
 await refreshGMByInvalidationSlices(slices);
 }
@@ -48,7 +52,7 @@ console.error('GM WS invalidation refresh failed',slices,err);
 setGMStatus(`WS refresh failed: ${compactText(err&&err.message||'unknown error',52)}`,'gm-bad');
 }
 }
-,250);
+,GM_WS_INVALIDATION_FLUSH_MS);
 }
 
 async function gmWsHandleVersionsChanged(payload){
@@ -135,13 +139,44 @@ function setGMStatus(text,cls){
 setStatus(text,cls==='gm-bad'?'state-fault':(cls==='gm-ok'?'state-ok':'state-unknown'));
 }
 
+document.addEventListener('pointerdown',e=>{
+const target=e.target;
+if(!target||!target.closest)return;
+if(target.closest('#gm_content')||target.closest('#gm_right_sidebar')){
+gmBeginInteraction();
+}
+}
+,true);
+
+document.addEventListener('pointerup',()=>{
+const wasInteracting=gmInteractionActive;
+gmEndInteraction();
+if(wasInteracting&&gmAutoRenderDeferred&&!shouldDeferAutoRender()){
+gmFlushDeferredRender();
+}
+}
+,true);
+
+document.addEventListener('pointercancel',()=>{
+const wasInteracting=gmInteractionActive;
+gmEndInteraction();
+if(wasInteracting&&gmAutoRenderDeferred&&!shouldDeferAutoRender()){
+gmFlushDeferredRender();
+}
+}
+,true);
+
+window.addEventListener('blur',()=>{
+gmEndInteraction();
+});
+
 document.getElementById('gm_nav').onclick=async e=>{
 const btn=e.target.closest('.nav-btn');
 if(!btn)return;
 const view=btn.dataset.view||'rooms';
 if(!canOpenView(view))return;
 if(view!==currentView&&!confirmDiscardEditorChanges())return;
-currentView=view;
+currentView=gmRouteToSingleRoom(view)?'room':view;
 try{
 await loadGMViewData(false);
 }
@@ -156,6 +191,22 @@ document.getElementById('gm_content').onclick=async e=>{
 await gmHandleActionClick(e);
 }
 ;
+
+const gmPageSub=document.getElementById('page_sub');
+if(gmPageSub){
+gmPageSub.onclick=async e=>{
+await gmHandleActionClick(e);
+}
+;
+}
+
+const gmPageTitle=document.getElementById('page_title');
+if(gmPageTitle){
+gmPageTitle.onclick=async e=>{
+await gmHandleActionClick(e);
+}
+;
+}
 
 const gmRightSidebar=document.getElementById('gm_right_sidebar');
 if(gmRightSidebar){
@@ -234,18 +285,27 @@ gmInitWebSocket();
 
 function gmPollActiveRoomRuntimeVisible(){
 if(document.hidden)return;
-if(gmWsHealthy())return;
+if(gmWsHealthy()){
+gmStatInc('poll.runtime.skip_ws');
+return;
+}
+gmStatInc('poll.runtime.run');
 pollActiveRoomRuntime();
 }
 
 function gmPollStateSnapshotVisible(){
 if(document.hidden)return;
-if(gmWsHealthy())return;
+if(gmWsHealthy()){
+gmStatInc('poll.snapshot.skip_ws');
+return;
+}
+gmStatInc('poll.snapshot.run');
 pollGMStateSnapshot();
 }
 
 function gmUpdateVisibleRoomClocksVisible(){
 if(document.hidden)return;
+gmStatInc('poll.clock.run');
 updateVisibleRoomClocks();
 }
 
@@ -257,5 +317,5 @@ gmPollStateSnapshotVisible();
 });
 
 setInterval(gmPollActiveRoomRuntimeVisible,GM_RUNTIME_HTTP_FALLBACK_MS);
-setInterval(gmPollStateSnapshotVisible,10000);
+setInterval(gmPollStateSnapshotVisible,GM_STATE_SNAPSHOT_POLL_MS);
 setInterval(gmUpdateVisibleRoomClocksVisible,250);

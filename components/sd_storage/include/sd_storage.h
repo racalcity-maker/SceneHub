@@ -12,3 +12,10 @@ esp_err_t sd_storage_mount(void);
 bool sd_storage_available(void);
 esp_err_t sd_storage_info(uint64_t *kb_total, uint64_t *kb_free);
 const char *sd_storage_root_path(void);
+bool sd_storage_trace_enabled(void);
+uint32_t sd_storage_trace_now_ms(void);
+void sd_storage_trace_log(const char *source,
+                          const char *op,
+                          const char *path,
+                          uint32_t elapsed_ms,
+                          const char *detail);

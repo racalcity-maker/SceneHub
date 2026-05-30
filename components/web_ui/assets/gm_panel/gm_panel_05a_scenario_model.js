@@ -142,6 +142,16 @@ if(!Number.isFinite(raw))return 0;
 return Math.max(0,Math.min(max,Math.floor(raw)));
 }
 
+function scenarioPreferredOpenBranchIndex(scenario){
+const branches=Array.isArray(scenario&&scenario.branches)?scenario.branches:[];
+if(!branches.length)return 0;
+const mainIndex=branches.findIndex(branch=>String(branch&&branch.id||'')==='main'&&scenarioBranchTypeValue(branch)!=='reactive');
+if(mainIndex>=0)return mainIndex;
+const normalIndex=branches.findIndex(branch=>scenarioBranchTypeValue(branch)!=='reactive');
+if(normalIndex>=0)return normalIndex;
+return 0;
+}
+
 function scenarioActiveBranch(scenario){
 const branches=Array.isArray(scenario&&scenario.branches)?scenario.branches:[];
 if(!branches.length)return null;
@@ -567,10 +577,14 @@ const params=command&&command.default_args&&typeof command.default_args==='objec
 :{};
 const deviceId=device&&device.id||'';
 const commandId=command&&command.id||'';
+const commandName=String(command&&command.command||'');
 if(deviceId==='system_audio'&&commandId==='play'){
 params.volume=70;
 params.channel='effect';
 params.repeat=false;
+}
+if(commandName==='relay.pulse'&&(params.duration_ms===undefined||params.duration_ms===null||params.duration_ms==='')){
+params.duration_ms=500;
 }
 const schema=command&&Array.isArray(command.args_schema)?command.args_schema:[];
 schema.forEach(param=>{

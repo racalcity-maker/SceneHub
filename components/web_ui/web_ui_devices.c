@@ -4,6 +4,7 @@
 #include "web_ui_utils.h"
 
 static const char *TAG = "web_ui_assets";
+static const size_t EMBEDDED_ASSET_CHUNK_SIZE = 4096;
 
 extern const uint8_t _binary_gm_panel_css_start[] asm("_binary_gm_panel_css_start");
 extern const uint8_t _binary_gm_panel_css_end[] asm("_binary_gm_panel_css_end");
@@ -16,13 +17,30 @@ static esp_err_t send_embedded_asset(httpd_req_t *req,
                                      const char *content_type,
                                      const char *path)
 {
+    esp_err_t err = ESP_OK;
+
     httpd_resp_set_type(req, content_type);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     httpd_resp_set_hdr(req, "Pragma", "no-cache");
     httpd_resp_set_hdr(req, "Expires", "0");
     const size_t len = end - start;
     const size_t send_len = (len > 0) ? len - 1 : 0;
-    esp_err_t err = httpd_resp_send(req, (const char *)start, send_len);
+    size_t offset = 0;
+
+    while (offset < send_len) {
+        size_t chunk = send_len - offset;
+        if (chunk > EMBEDDED_ASSET_CHUNK_SIZE) {
+            chunk = EMBEDDED_ASSET_CHUNK_SIZE;
+        }
+        err = httpd_resp_send_chunk(req, (const char *)start + offset, chunk);
+        if (err != ESP_OK) {
+            web_ui_report_httpd_error(err, path);
+            return err;
+        }
+        offset += chunk;
+    }
+
+    err = httpd_resp_send_chunk(req, NULL, 0);
     if (err != ESP_OK) {
         web_ui_report_httpd_error(err, path);
     }
