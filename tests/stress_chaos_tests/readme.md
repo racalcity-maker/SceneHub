@@ -44,8 +44,8 @@ Run selected protocol tests:
 
 ```powershell
 python .\mqtt_protocol_semantics_test.py --host 192.168.1.XX --tests 1-3
-python .\mqtt_protocol_semantics_test.py --host 192.168.1.XX --tests 4 --duration 300 --verbose
-python .\mqtt_protocol_semantics_test.py --host 192.168.1.XX --tests 5 --verbose
+python .\mqtt_protocol_semantics_test.py --host 192.168.1.XX --tests 6 --duration 300 --verbose
+python .\mqtt_protocol_semantics_test.py --host 192.168.1.XX --tests 7 --verbose
 ```
 
 Run GM runtime noise regression test:
@@ -71,6 +71,9 @@ Notes:
 - `dcc-foo-bar` is expected to publish/subscribe under `cp/v1/dev/foo_bar/...`.
 - Broadcast command fanout uses `dcc-all -> cp/v1/dev/all/control/command`.
 - Protocol test `5` verifies that denied QoS1 publishes are acknowledged but not delivered.
+- Protocol test `2` verifies retained `QoS1 -> QoS1` delivery semantics for fresh subscribers.
+- Protocol test `4` verifies that duplicate `SUBSCRIBE` updates QoS without consuming an extra subscription slot.
+- Protocol test `7` verifies that denied QoS1 publishes are acknowledged but not delivered.
 
 GM runtime / queue chaos coverage also belongs here when it needs real async
 workers, MQTT timing and many simulated devices. Preferred harness:

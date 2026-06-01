@@ -24,11 +24,13 @@ return `${index+1}. Wait ${scenarioDeviceName(device)}: ${scenarioDeviceEventNam
 }
 if(type==='WAIT_ANY_DEVICE_EVENT')return `${index+1}. Wait any of ${(Array.isArray(step.events)?step.events:[]).length} events`;
 if(type==='WAIT_ALL_DEVICE_EVENTS')return `${index+1}. Wait all ${(Array.isArray(step.events)?step.events:[]).length} events`;
-if(type==='WAIT_TIME')return `${index+1}. ${waitTimeLabel(step.duration_ms)}`;
+if(type==='WAIT_TIME')return `${index+1}. ${scenarioWaitTimeSummary(step)}`;
 if(type==='OPERATOR_APPROVAL')return `${index+1}. Operator: ${step.prompt||step.operator_prompt||'approval'}`;
 if(type==='SHOW_OPERATOR_MESSAGE')return `${index+1}. Show operator: ${step.message||'message'}`;
 if(type==='SET_FLAG')return `${index+1}. Set flag ${step.flag_name||'flag'} = ${step.value===false?'false':'true'}`;
 if(type==='WAIT_FLAGS')return `${index+1}. Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`;
+if(type==='FAIL_REACTION')return `${index+1}. Fail reaction`;
+if(type==='RESET_REACTION')return `${index+1}. Reset reaction`;
 if(type==='END_GAME')return `${index+1}. End game`;
 return `${index+1}. ${step.label||type}`;
 }
@@ -85,17 +87,31 @@ return `${scenarioDeviceName(device)} -> ${scenarioCommandName(step.device_id,st
 if(type==='DEVICE_COMMAND_GROUP')return `Command group (${(Array.isArray(step.commands)?step.commands:[]).length})`;
 if(type==='WAIT_DEVICE_EVENT'){
 const device=scenarioDeviceById(step.device_id);
-return `Wait ${scenarioDeviceName(device)}: ${scenarioDeviceEventName(step.device_id,step.event_id)}`;
+return scenarioWaitSummaryWithTimeout(`Wait ${scenarioDeviceName(device)}: ${scenarioDeviceEventName(step.device_id,step.event_id)}`,step);
 }
-if(type==='WAIT_ANY_DEVICE_EVENT')return `Wait any event (${(Array.isArray(step.events)?step.events:[]).length})`;
-if(type==='WAIT_ALL_DEVICE_EVENTS')return `Wait all events (${(Array.isArray(step.events)?step.events:[]).length})`;
-if(type==='WAIT_TIME')return waitTimeLabel(step.duration_ms);
+if(type==='WAIT_ANY_DEVICE_EVENT')return scenarioWaitSummaryWithTimeout(`Wait any event (${(Array.isArray(step.events)?step.events:[]).length})`,step);
+if(type==='WAIT_ALL_DEVICE_EVENTS')return scenarioWaitSummaryWithTimeout(`Wait all events (${(Array.isArray(step.events)?step.events:[]).length})`,step);
+if(type==='WAIT_TIME')return scenarioWaitTimeSummary(step);
 if(type==='OPERATOR_APPROVAL')return `Operator: ${step.prompt||step.operator_prompt||'approval'}`;
 if(type==='SHOW_OPERATOR_MESSAGE')return `Show operator: ${step.message||'message'}`;
 if(type==='SET_FLAG')return `Set ${step.flag_name||'flag'} = ${step.value===false?'false':'true'}`;
-if(type==='WAIT_FLAGS')return `Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`;
+if(type==='WAIT_FLAGS')return scenarioWaitSummaryWithTimeout(`Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`,step);
+if(type==='FAIL_REACTION')return 'Fail reaction';
+if(type==='RESET_REACTION')return 'Reset reaction';
 if(type==='END_GAME')return 'End game';
 return scenarioStepAutoLabel(step);
+}
+
+function scenarioWaitTimeSummary(step){
+const base=waitTimeLabel(step&&step.duration_ms);
+return scenarioWaitSummaryWithTimeout(base,step);
+}
+
+function scenarioWaitSummaryWithTimeout(base,step){
+const timeoutAction=String(step&&step.timeout_action||'continue');
+if(timeoutAction==='fail_reaction')return `${base} -> fail`;
+if(timeoutAction==='reset_reaction')return `${base} -> reset`;
+return base;
 }
 
 function scenarioStepVisualType(step){
@@ -109,21 +125,29 @@ if(type==='SHOW_OPERATOR_MESSAGE')return 'operator';
 if(type==='DEVICE_COMMAND_GROUP')return 'command-group';
 if(type==='SET_FLAG')return 'flag';
 if(type==='WAIT_FLAGS')return 'flag';
+if(type==='FAIL_REACTION')return 'reaction-fail';
+if(type==='RESET_REACTION')return 'reaction-reset';
 if(type==='END_GAME')return 'end-game';
-if(type==='DEVICE_COMMAND'&&String(step.device_id||'')==='system_audio')return 'audio';
+if(type==='DEVICE_COMMAND'&&String(step.device_id||'')==='system_audio'){
+const channel=typeof audioChannelValue==='function'?audioChannelValue(step&&step.params&&typeof step.params==='object'?step.params:{}):'effect';
+return channel==='background'?'audio-bg':'audio-sfx';
+}
 return 'command';
 }
 
 function scenarioStepIcon(step){
 const visual=scenarioStepVisualType(step);
 if(visual==='wait-time')return '&#9201;';
-if(visual==='wait-event')return '&#9678;';
-if(visual==='operator')return '&#10003;';
-if(visual==='audio')return '&#9835;';
-if(visual==='command-group')return '&#9658;&#9658;';
+if(visual==='wait-event')return '&#128276;';
+if(visual==='operator')return '&#9997;';
+if(visual==='audio-bg')return '&#9835;';
+if(visual==='audio-sfx')return '&#9834;';
+if(visual==='command-group')return '&#9776;';
 if(visual==='flag')return '&#9873;';
+if(visual==='reaction-fail')return '&#10005;';
+if(visual==='reaction-reset')return '&#8635;';
 if(visual==='end-game')return '&#9632;';
-return '&#9658;';
+return '&#9654;';
 }
 
 function scenarioStepBadgeLabel(step){
@@ -131,9 +155,12 @@ const visual=scenarioStepVisualType(step);
 if(visual==='wait-time')return 'Wait';
 if(visual==='wait-event')return 'Event';
 if(visual==='operator')return 'Operator';
-if(visual==='audio')return 'Audio';
+if(visual==='audio-bg')return 'BG audio';
+if(visual==='audio-sfx')return 'SFX';
 if(visual==='command-group')return 'Group';
 if(visual==='flag')return 'Flag';
+if(visual==='reaction-fail')return 'Fail';
+if(visual==='reaction-reset')return 'Reset';
 if(visual==='end-game')return 'End';
 return 'Command';
 }

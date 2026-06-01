@@ -6,11 +6,7 @@
 #include "driver/gpio.h"
 #include "event_bus.h"
 #include "quest_device.h"
-#include "sdkconfig.h"
-
-#ifndef CONFIG_SCENEHUB_GPIO_DEBOUNCE_MS
-#define CONFIG_SCENEHUB_GPIO_DEBOUNCE_MS 30
-#endif
+#include "scenehub_config.h"
 
 #define IO_POLL_INTERVAL_US 5000ULL
 

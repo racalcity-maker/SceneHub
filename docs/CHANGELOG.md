@@ -1,5 +1,61 @@
 # Changelog
 
+## 2026-06-01
+
+- Completed the `gm_core` decomposition baseline. Runtime ownership is now
+  limited to room-session state, timer/progression, waits, flags, reactive
+  state and command plans; profile/scenario/sidebar persistence, game
+  orchestration, safe-off policy and command execution are owned outside
+  `gm_core`.
+- Removed the retired `gm_api` / `gm_control` write facades, unsupported
+  compatibility wrappers, `gm_legacy_compat`, and the old active
+  `GM_CORE_DECOMPOSITION_PLAN.md` after all slices were completed and the
+  durable architecture docs were updated.
+- Added prepared runtime inputs for scenario start. `scenehub_control` now
+  resolves the complete event-ref catalog before entering the session runtime,
+  and `gm_core` copies that catalog into bounded PSRAM snapshots for normal
+  waits, wait-any/wait-all, and reactive triggers. Runtime matching no longer
+  performs Quest Device catalog lookups or accepts accidental compact id
+  variants such as `@1`.
+- Centralized build-time defaults in the header-only `scenehub_config`
+  component, removed its placeholder anchor source file, added explicit
+  consumer dependencies, and kept mutable runtime settings in `config_store`.
+  The web-auth bootstrap password now reads the actual
+  `CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS` Kconfig symbol.
+- Tightened hub network recovery policy: setup AP now starts as pure AP,
+  STA connection is enabled only for the saved-config/apply-config paths, and
+  ESP-IDF Wi-Fi storage is RAM-only so stale driver-owned credentials cannot
+  make setup mode auto-connect STA and then schedule AP shutdown. The old
+  web-auth-only reset GPIO monitor was removed; `system_reset_policy` is the
+  single owner of reset/setup button behavior.
+- Retired the stale standalone
+  `GM_REACTIVE_BRANCH_FRONTEND_CLEANUP_PLAN.md`. The remaining actionable
+  reactive-editor cleanup is tracked in `KNOWN_ISSUES.md` instead of a long
+  outdated phase plan.
+- Removed stale `SCENEHUB_CONTROL_DISPATCH_PLAN.md` and `gm_api_contract.md`.
+  The dispatch-owner baseline is complete, HTTP method/error policy remains in
+  `API_HTTP_POLICY.md`, and the remaining work is to generate a compact current
+  route reference from Web UI handlers instead of preserving an outdated
+  hand-written GM API snapshot.
+- Documented `scenehub_control` as the next architecture risk after the
+  `gm_core` cleanup: it remains the write-side application facade, but future
+  API growth should split by family instead of turning the umbrella header into
+  a new god-module.
+- Documented `gm_room_session.h` as the remaining broad `gm_core` public
+  boundary. Future work should split control entrypoints, view DTOs,
+  command-plan port types and shared enums when there is real caller pressure,
+  rather than expanding one runtime umbrella header.
+- Documented the `scenehub_control` dispatch owner invariant in code and lock
+  policy: synchronous queue/notification wrappers must not be called while
+  holding GM session locks, from event-bus hot paths, or from the owner task
+  itself.
+- Clarified the GM profile naming boundary in docs: the component is
+  `gm_profile_store`, while the public persisted model remains
+  `gm_game_profile_t`.
+- Audited docs for stale completed plans. Reactive Branch v2 runtime behavior
+  and hub network recovery policy now live in durable reference docs; the old
+  standalone plan files were removed.
+
 ## 2026-05-26
 
 - Hardened local web auth without adding heavy hashing: admin bootstrap now

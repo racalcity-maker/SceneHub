@@ -4,7 +4,6 @@
 
 #include <string.h>
 
-#include "command_executor.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -582,17 +581,17 @@ static bool branch_wait_matches_message(gm_room_session_t *session,
     return matches;
 }
 
-esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message)
+esp_err_t gm_room_session_scenario_on_event_plan(const scenehub_event_t *message,
+                                                 gm_room_session_command_plan_t *out_plan)
 {
     uint32_t now_ms = gm_room_session_scenario_now_ms();
     bool matched_any = false;
-    bool command_result_event = scenehub_event_is_device_control_result(message);
-    gm_room_session_command_plan_t plan = {0};
-    esp_err_t dispatch_err = ESP_OK;
-    if (!message) {
+    bool command_result_event = false;
+    if (!message || !out_plan) {
         return ESP_ERR_INVALID_ARG;
     }
-    command_executor_on_event(message);
+    command_result_event = scenehub_event_is_device_control_result(message);
+    gm_room_session_command_plan_clear(out_plan);
     if (gm_room_session_sessions_lock() != ESP_OK) {
         return ESP_ERR_TIMEOUT;
     }
@@ -605,6 +604,7 @@ esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message)
             continue;
         }
         bool reactive_matches[ROOM_SCENARIO_MAX_BRANCHES] = {0};
+        bool reactive_trigger_matches[ROOM_SCENARIO_MAX_BRANCHES] = {0};
         uint8_t reactive_match_count = 0;
         if (command_result_event) {
             targeted_branch_index = command_result_wait_branch_index(session, message);
@@ -622,11 +622,14 @@ esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message)
                 if (branch->type != ROOM_SCENARIO_BRANCH_REACTIVE) {
                     continue;
                 }
-                if ((gm_room_session_reactive_v2_matches_event(session, branch, message) &&
-                     branch->scenario_state == GM_ROOM_SCENARIO_WAITING &&
-                     branch->wait_type == GM_ROOM_SCENARIO_WAIT_NONE) ||
-                    branch_wait_matches_message(session, branch, message)) {
+                bool trigger_match = gm_room_session_reactive_v2_matches_event(session, branch, message) &&
+                                     branch->scenario_state == GM_ROOM_SCENARIO_WAITING &&
+                                     (branch->wait_type == GM_ROOM_SCENARIO_WAIT_NONE ||
+                                      branch->wait_type == GM_ROOM_SCENARIO_WAIT_TIME);
+                bool wait_match = branch_wait_matches_message(session, branch, message);
+                if (trigger_match || wait_match) {
                     reactive_matches[branch_index] = true;
+                    reactive_trigger_matches[branch_index] = trigger_match;
                     reactive_match_count++;
                 }
             }
@@ -645,17 +648,33 @@ esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message)
             if (reactive_match_count > 1 && reactive_matches[branch_index]) {
                 continue;
             }
-            if (!command_result_event &&
-                gm_room_session_reactive_v2_matches_event(session, branch, message)) {
-                esp_err_t err = gm_room_session_reactive_v2_fire_locked(session, branch, now_ms, &plan);
+            if (!command_result_event && reactive_trigger_matches[branch_index] &&
+                branch->type == ROOM_SCENARIO_BRANCH_REACTIVE) {
+                esp_err_t err = ESP_OK;
+                if (!gm_room_session_reactive_v2_consume_trigger_event_locked(session, branch, message)) {
+                    continue;
+                }
+                if (branch->wait_type == GM_ROOM_SCENARIO_WAIT_TIME) {
+                    err = gm_room_session_reactive_v2_trigger_during_wait_locked(session,
+                                                                                 branch,
+                                                                                 now_ms,
+                                                                                 out_plan);
+                } else {
+                    err = gm_room_session_reactive_v2_fire_locked(session, branch, now_ms, out_plan);
+                }
                 if (err == ESP_OK) {
                     matched_any = true;
-                    if (gm_room_session_command_plan_present(&plan)) {
+                    if (gm_room_session_command_plan_present(out_plan)) {
                         gm_room_session_scenario_update_summary_from_branches_locked(session);
-                        goto dispatch_planned_command;
+                        goto event_done;
                     }
                 }
                 continue;
+            }
+            if (!command_result_event && branch->type == ROOM_SCENARIO_BRANCH_REACTIVE) {
+                (void)gm_room_session_reactive_v2_consume_trigger_event_locked(session,
+                                                                               branch,
+                                                                               message);
             }
             if (!branch->active ||
                 branch->scenario_state != GM_ROOM_SCENARIO_WAITING ||
@@ -685,10 +704,10 @@ esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message)
                                                                                        branch,
                                                                                        message->payload,
                                                                                        now_ms,
-                                                                                       &plan);
-                        if (gm_room_session_command_plan_present(&plan)) {
+                                                                                       out_plan);
+                        if (gm_room_session_command_plan_present(out_plan)) {
                             gm_room_session_scenario_update_summary_from_branches_locked(session);
-                            goto dispatch_planned_command;
+                            goto event_done;
                         }
                         continue;
                     }
@@ -706,10 +725,10 @@ esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message)
                     (void)gm_room_session_reactive_v2_handle_result_success_locked(session,
                                                                                    branch,
                                                                                    now_ms,
-                                                                                   &plan);
-                    if (gm_room_session_command_plan_present(&plan)) {
+                                                                                   out_plan);
+                    if (gm_room_session_command_plan_present(out_plan)) {
                         gm_room_session_scenario_update_summary_from_branches_locked(session);
-                        goto dispatch_planned_command;
+                        goto event_done;
                     }
                     continue;
                 }
@@ -741,26 +760,40 @@ esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message)
                                                         branch,
                                                         now_ms,
                                                         GM_SCENARIO_MAX_STEPS_PER_TICK,
-                                                        &plan);
-            if (gm_room_session_command_plan_present(&plan)) {
+                                                        out_plan);
+            if (gm_room_session_command_plan_present(out_plan)) {
                 gm_room_session_scenario_update_summary_from_branches_locked(session);
-                goto dispatch_planned_command;
+                goto event_done;
             }
         }
         gm_room_session_scenario_update_summary_from_branches_locked(session);
     }
-dispatch_planned_command:
+event_done:
     gm_room_session_sessions_unlock();
+    return matched_any ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message)
+{
+    gm_room_session_command_plan_t plan = {0};
+    esp_err_t err = ESP_OK;
+    esp_err_t dispatch_err = ESP_OK;
+
+    if (!message) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gm_room_session_handle_command_result_event(message);
+    err = gm_room_session_scenario_on_event_plan(message, &plan);
     if (gm_room_session_command_plan_present(&plan)) {
-        dispatch_err = gm_room_session_dispatch_planned_command(&plan);
+        dispatch_err = gm_room_session_dispatch_command_plan("runtime_event", &plan);
         if (dispatch_err != ESP_OK) {
             return dispatch_err;
         }
     }
-    return matched_any ? ESP_OK : ESP_ERR_NOT_FOUND;
+    return err;
 }
 
-void gm_room_session_event_handler(const scenehub_event_t *message)
+void gm_room_session_route_event(const scenehub_event_t *message)
 {
     scenehub_event_t copy = {0};
     bool critical = false;

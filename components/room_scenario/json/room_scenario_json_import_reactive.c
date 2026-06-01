@@ -95,6 +95,14 @@ static esp_err_t reactive_trigger_kind_from_str(const char *s,
         *out = ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT;
         return ESP_OK;
     }
+    if (strcasecmp(s, "any_device_events") == 0) {
+        *out = ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "all_device_events") == 0) {
+        *out = ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS;
+        return ESP_OK;
+    }
     if (strcasecmp(s, "flag_changed") == 0) {
         *out = ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED;
         return ESP_OK;
@@ -185,6 +193,35 @@ static esp_err_t room_scenario_import_command_json(const cJSON *obj,
                                             sizeof(command->params_json));
 }
 
+static esp_err_t reactive_import_trigger_event_group(const cJSON *obj,
+                                                     room_scenario_reactive_trigger_t *trigger)
+{
+    const cJSON *events = cJSON_GetObjectItemCaseSensitive(obj, "events");
+    int count = cJSON_IsArray(events) ? cJSON_GetArraySize(events) : 0;
+    esp_err_t err = ESP_OK;
+    if (!trigger || count <= 0 || count > ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    trigger->event_count = (uint8_t)count;
+    for (int i = 0; i < count; ++i) {
+        const cJSON *event = cJSON_GetArrayItem(events, i);
+        err = json_copy_string_required(event,
+                                        "device_id",
+                                        trigger->events[i].device_id,
+                                        sizeof(trigger->events[i].device_id));
+        if (err == ESP_OK) {
+            err = json_copy_string_required(event,
+                                            "event_id",
+                                            trigger->events[i].event_id,
+                                            sizeof(trigger->events[i].event_id));
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
 static esp_err_t room_scenario_import_reactive_action_json(const cJSON *obj,
                                                            room_scenario_t *scenario,
                                                            room_scenario_reactive_action_t *action)
@@ -241,7 +278,22 @@ static esp_err_t room_scenario_import_reactive_action_json(const cJSON *obj,
         return ESP_OK;
     }
     case ROOM_SCENARIO_STEP_WAIT_TIME:
-        return json_get_uint32_required(obj, "duration_ms", &action->data.wait_time.duration_ms);
+        err = json_get_uint32_required(obj, "duration_ms", &action->data.wait_time.duration_ms);
+        if (err != ESP_OK) {
+            return err;
+        }
+        action->data.wait_time.timeout_action = ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE;
+        {
+            const cJSON *timeout_action = cJSON_GetObjectItemCaseSensitive(obj, "timeout_action");
+            if (timeout_action && !cJSON_IsNull(timeout_action)) {
+                if (!cJSON_IsString(timeout_action) || !timeout_action->valuestring ||
+                    room_scenario_wait_timeout_action_from_str(timeout_action->valuestring,
+                                                               &action->data.wait_time.timeout_action) != ESP_OK) {
+                    return ESP_ERR_INVALID_ARG;
+                }
+            }
+        }
+        return ESP_OK;
     case ROOM_SCENARIO_STEP_SET_FLAG: {
         const cJSON *value = NULL;
         err = json_copy_string_optional(obj,
@@ -269,6 +321,9 @@ static esp_err_t room_scenario_import_reactive_action_json(const cJSON *obj,
                                          "message",
                                          action->data.operator_message.message,
                                          sizeof(action->data.operator_message.message));
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
+        return ESP_OK;
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -334,6 +389,10 @@ esp_err_t room_scenario_import_reactive_branch_v2_json(const cJSON *branch_obj,
                                             branch->trigger.event_id,
                                             sizeof(branch->trigger.event_id));
         }
+        break;
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS:
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS:
+        err = reactive_import_trigger_event_group(trigger, &branch->trigger);
         break;
     case ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED:
         err = json_copy_string_required(trigger,

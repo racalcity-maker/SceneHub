@@ -6,9 +6,9 @@
 
 #include "esp_err.h"
 
-#include "gm_game_profile.h"
 #include "gm_hint.h"
 #include "gm_timer.h"
+#include "quest_common_limits.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
 #include "scenehub_events.h"
@@ -21,6 +21,14 @@ extern "C" {
 #define GM_ROOM_SCENARIO_MAX_FLAGS 16
 #define GM_ROOM_SCENARIO_STEP_TEXT_MAX_LEN 96
 #define GM_ROOM_SCENARIO_WAIT_SUMMARY_MAX_LEN 96
+#define GM_ROOM_SESSION_COMMAND_REQUEST_ID_MAX_LEN 48
+#define GM_ROOM_SESSION_COMMAND_NAME_MAX_LEN 48
+#define GM_ROOM_SESSION_COMMAND_TIMEOUT_DEFAULT_MS 3000
+#define GM_ROOM_SESSION_PROFILE_ID_MAX_LEN 32
+#define GM_ROOM_SESSION_PROFILE_NAME_MAX_LEN 64
+#define GM_ROOM_SESSION_PREPARED_EVENT_REF_MAX \
+    ((ROOM_SCENARIO_MAX_STEPS + ROOM_SCENARIO_MAX_REACTIVE_ACTIONS + ROOM_SCENARIO_MAX_BRANCHES) * \
+     ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS)
 
 typedef enum {
     GM_SESSION_IDLE = 0,
@@ -73,6 +81,8 @@ typedef struct {
     char match_json[QUEST_PAYLOAD_MAX_LEN];
 } gm_room_scenario_wait_event_match_t;
 
+typedef void (*gm_room_session_stop_audio_handler_t)(void);
+
 typedef struct {
     bool active;
     room_scenario_branch_type_t type;
@@ -112,8 +122,11 @@ typedef struct {
     bool wait_operator_skip_allowed;
     char wait_operator_skip_label[ROOM_SCENARIO_OPERATOR_LABEL_MAX_LEN];
     bool reactive_trigger_resolved;
-    gm_room_scenario_wait_event_match_t reactive_trigger_match;
-    char reactive_trigger_alt_event_type[ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
+    gm_room_scenario_wait_event_match_t reactive_trigger_matches[ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS];
+    char reactive_trigger_alt_event_types[ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS]
+                                         [ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
+    bool reactive_trigger_event_matched[ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS];
+    uint8_t reactive_trigger_event_count;
 } gm_room_scenario_branch_runtime_t;
 
 typedef struct {
@@ -156,9 +169,9 @@ typedef struct {
     bool present;
     uint32_t generation;
     uint32_t selected_scenario_generation;
-    char selected_profile_id[GM_GAME_PROFILE_ID_MAX_LEN];
-    char selected_profile_name[GM_GAME_PROFILE_NAME_MAX_LEN];
-    char selected_profile_scenario_id[GM_GAME_PROFILE_SCENARIO_ID_MAX_LEN];
+    char selected_profile_id[GM_ROOM_SESSION_PROFILE_ID_MAX_LEN];
+    char selected_profile_name[GM_ROOM_SESSION_PROFILE_NAME_MAX_LEN];
+    char selected_profile_scenario_id[ROOM_SCENARIO_ID_MAX_LEN];
     uint32_t selected_profile_duration_ms;
     char selected_scenario_id[ROOM_SCENARIO_ID_MAX_LEN];
     char selected_scenario_name[ROOM_SCENARIO_NAME_MAX_LEN];
@@ -219,6 +232,7 @@ typedef struct {
     bool fired_once;
     room_scenario_reentry_mode_t reentry_mode;
     bool pending_trigger;
+    uint8_t last_variant_index;
     uint16_t step_start_index;
     uint16_t step_count;
     uint16_t current_step_index;
@@ -248,6 +262,79 @@ typedef struct {
     uint8_t branch_count;
 } gm_room_session_projection_view_t;
 
+typedef enum {
+    GM_ROOM_SESSION_COMMAND_PLAN_NONE = 0,
+    GM_ROOM_SESSION_COMMAND_PLAN_SCENARIO_STEP,
+    GM_ROOM_SESSION_COMMAND_PLAN_SCENARIO_STEP_GROUP,
+    GM_ROOM_SESSION_COMMAND_PLAN_REACTIVE_ACTION,
+    GM_ROOM_SESSION_COMMAND_PLAN_REACTIVE_ACTION_GROUP,
+} gm_room_session_command_plan_kind_t;
+
+typedef struct {
+    char room_id[QUEST_ROOM_ID_MAX_LEN];
+    uint8_t branch_index;
+    gm_room_session_command_plan_kind_t kind;
+    uint16_t expected_step_index;
+    uint8_t expected_reactive_action;
+    uint8_t command_index;
+} gm_room_session_command_plan_t;
+
+typedef struct {
+    bool result_required;
+    uint32_t timeout_ms;
+    char request_id[GM_ROOM_SESSION_COMMAND_REQUEST_ID_MAX_LEN];
+    char source_id[ROOM_SCENARIO_EVENT_SOURCE_ID_MAX_LEN];
+    char command[GM_ROOM_SESSION_COMMAND_NAME_MAX_LEN];
+} gm_room_session_command_dispatch_result_t;
+
+typedef struct {
+    char id[GM_ROOM_SESSION_PROFILE_ID_MAX_LEN];
+    char name[GM_ROOM_SESSION_PROFILE_NAME_MAX_LEN];
+    char room_id[QUEST_ROOM_ID_MAX_LEN];
+    char scenario_id[ROOM_SCENARIO_ID_MAX_LEN];
+    uint32_t duration_ms;
+} gm_room_session_profile_t;
+
+typedef struct {
+    gm_room_scenario_wait_event_match_t match;
+    char alternate_event_type[ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
+    bool enabled_device_validated;
+} gm_room_session_prepared_event_ref_t;
+
+typedef struct {
+    bool present;
+    uint8_t match_count;
+    uint16_t event_ref_indices[ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS];
+} gm_room_session_prepared_event_resolution_t;
+
+typedef struct {
+    gm_room_session_prepared_event_ref_t event_refs[GM_ROOM_SESSION_PREPARED_EVENT_REF_MAX];
+    uint16_t event_ref_count;
+    gm_room_session_prepared_event_resolution_t step_waits[ROOM_SCENARIO_MAX_STEPS];
+    gm_room_session_prepared_event_resolution_t
+        reactive_action_waits[ROOM_SCENARIO_MAX_REACTIVE_ACTIONS];
+    gm_room_session_prepared_event_resolution_t reactive_triggers[ROOM_SCENARIO_MAX_BRANCHES];
+} gm_room_session_prepared_scenario_t;
+
+typedef struct {
+    const gm_room_session_profile_t *profile;
+    const room_scenario_t *scenario;
+    const gm_room_session_prepared_scenario_t *prepared_scenario;
+    uint32_t duration_ms;
+} gm_room_session_game_start_prepared_t;
+
+typedef esp_err_t (*gm_room_session_command_plan_dispatcher_t)(
+    const char *source,
+    gm_room_session_command_plan_t *plan);
+typedef void (*gm_room_session_command_result_event_handler_t)(
+    const scenehub_event_t *message);
+typedef size_t (*gm_room_session_command_timeout_poller_t)(
+    scenehub_event_t *out_events,
+    size_t max_events);
+typedef uint64_t (*gm_room_session_command_timeout_deadline_provider_t)(void);
+typedef void (*gm_room_session_command_cancel_handler_t)(const char *request_id);
+typedef void (*gm_room_session_command_pending_reset_handler_t)(void);
+
 /*
  * Core projection DTOs above expose a lock-safe runtime snapshot to the
  * read-model layer. They are not stable HTTP contracts; Web UI should consume
@@ -262,9 +349,9 @@ typedef struct {
     uint64_t started_at_ms;
     uint64_t finished_at_ms;
     char room_id[QUEST_ROOM_ID_MAX_LEN];
-    char selected_profile_id[GM_GAME_PROFILE_ID_MAX_LEN];
-    char selected_profile_name[GM_GAME_PROFILE_NAME_MAX_LEN];
-    char selected_profile_scenario_id[GM_GAME_PROFILE_SCENARIO_ID_MAX_LEN];
+    char selected_profile_id[GM_ROOM_SESSION_PROFILE_ID_MAX_LEN];
+    char selected_profile_name[GM_ROOM_SESSION_PROFILE_NAME_MAX_LEN];
+    char selected_profile_scenario_id[ROOM_SCENARIO_ID_MAX_LEN];
     uint32_t selected_profile_duration_ms;
     char selected_scenario_id[ROOM_SCENARIO_ID_MAX_LEN];
     char selected_scenario_name[ROOM_SCENARIO_NAME_MAX_LEN];
@@ -299,6 +386,7 @@ typedef struct {
 } gm_room_session_t;
 
 esp_err_t gm_room_session_init(void);
+esp_err_t gm_room_session_start_async_runtime(void);
 void gm_room_session_reset_all(void);
 uint32_t gm_room_session_generation(void);
 esp_err_t gm_room_session_get_last_changed_room_id(char *out_room_id, size_t out_room_id_size);
@@ -322,6 +410,32 @@ void gm_room_session_build_projection_view(const gm_room_session_t *session,
 esp_err_t gm_room_session_get_projection_view(const char *room_id,
                                               uint64_t now_ms,
                                               gm_room_session_projection_view_t *out);
+bool gm_room_session_command_plan_present(const gm_room_session_command_plan_t *plan);
+void gm_room_session_command_plan_clear(gm_room_session_command_plan_t *plan);
+esp_err_t gm_room_session_command_plan_next_command(
+    const gm_room_session_command_plan_t *plan,
+    room_scenario_device_command_t *out_command,
+    bool *out_has_more,
+    char *error,
+    size_t error_size);
+esp_err_t gm_room_session_command_plan_apply_dispatch_result(
+    gm_room_session_command_plan_t *plan,
+    const gm_room_session_command_dispatch_result_t *dispatch,
+    bool has_more);
+esp_err_t gm_room_session_command_plan_fail(gm_room_session_command_plan_t *plan,
+                                            const char *error_code);
+void gm_room_session_set_command_plan_dispatcher(
+    gm_room_session_command_plan_dispatcher_t dispatcher);
+esp_err_t gm_room_session_dispatch_command_plan(const char *source,
+                                                gm_room_session_command_plan_t *plan);
+void gm_room_session_set_command_lifecycle_hooks(
+    gm_room_session_command_result_event_handler_t result_event_handler,
+    gm_room_session_command_timeout_poller_t timeout_poller,
+    gm_room_session_command_timeout_deadline_provider_t timeout_deadline_provider,
+    gm_room_session_command_cancel_handler_t cancel_handler,
+    gm_room_session_command_pending_reset_handler_t pending_reset_handler);
+void gm_room_session_set_stop_audio_handler(
+    gm_room_session_stop_audio_handler_t handler);
 esp_err_t gm_room_session_start(const char *room_id, uint32_t duration_ms, uint64_t now_ms);
 esp_err_t gm_room_session_pause(const char *room_id, uint64_t now_ms);
 esp_err_t gm_room_session_resume(const char *room_id, uint64_t now_ms);
@@ -330,25 +444,33 @@ esp_err_t gm_room_session_reset(const char *room_id, uint32_t duration_ms, uint6
 esp_err_t gm_room_session_add_time(const char *room_id, int32_t delta_ms, uint64_t now_ms);
 esp_err_t gm_room_session_set_hint(const char *room_id, const char *message, uint64_t now_ms);
 esp_err_t gm_room_session_clear_hint(const char *room_id, uint64_t now_ms);
-esp_err_t gm_room_session_select_profile(const char *room_id, const char *profile_id);
-esp_err_t gm_room_session_select_scenario(const char *room_id, const char *scenario_id);
-esp_err_t gm_room_session_game_start(const char *room_id, uint64_t now_ms);
-esp_err_t gm_room_session_game_stop(const char *room_id, uint64_t now_ms);
-esp_err_t gm_room_session_game_reset(const char *room_id, uint64_t now_ms);
-esp_err_t gm_room_session_get_selected_scenario(const char *room_id,
-                                                char *out_id,
-                                                size_t out_id_size,
-                                                char *out_name,
-                                                size_t out_name_size);
-esp_err_t gm_room_session_scenario_start(const char *room_id);
+esp_err_t gm_room_session_select_profile_prepared(
+    const char *room_id,
+    const gm_room_session_profile_t *profile,
+    const room_scenario_t *scenario,
+    uint32_t duration_ms);
+esp_err_t gm_room_session_select_scenario_prepared(const char *room_id,
+                                                   const room_scenario_t *scenario);
+esp_err_t gm_room_session_game_start_prepared(const char *room_id,
+                                              uint64_t now_ms,
+                                              const gm_room_session_game_start_prepared_t *request,
+                                              gm_room_session_command_plan_t *out_plan);
+void gm_room_session_stop_audio(void);
+esp_err_t gm_room_session_scenario_start_prepared_plan(
+    const char *room_id,
+    const room_scenario_t *scenario,
+    const gm_room_session_prepared_scenario_t *prepared_scenario,
+    uint32_t scenario_generation,
+    gm_room_session_command_plan_t *out_plan);
 esp_err_t gm_room_session_scenario_stop(const char *room_id);
-esp_err_t gm_room_session_scenario_next(const char *room_id);
-esp_err_t gm_room_session_scenario_next_branch(const char *room_id, const char *branch_id);
-esp_err_t gm_room_session_scenario_approve(const char *room_id);
+esp_err_t gm_room_session_scenario_next_plan(const char *room_id,
+                                             gm_room_session_command_plan_t *out_plan);
+esp_err_t gm_room_session_scenario_next_branch_plan(const char *room_id,
+                                                    const char *branch_id,
+                                                    gm_room_session_command_plan_t *out_plan);
+esp_err_t gm_room_session_scenario_approve_plan(const char *room_id,
+                                                gm_room_session_command_plan_t *out_plan);
 esp_err_t gm_room_session_scenario_reset(const char *room_id);
-esp_err_t gm_room_session_execute_device_command(const char *device_id,
-                                                 const char *command_id,
-                                                 const char *params_json);
 esp_err_t gm_room_session_describe_runtime(const gm_room_session_t *session,
                                            gm_room_scenario_runtime_semantics_t *out);
 esp_err_t gm_room_session_describe_branch_runtime(
@@ -356,7 +478,11 @@ esp_err_t gm_room_session_describe_branch_runtime(
     const gm_room_scenario_branch_runtime_t *runtime,
     gm_room_scenario_branch_semantics_t *out);
 void gm_room_session_runtime_process_pending_work(void);
+esp_err_t gm_room_session_runtime_process_pending_work_plan(gm_room_session_command_plan_t *out_plan);
+void gm_room_session_route_event(const scenehub_event_t *message);
 esp_err_t gm_room_session_scenario_on_event(const scenehub_event_t *message);
+esp_err_t gm_room_session_scenario_on_event_plan(const scenehub_event_t *message,
+                                                 gm_room_session_command_plan_t *out_plan);
 
 #ifdef __cplusplus
 }

@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "event_bus.h"
+#include "scenehub_config.h"
 
 // SD card (SPI mode) pins.
 #define SD_PIN_MISO CONFIG_SCENEHUB_SD_MISO_PIN

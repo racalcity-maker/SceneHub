@@ -11,6 +11,7 @@
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
+#include "scenehub_control.h"
 #include "service_status.h"
 
 EXT_RAM_BSS_ATTR static room_scenario_t s_reg_scenario;
@@ -154,7 +155,7 @@ static void reg_bootstrap(void)
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_clear());
     TEST_ASSERT_EQUAL(ESP_OK, gm_game_profile_init());
     TEST_ASSERT_EQUAL(ESP_OK, gm_game_profile_clear());
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_init());
+    TEST_ASSERT_EQUAL(ESP_OK, scenehub_control_init());
     gm_room_session_reset_all();
     TEST_ASSERT_EQUAL(ESP_OK, orchestrator_registry_init());
     orchestrator_registry_invalidate();
@@ -440,7 +441,16 @@ static void test_orchestrator_registry_room_faults_on_selected_scenario_device_i
     reg_add_device("uid_gate", "UID Gate", true);
     reg_add_scenario_with_group_and_wait_devices("scenario_devices", "room_a");
     reg_add_profile("profile_devices", "room_a", "scenario_devices", 60000);
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_select_profile("room_a", "profile_devices"));
+    {
+        scenehub_control_result_t result = {0};
+        TEST_ASSERT_EQUAL(ESP_OK,
+                          scenehub_control_select_profile("test",
+                                                          "room_a",
+                                                          "profile_devices",
+                                                          &result));
+        TEST_ASSERT_EQUAL(SCENEHUB_CONTROL_STATUS_DONE, result.status);
+        TEST_ASSERT_EQUAL(ESP_OK, result.err);
+    }
 
     TEST_ASSERT_EQUAL(ESP_OK, orchestrator_registry_build_snapshot(&s_reg_snapshot_a));
     TEST_ASSERT_EQUAL_UINT(1, s_reg_snapshot_a.room_count);

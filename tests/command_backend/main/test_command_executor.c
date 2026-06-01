@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mqtt_core.h"
+#include "mqtt_core_internal.h"
 #include "quest_device.h"
 #include "scenehub_command_result.h"
 
@@ -351,6 +352,32 @@ static void test_command_executor_rejects_known_offline_device_before_publish(vo
     TEST_ASSERT_EQUAL_STRING("device_offline", error);
 }
 
+static void test_command_executor_publish_failure_clears_pending(void)
+{
+    command_executor_request_t request = {0};
+    scenehub_event_t timeout_event = {0};
+    char error[64] = {0};
+    mqtt_session_t *saved_sessions = NULL;
+
+    ce_test_bootstrap();
+    ce_add_relay_device(true, true, true, 1000);
+
+    ce_test_copy(request.source, sizeof(request.source), "scenario");
+    ce_test_copy(request.device_id, sizeof(request.device_id), "relay");
+    ce_test_copy(request.command_id, sizeof(request.command_id), "pulse");
+    request.require_scenario_allowed = true;
+
+    saved_sessions = s_sessions;
+    s_sessions = NULL;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE,
+                      command_executor_execute(&request, NULL, error, sizeof(error)));
+    s_sessions = saved_sessions;
+
+    TEST_ASSERT_EQUAL_STRING("device_command_publish_failed", error);
+    vTaskDelay(pdMS_TO_TICKS(1100));
+    TEST_ASSERT_EQUAL(0, command_executor_poll_timeouts(&timeout_event, 1));
+}
+
 void register_command_executor_tests(void)
 {
     RUN_TEST(test_command_executor_dispatches_mqtt_and_tracks_result_required);
@@ -364,4 +391,5 @@ void register_command_executor_tests(void)
     RUN_TEST(test_command_executor_terminal_result_clears_pending);
     RUN_TEST(test_command_executor_cancel_request_clears_pending);
     RUN_TEST(test_command_executor_rejects_known_offline_device_before_publish);
+    RUN_TEST(test_command_executor_publish_failure_clears_pending);
 }

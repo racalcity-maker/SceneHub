@@ -28,4 +28,3 @@ bool web_auth_get_session_info(httpd_req_t *req, web_user_role_t *role_out, char
 
 esp_err_t web_sessions_init(void);
 void web_sessions_clear(void);
-void web_auth_start_reset_monitor(void);

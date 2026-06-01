@@ -18,8 +18,6 @@
 #define GM_ROOM_SESSION_EVENT_TASK_STACK 12288
 #define GM_ROOM_SESSION_RUNTIME_TASK_STACK 16384
 
-struct gm_room_session_reactive_trigger_resolution;
-
 typedef enum {
     GM_ROOM_RUNTIME_CAUSE_WAKE = 0,
     GM_ROOM_RUNTIME_CAUSE_EVENT,
@@ -33,8 +31,6 @@ typedef struct {
 extern gm_room_session_t g_gm_room_sessions[GM_SESSION_MAX_ROOMS];
 extern QueueHandle_t s_event_queue;
 extern QueueHandle_t s_runtime_queue;
-
-void *gm_room_session_heap_alloc(size_t size);
 
 gm_room_session_t *alloc_session_locked(const char *room_id);
 gm_room_session_t *find_session_mutable_locked(const char *room_id);
@@ -50,7 +46,13 @@ void scenario_clear_running_snapshot_locked(gm_room_session_t *session);
 void scenario_clear_flags_locked(gm_room_session_t *session);
 esp_err_t scenario_init_branch_runtimes_locked(
     gm_room_session_t *session,
-    const struct gm_room_session_reactive_trigger_resolution *trigger_resolutions);
+    const gm_room_session_prepared_scenario_t *prepared_scenario);
+void gm_room_session_store_prepared_scenario_locked(
+    gm_room_session_t *session,
+    const gm_room_session_prepared_scenario_t *prepared_scenario);
+const gm_room_session_prepared_scenario_t *gm_room_session_get_prepared_scenario_locked(
+    const gm_room_session_t *session);
+void gm_room_session_clear_prepared_scenario_locked(gm_room_session_t *session);
 esp_err_t finish_game_without_audio_locked(gm_room_session_t *session, uint64_t now_ms);
 esp_err_t scenario_set_flag_locked(gm_room_session_t *session,
                                    const char *name,
@@ -67,7 +69,6 @@ const char *scenario_validation_error_message(const room_scenario_validation_rep
 uint64_t gm_room_session_now_ms(void);
 uint32_t gm_room_session_scenario_now_ms(void);
 
-void gm_room_session_event_handler(const scenehub_event_t *message);
 void gm_room_session_event_task(void *ctx);
 void gm_room_session_set_async_workers_enabled_for_test(bool enabled);
 void gm_room_session_record_event_drop(bool critical, bool runtime_queue);

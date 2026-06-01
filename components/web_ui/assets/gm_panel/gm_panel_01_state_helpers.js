@@ -17,6 +17,7 @@ audioFiles:{loaded:false,loading:false,scheduled:false,error:'',items:[]}
 ui:{
 currentRoomScenarioId:{},
 currentRoomProfileId:{},
+roomProgressTab:'flow',
 deviceFilterRoom:'',
 observedFilter:'all',
 currentView:'rooms',
@@ -69,6 +70,7 @@ gmAudioFiles:{get(){return GM.data.audioFiles;},set(v){GM.data.audioFiles=v||{lo
 gmSession:{get(){return GM.session.current;},set(v){GM.session.current=v||{role:'user',username:''};}},
 currentRoomScenarioId:{get(){return GM.ui.currentRoomScenarioId;},set(v){GM.ui.currentRoomScenarioId=v||{};}},
 currentRoomProfileId:{get(){return GM.ui.currentRoomProfileId;},set(v){GM.ui.currentRoomProfileId=v||{};}},
+roomProgressTab:{get(){return GM.ui.roomProgressTab;},set(v){GM.ui.roomProgressTab=v==='reactive'?'reactive':'flow';}},
 profileEditor:{get(){return GM.editors.profile;},set(v){GM.editors.profile=v||{};}},
 scenarioEditor:{get(){return GM.editors.scenario;},set(v){GM.editors.scenario=v||{};}},
 questDeviceEditor:{get(){return GM.editors.questDevice;},set(v){GM.editors.questDevice=v||{};}},

@@ -260,6 +260,9 @@ static cJSON *api_build_reactive_action_json(const orch_room_scenario_detail_t *
         break;
     case ORCH_ROOM_SCENARIO_STEP_WAIT_TIME:
         cJSON_AddNumberToObject(obj, "duration_ms", action->duration_ms);
+        if (action->timeout_action[0]) {
+            cJSON_AddStringToObject(obj, "timeout_action", action->timeout_action);
+        }
         break;
     case ORCH_ROOM_SCENARIO_STEP_SET_FLAG:
         cJSON_AddStringToObject(obj, "flag", action->flag_name);
@@ -267,6 +270,9 @@ static cJSON *api_build_reactive_action_json(const orch_room_scenario_detail_t *
         break;
     case ORCH_ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
         cJSON_AddStringToObject(obj, "message", action->operator_message);
+        break;
+    case ORCH_ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ORCH_ROOM_SCENARIO_STEP_RESET_REACTION:
         break;
     default:
         err = ESP_ERR_INVALID_ARG;
@@ -350,6 +356,10 @@ static esp_err_t api_add_reactive_branch_v2(cJSON *branch_obj,
     }
     if (branch->trigger.event_id[0]) {
         cJSON_AddStringToObject(trigger, "event_id", branch->trigger.event_id);
+    }
+    if (branch->trigger.event_count > 0 &&
+        api_add_event_refs(trigger, branch->trigger.events, branch->trigger.event_count) != ESP_OK) {
+        return ESP_ERR_NO_MEM;
     }
     if (branch->trigger.flag_name[0]) {
         cJSON_AddStringToObject(trigger, "flag_name", branch->trigger.flag_name);

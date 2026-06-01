@@ -12,10 +12,7 @@
 #include "freertos/task.h"
 
 #include "config_store.h"
-
-#ifndef CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO
-#define CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO -1
-#endif
+#include "scenehub_config.h"
 
 static const char *TAG = "sys_reset_policy";
 static const int64_t BOOT_SETUP_HOLD_US = 2LL * 1000 * 1000;

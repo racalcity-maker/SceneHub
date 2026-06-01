@@ -8,7 +8,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#include "gm_api.h"
 #include "scenehub_control.h"
 #include "web_ui_utils.h"
 

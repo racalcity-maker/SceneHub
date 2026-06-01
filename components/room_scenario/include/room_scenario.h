@@ -54,6 +54,8 @@ typedef enum {
     ROOM_SCENARIO_STEP_WAIT_FLAGS,
     ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT,
     ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS,
+    ROOM_SCENARIO_STEP_FAIL_REACTION,
+    ROOM_SCENARIO_STEP_RESET_REACTION,
     ROOM_SCENARIO_STEP_END_GAME,
 } room_scenario_step_type_t;
 
@@ -77,6 +79,8 @@ typedef enum {
 typedef enum {
     ROOM_SCENARIO_REACTIVE_TRIGGER_NONE = 0,
     ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT,
+    ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS,
+    ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS,
     ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED,
     ROOM_SCENARIO_REACTIVE_TRIGGER_OPERATOR_EVENT,
     ROOM_SCENARIO_REACTIVE_TRIGGER_RUNTIME_EVENT,
@@ -96,6 +100,12 @@ typedef enum {
     ROOM_SCENARIO_REACTIVE_RESULT_FAIL_SCENARIO,
     ROOM_SCENARIO_REACTIVE_RESULT_RETRY,
 } room_scenario_reactive_result_action_t;
+
+typedef enum {
+    ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE = 0,
+    ROOM_SCENARIO_WAIT_TIMEOUT_FAIL_REACTION,
+    ROOM_SCENARIO_WAIT_TIMEOUT_RESET_REACTION,
+} room_scenario_wait_timeout_action_t;
 
 typedef enum {
     ROOM_SCENARIO_COMMAND_GROUP_SEQUENTIAL = 0,
@@ -121,6 +131,7 @@ typedef struct {
     char device_id[ROOM_SCENARIO_DEVICE_ID_MAX_LEN];
     char event_id[ROOM_SCENARIO_DEVICE_EVENT_ID_MAX_LEN];
     uint32_t timeout_ms;
+    room_scenario_wait_timeout_action_t timeout_action;
     char timeout_message[ROOM_SCENARIO_OPERATOR_MESSAGE_MAX_LEN];
 } room_scenario_wait_device_event_t;
 
@@ -129,12 +140,15 @@ typedef room_scenario_wait_device_event_t room_scenario_device_event_ref_t;
 typedef struct {
     room_scenario_device_event_ref_t events[ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS];
     uint8_t event_count;
+    uint32_t timeout_ms;
+    room_scenario_wait_timeout_action_t timeout_action;
 } room_scenario_wait_any_device_event_t;
 
 typedef room_scenario_wait_any_device_event_t room_scenario_wait_all_device_events_t;
 
 typedef struct {
     uint32_t duration_ms;
+    room_scenario_wait_timeout_action_t timeout_action;
 } room_scenario_wait_time_t;
 
 typedef struct {
@@ -157,6 +171,8 @@ typedef struct {
     room_scenario_reactive_trigger_kind_t kind;
     char device_id[ROOM_SCENARIO_DEVICE_ID_MAX_LEN];
     char event_id[ROOM_SCENARIO_DEVICE_EVENT_ID_MAX_LEN];
+    room_scenario_device_event_ref_t events[ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS];
+    uint8_t event_count;
     char flag_name[ROOM_SCENARIO_FLAG_NAME_MAX_LEN];
     char runtime_event[ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
     char operator_event[ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
@@ -166,6 +182,7 @@ typedef struct {
     room_scenario_flag_condition_t flags[ROOM_SCENARIO_WAIT_FLAGS_MAX_FLAGS];
     uint8_t flag_count;
     uint32_t timeout_ms;
+    room_scenario_wait_timeout_action_t timeout_action;
     char timeout_message[ROOM_SCENARIO_OPERATOR_MESSAGE_MAX_LEN];
 } room_scenario_wait_flags_t;
 
@@ -208,9 +225,13 @@ typedef struct {
 
     union {
         room_scenario_device_command_t device_command;
+        room_scenario_wait_device_event_t wait_device_event;
+        room_scenario_wait_any_device_event_t wait_any_device_event;
+        room_scenario_wait_all_device_events_t wait_all_device_events;
         room_scenario_wait_time_t wait_time;
         room_scenario_operator_message_t operator_message;
         room_scenario_set_flag_t set_flag;
+        room_scenario_wait_flags_t wait_flags;
     } data;
 } room_scenario_reactive_action_t;
 
@@ -320,6 +341,9 @@ esp_err_t room_scenario_branch_type_from_str(const char *s,
 const char *room_scenario_reentry_mode_to_str(room_scenario_reentry_mode_t mode);
 esp_err_t room_scenario_reentry_mode_from_str(const char *s,
                                               room_scenario_reentry_mode_t *out);
+const char *room_scenario_wait_timeout_action_to_str(room_scenario_wait_timeout_action_t action);
+esp_err_t room_scenario_wait_timeout_action_from_str(const char *s,
+                                                     room_scenario_wait_timeout_action_t *out);
 esp_err_t room_scenario_to_json(const room_scenario_t *s, cJSON *out);
 esp_err_t room_scenario_from_json(const cJSON *json, room_scenario_t *out);
 esp_err_t room_scenario_store_export_json(cJSON **out);

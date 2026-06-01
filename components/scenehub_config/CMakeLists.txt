@@ -1,1 +1,1 @@
-idf_component_register(SRCS "scenehub_config.c" INCLUDE_DIRS "")
+idf_component_register(INCLUDE_DIRS "include")

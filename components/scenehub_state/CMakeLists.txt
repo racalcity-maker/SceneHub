@@ -5,6 +5,8 @@ idf_component_register(
         device_control_ingest
         freertos
         gm_core
+        gm_profile_store
+        gm_sidebar_store
         quest_device
         room_catalog
         room_scenario

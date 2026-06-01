@@ -14,10 +14,12 @@
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
+#include "scenehub_control.h"
 #include "scenehub_events.h"
 
 EXT_RAM_BSS_ATTR static room_scenario_t s_scenario;
 EXT_RAM_BSS_ATTR static gm_room_session_t s_session;
+EXT_RAM_BSS_ATTR static gm_room_session_prepared_scenario_t s_prepared_scenario;
 
 static void chaos_copy(char *dst, size_t dst_len, const char *src)
 {
@@ -36,7 +38,7 @@ static void chaos_bootstrap(void)
         TEST_ASSERT_EQUAL(ESP_OK, room_catalog_init());
         TEST_ASSERT_EQUAL(ESP_OK, quest_device_init());
         TEST_ASSERT_EQUAL(ESP_OK, room_scenario_init());
-        TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_init());
+        TEST_ASSERT_EQUAL(ESP_OK, scenehub_control_init());
         initialized = true;
     }
 
@@ -46,6 +48,7 @@ static void chaos_bootstrap(void)
     room_scenario_reset();
     memset(&s_scenario, 0, sizeof(s_scenario));
     memset(&s_session, 0, sizeof(s_session));
+    memset(&s_prepared_scenario, 0, sizeof(s_prepared_scenario));
 }
 
 static void chaos_add_room(const char *room_id)
@@ -136,9 +139,20 @@ static void chaos_configure_set_flag(room_scenario_step_t *step, const char *nam
 
 static void chaos_add_and_start_selected_scenario(const char *room_id)
 {
+    gm_room_session_command_plan_t plan = {0};
+
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(&s_scenario));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_select_scenario(room_id, s_scenario.id));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_scenario_start(room_id));
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_select_scenario_prepared(room_id, &s_scenario));
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      scenehub_control_prepare_session_scenario(&s_scenario,
+                                                                &s_prepared_scenario));
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      gm_room_session_scenario_start_prepared_plan(room_id,
+                                                                   &s_scenario,
+                                                                   &s_prepared_scenario,
+                                                                   room_scenario_generation(),
+                                                                   &plan));
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_dispatch_command_plan("unit", &plan));
 }
 
 static void chaos_get_session(const char *room_id)

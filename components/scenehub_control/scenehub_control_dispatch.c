@@ -33,6 +33,13 @@ typedef struct {
     char params_json[QUEST_PAYLOAD_MAX_LEN];
     char client_id[QUEST_ID_MAX_LEN];
     bool confirmed;
+    bool require_manual_allowed;
+    bool require_scenario_allowed;
+    bool reject_result_required;
+    bool return_raw_err;
+    char result_required_error[COMMAND_EXECUTOR_COMMAND_MAX_LEN];
+    char *out_error;
+    size_t out_error_size;
     command_executor_dispatch_t *out_dispatch;
     bool *out_log_warning;
     scenehub_control_device_interface_info_t *out_interface_info;
@@ -277,11 +284,20 @@ static esp_err_t scenehub_control_dispatch_execute_device_command(
     esp_err_t err = ESP_OK;
     bool log_warning = false;
 
-    if (!request || !request->device_id[0] || !request->command_id[0] || !request->out_result) {
+    if (!request || !request->device_id[0] || !request->command_id[0] ||
+        (!request->return_raw_err && !request->out_result)) {
+        if (request && request->return_raw_err && request->out_error && request->out_error_size > 0) {
+            scenehub_control_copy(request->out_error,
+                                  request->out_error_size,
+                                  "device_command_invalid");
+        }
         return ESP_ERR_INVALID_ARG;
     }
     err = scenehub_control_dispatch_ensure_command_scratch();
     if (err != ESP_OK) {
+        if (request->return_raw_err) {
+            return err;
+        }
         scenehub_control_fill_common_error(request->out_result, err);
         return ESP_OK;
     }
@@ -293,8 +309,8 @@ static esp_err_t scenehub_control_dispatch_execute_device_command(
                                           request->params_json,
                                           true,
                                           s_dispatch_resolved_command,
-                                          NULL,
-                                          0);
+                                          request->return_raw_err ? request->out_error : NULL,
+                                          request->return_raw_err ? request->out_error_size : 0);
     if (err == ESP_OK && request->out_command_info) {
         scenehub_control_copy(request->out_command_info->device_name,
                               sizeof(request->out_command_info->device_name),
@@ -310,10 +326,25 @@ static esp_err_t scenehub_control_dispatch_execute_device_command(
     if (request->out_log_warning) {
         *request->out_log_warning = log_warning;
     }
-    if (err == ESP_OK && !s_dispatch_resolved_command->command.manual_allowed) {
+    if (err == ESP_OK &&
+        request->reject_result_required &&
+        s_dispatch_resolved_command->command.result_required) {
+        if (request->out_error && request->out_error_size > 0) {
+            scenehub_control_copy(request->out_error,
+                                  request->out_error_size,
+                                  request->result_required_error[0]
+                                      ? request->result_required_error
+                                      : "device_command_result_required_unsupported");
+        }
+        err = ESP_ERR_NOT_SUPPORTED;
+    }
+    if (err == ESP_OK &&
+        request->require_manual_allowed &&
+        !s_dispatch_resolved_command->command.manual_allowed) {
         err = ESP_ERR_INVALID_STATE;
     }
     if (err == ESP_OK &&
+        request->require_manual_allowed &&
         s_dispatch_resolved_command->command.requires_confirmation &&
         !request->confirmed) {
         scenehub_control_set_result(request->out_result,
@@ -325,6 +356,9 @@ static esp_err_t scenehub_control_dispatch_execute_device_command(
         return ESP_OK;
     }
     if (err != ESP_OK) {
+        if (request->return_raw_err) {
+            return err;
+        }
         scenehub_control_fill_common_error(request->out_result, err);
         return ESP_OK;
     }
@@ -338,7 +372,8 @@ static esp_err_t scenehub_control_dispatch_execute_device_command(
     scenehub_control_copy(s_dispatch_executor_request->command_id,
                           sizeof(s_dispatch_executor_request->command_id),
                           request->command_id);
-    s_dispatch_executor_request->require_manual_allowed = true;
+    s_dispatch_executor_request->require_manual_allowed = request->require_manual_allowed;
+    s_dispatch_executor_request->require_scenario_allowed = request->require_scenario_allowed;
     if (request->params_json[0]) {
         scenehub_control_copy(s_dispatch_executor_request->params_json,
                               sizeof(s_dispatch_executor_request->params_json),
@@ -349,9 +384,12 @@ static esp_err_t scenehub_control_dispatch_execute_device_command(
                                             s_dispatch_resolved_command->client_id,
                                             &s_dispatch_resolved_command->command,
                                             request->out_dispatch,
-                                            NULL,
-                                            0);
+                                            request->return_raw_err ? request->out_error : NULL,
+                                            request->return_raw_err ? request->out_error_size : 0);
     if (err != ESP_OK) {
+        if (request->return_raw_err) {
+            return err;
+        }
         scenehub_control_fill_common_error(request->out_result, err);
     }
     return ESP_OK;
@@ -414,6 +452,16 @@ static esp_err_t scenehub_control_dispatch_ensure_owner(void)
     return ESP_OK;
 }
 
+/*
+ * Dispatch owner invariant:
+ * - callers must not hold gm_core/session locks while waiting here
+ * - callers must not be event_bus dispatch hot-path handlers
+ * - callers must not be the sh_ctrl_disp owner task itself
+ * - queued operations must remain bounded and must not wait forever internally
+ * - the owner serializes scratch buffers and command/device resolution
+ * - queue length 2 is intentional backpressure, not a bulk work queue
+ */
+
 esp_err_t scenehub_control_dispatch_describe_interface(
     const char *client_id,
     scenehub_control_device_interface_info_t *out_info,
@@ -464,11 +512,55 @@ esp_err_t scenehub_control_dispatch_device_command(
         scenehub_control_copy(request.params_json, sizeof(request.params_json), params_json);
     }
     request.confirmed = confirmed;
+    request.require_manual_allowed = true;
     request.type = SCENEHUB_CONTROL_DISPATCH_REQ_DEVICE_COMMAND;
     request.out_command_info = out_info;
     request.out_dispatch = out_dispatch;
     request.out_log_warning = out_log_warning;
     request.out_result = out_result;
+    request.reply_task = xTaskGetCurrentTaskHandle();
+    request.out_err = &err;
+
+    if (xQueueSend(s_dispatch_queue, &request, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 0) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return err;
+}
+
+esp_err_t scenehub_control_dispatch_scenario_command(
+    const char *device_id,
+    const char *command_id,
+    const char *params_json,
+    const char *result_required_error,
+    command_executor_dispatch_t *out_dispatch,
+    char *error,
+    size_t error_size)
+{
+    scenehub_control_dispatch_request_t request = {0};
+    esp_err_t err = scenehub_control_dispatch_ensure_owner();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    scenehub_control_copy(request.source, sizeof(request.source), "scenario");
+    scenehub_control_copy(request.device_id, sizeof(request.device_id), device_id);
+    scenehub_control_copy(request.command_id, sizeof(request.command_id), command_id);
+    if (params_json && params_json[0]) {
+        scenehub_control_copy(request.params_json, sizeof(request.params_json), params_json);
+    }
+    request.type = SCENEHUB_CONTROL_DISPATCH_REQ_DEVICE_COMMAND;
+    request.out_dispatch = out_dispatch;
+    request.require_scenario_allowed = true;
+    request.reject_result_required = result_required_error && result_required_error[0];
+    scenehub_control_copy(request.result_required_error,
+                          sizeof(request.result_required_error),
+                          result_required_error);
+    request.return_raw_err = true;
+    request.out_error = error;
+    request.out_error_size = error_size;
     request.reply_task = xTaskGetCurrentTaskHandle();
     request.out_err = &err;
 

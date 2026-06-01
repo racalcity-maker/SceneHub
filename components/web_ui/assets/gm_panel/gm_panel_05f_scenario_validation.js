@@ -90,6 +90,19 @@ builder.addReactive(branch,-1,-1,'REACTIVE_TRIGGER_INCOMPLETE','Reaction trigger
 }
 return;
 }
+if(kind==='any_device_events'||kind==='all_device_events'){
+const events=Array.isArray(trigger.events)?trigger.events:[];
+if(!events.length){
+builder.addReactive(branch,-1,-1,'REACTIVE_TRIGGER_EVENTS_EMPTY','Reaction trigger: add at least one device event.','field');
+return;
+}
+events.forEach((ev,eventIndex)=>{
+if(!String(ev&&ev.device_id||'').trim()||!String(ev&&ev.event_id||'').trim()){
+builder.addReactive(branch,-1,-1,'REACTIVE_TRIGGER_EVENT_INCOMPLETE',`Reaction trigger: event ${eventIndex+1} needs a device and event.`,'field');
+}
+});
+return;
+}
 if(kind==='flag_changed'){
 if(!String(trigger.flag_name||'').trim()){
 builder.addReactive(branch,-1,-1,'REACTIVE_TRIGGER_INCOMPLETE','Reaction trigger: choose a flag name.','field');
@@ -185,6 +198,9 @@ if(!String(action&&action.message||'').trim())builder.addReactive(branch,variant
 }
 else if(type==='SET_FLAG'){
 if(!String(action&&action.flag_name||'').trim())builder.addReactive(branch,variantIndex,actionIndex,'FLAG_NAME_EMPTY',`${actionLabel}: choose or type a flag name`,'field');
+}
+else if(type!=='FAIL_REACTION'&&type!=='RESET_REACTION'){
+builder.addReactive(branch,variantIndex,actionIndex,'REACTIVE_ACTION_UNSUPPORTED',`${actionLabel}: this action type is no longer supported in reactive branches`,'draft');
 }
 });
 });

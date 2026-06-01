@@ -1,22 +1,58 @@
 #include "scenehub_control_internal.h"
 
+#include <string.h>
+
 #include "cJSON.h"
 #include "esp_heap_caps.h"
-#include "gm_api.h"
 #include "gm_game_profile.h"
+#include "room_scenario.h"
 
 esp_err_t scenehub_control_select_profile(const char *source,
                                           const char *room_id,
                                           const char *profile_id,
                                           scenehub_control_result_t *out_result)
 {
+    gm_room_session_profile_t session_profile = {0};
+    gm_game_profile_t profile = {0};
+    room_scenario_t *scenario = NULL;
     (void)source;
     esp_err_t err = scenehub_control_prepare_result(room_id, "profile_select", out_result);
     if (err != ESP_OK) {
         return err;
     }
+    if (!room_id || !room_id[0] || !profile_id || !profile_id[0]) {
+        scenehub_control_fill_common_error(out_result, ESP_ERR_INVALID_ARG);
+        return ESP_OK;
+    }
+    err = scenehub_control_require_room(room_id);
+    if (err == ESP_OK) {
+        err = gm_game_profile_get(profile_id, &profile);
+    }
+    if (err == ESP_OK && strcmp(profile.room_id, room_id) != 0) {
+        err = ESP_ERR_INVALID_STATE;
+    }
+    if (err == ESP_OK) {
+        err = gm_game_profile_validate_reference(&profile);
+    }
+    if (err == ESP_OK) {
+        err = room_scenario_acquire_scratch(&scenario, NULL);
+    }
+    if (err == ESP_OK) {
+        memset(scenario, 0, sizeof(*scenario));
+        err = room_scenario_get(profile.scenario_id, scenario);
+    }
+    if (err == ESP_OK) {
+        scenehub_control_build_session_profile(&profile, &session_profile);
+        err = gm_room_session_select_profile_prepared(room_id,
+                                                      &session_profile,
+                                                      scenario,
+                                                      profile.duration_ms);
+    }
+    if (scenario) {
+        room_scenario_release_scratch();
+    }
     return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  gm_api_select_profile(room_id, profile_id),
+                                                                  err,
                                                                   SCENEHUB_STATE_SLICE_ROOM_RUNTIME,
                                                                   room_id,
                                                                   "profile_select");

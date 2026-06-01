@@ -15,15 +15,7 @@
 #include "nvs_flash.h"
 #include "mbedtls/sha256.h"
 #include "mbedtls/version.h"
-#include "sdkconfig.h"
-
-#ifndef CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER
-#define CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER "admin"
-#endif
-
-#ifndef CONFIG_SCENEHUB_WEB_AUTH_BOOTSTRAP_PASS
-#define CONFIG_SCENEHUB_WEB_AUTH_BOOTSTRAP_PASS "admin"
-#endif
+#include "scenehub_config.h"
 
 static const char *TAG = "config_store";
 static const char *NVS_NS = "cfg";
@@ -186,7 +178,7 @@ static void apply_default_web_auth(app_web_auth_t *web)
     }
     apply_web_auth_credentials(web,
                                CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER,
-                               CONFIG_SCENEHUB_WEB_AUTH_BOOTSTRAP_PASS,
+                               CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS,
                                false);
 }
 
@@ -196,7 +188,7 @@ static void log_initial_admin_credentials(const char *reason)
              "initial admin credentials (%s): username=%s password=%s",
              reason ? reason : "setup",
              CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_USER,
-             CONFIG_SCENEHUB_WEB_AUTH_BOOTSTRAP_PASS);
+             CONFIG_SCENEHUB_WEB_AUTH_DEFAULT_PASS);
 }
 
 static void load_defaults(app_config_t *cfg)

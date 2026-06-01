@@ -29,8 +29,8 @@ storage/domain DTOs directly.
 |---|---|---|---|---|
 | `quest_device_t`, `quest_device_command_t`, `quest_device_event_t` | `quest_device` | domain/storage | keep | Saved capability model. Web UI should use read-model catalog DTOs for listing. |
 | `room_scenario_t` and step structs | `room_scenario` | domain/storage | keep | Scenario persistence and validation source. UI should receive projected detail/layout views. |
-| `gm_game_profile_t` | `gm_core` | domain/storage | keep | Profile persistence source. |
-| `gm_sidebar_preset_t` | `gm_core/sidebar` | persistent-store | watch | Controller-backed GM quick-action store. Acceptable as the owner storage entity, but it should stay narrow and must not silently grow into a second UI/view model. |
+| `gm_game_profile_t` | `gm_profile_store` | domain/storage | keep | Profile persistence source. Public model name remains `gm_game_profile_t`. |
+| `gm_sidebar_preset_t` | `gm_sidebar_store` | persistent-store | watch | Controller-backed GM quick-action store. Acceptable as the owner storage entity, but it should stay narrow and must not silently grow into a second UI/view model. |
 | `gm_room_session_*_view_t`, `gm_room_session_projection_view_t` | `gm_core` | core projection | keep | Lock-safe session projection for read-model. Not an HTTP contract. |
 | `scenehub_control_result_t` | `scenehub_control` | control envelope | keep | Shared write-side result envelope for HTTP/control responses. |
 | `scenehub_control_device_command_info_t` | `scenehub_control` | control response detail | keep | Narrow response metadata for manual command execution. |

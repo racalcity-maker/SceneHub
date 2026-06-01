@@ -109,6 +109,8 @@ typedef enum {
     ORCH_ROOM_SCENARIO_STEP_WAIT_FLAGS,
     ORCH_ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT,
     ORCH_ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS,
+    ORCH_ROOM_SCENARIO_STEP_FAIL_REACTION,
+    ORCH_ROOM_SCENARIO_STEP_RESET_REACTION,
     ORCH_ROOM_SCENARIO_STEP_END_GAME,
 } orch_room_scenario_step_type_t;
 
@@ -139,6 +141,7 @@ typedef struct {
     orch_room_scenario_command_entry_t commands[ORCH_ROOM_SCENARIO_MAX_COMMAND_GROUP_COMMANDS];
     uint32_t duration_ms;
     uint32_t timeout_ms;
+    char timeout_action[ORCH_REGISTRY_STATE_MAX_LEN];
     char event_type[ORCH_ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
     char source_id[ORCH_ROOM_SCENARIO_EVENT_SOURCE_ID_MAX_LEN];
     char timeout_message[ROOM_SCENARIO_OPERATOR_MESSAGE_MAX_LEN];
@@ -159,6 +162,8 @@ typedef struct {
     char kind_text[ORCH_REGISTRY_STATE_MAX_LEN];
     char device_id[ORCH_ROOM_SCENARIO_DEVICE_ID_MAX_LEN];
     char event_id[ORCH_ROOM_SCENARIO_DEVICE_EVENT_ID_MAX_LEN];
+    orch_room_scenario_event_ref_t events[ORCH_ROOM_SCENARIO_MAX_EVENT_REFS];
+    uint8_t event_count;
     char flag_name[ROOM_SCENARIO_FLAG_NAME_MAX_LEN];
     char runtime_event[ORCH_ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
     char operator_event[ORCH_ROOM_SCENARIO_EVENT_TYPE_MAX_LEN];
@@ -173,11 +178,19 @@ typedef struct {
     char group_mode_text[ORCH_REGISTRY_STATE_MAX_LEN];
     char device_id[ORCH_ROOM_SCENARIO_DEVICE_ID_MAX_LEN];
     char command_id[ORCH_ROOM_SCENARIO_DEVICE_COMMAND_ID_MAX_LEN];
+    char event_id[ORCH_ROOM_SCENARIO_DEVICE_EVENT_ID_MAX_LEN];
     char params_json[ORCH_ROOM_SCENARIO_COMMAND_PARAMS_JSON_MAX_LEN];
     uint32_t duration_ms;
+    char timeout_action[ORCH_REGISTRY_STATE_MAX_LEN];
     char operator_message[ROOM_SCENARIO_OPERATOR_MESSAGE_MAX_LEN];
     char flag_name[ROOM_SCENARIO_FLAG_NAME_MAX_LEN];
     bool flag_value;
+    uint32_t timeout_ms;
+    char timeout_message[ROOM_SCENARIO_OPERATOR_MESSAGE_MAX_LEN];
+    orch_room_scenario_event_ref_t events[ORCH_ROOM_SCENARIO_MAX_EVENT_REFS];
+    uint8_t event_count;
+    orch_room_scenario_flag_ref_t flags[ORCH_ROOM_SCENARIO_MAX_FLAG_REFS];
+    uint8_t flag_count;
     uint16_t group_command_start_index;
     uint8_t group_command_count;
 } orch_room_scenario_reactive_action_entry_t;

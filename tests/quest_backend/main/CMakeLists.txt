@@ -16,7 +16,6 @@ set(TEST_SRCS
     "${BACKEND_CORE_MAIN}/test_room_catalog.c"
     "${BACKEND_CORE_MAIN}/test_room_scenario.c"
     "${GM_SESSION_MAIN}/test_gm_core_primitives.c"
-    "${GM_SESSION_MAIN}/test_gm_api.c"
     "${BACKEND_CORE_MAIN}/test_gm_game_profile.c"
     "${GM_SESSION_MAIN}/test_gm_room_session.c"
     "${GM_SESSION_MAIN}/test_integration_quest_flow.c"
@@ -30,7 +29,7 @@ set(TEST_SRCS
 idf_component_register(
     SRCS ${TEST_SRCS}
     INCLUDE_DIRS "." "${BACKEND_CORE_MAIN}" "${COMMAND_BACKEND_MAIN}" "${GM_SESSION_MAIN}" "${WEB_UI_BACKEND_MAIN}" "../../../components/web_ui" "../../../components/audio_player" "../../../components/command_executor" "../../../components/device_control_ingest"
-    PRIV_REQUIRES web_ui audio_player command_executor ota_manager gm_core room_catalog orchestrator_core scenehub_read_model event_bus service_status config_store device_control_ingest room_scenario quest_device scenehub_scenario_validation unity json
+    PRIV_REQUIRES web_ui audio_player command_executor ota_manager gm_core gm_profile_store room_catalog orchestrator_core scenehub_control scenehub_read_model event_bus service_status config_store device_control_ingest room_scenario quest_device scenehub_scenario_validation unity json
 )
 
 target_link_libraries(${COMPONENT_LIB} INTERFACE

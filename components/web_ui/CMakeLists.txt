@@ -62,7 +62,6 @@ idf_component_register(
         "web_ui_auth_sessions.c"
         "web_ui_auth_gate.c"
         "web_ui_auth_handlers.c"
-        "web_ui_auth_reset.c"
         "web_ui_meta.c"
         "web_ui_status.c"
         "web_ui_ota.c"
@@ -96,7 +95,7 @@ idf_component_register(
     EMBED_TXTFILES
         "assets/gm_panel.css"
         ${GENERATED_GM_PANEL_JS}
-    REQUIRES esp_http_server event_bus config_store network audio_player mqtt_core ota_manager sd_storage service_status device_control_ingest orchestrator_core scenehub_read_model gm_core scenehub_control scenehub_state quest_common room_catalog room_scenario quest_device hardware_io ws_runtime
+    REQUIRES esp_http_server event_bus config_store network audio_player mqtt_core ota_manager sd_storage service_status device_control_ingest orchestrator_core scenehub_read_model gm_core gm_profile_store gm_sidebar_store scenehub_config scenehub_control scenehub_state quest_common room_catalog room_scenario quest_device hardware_io ws_runtime
 )
 
 if(TARGET gm_panel_bundle)

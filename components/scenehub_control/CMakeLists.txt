@@ -4,7 +4,10 @@ idf_component_register(
     REQUIRES
         command_executor
         device_control_ingest
+        event_bus
         gm_core
+        gm_profile_store
+        gm_sidebar_store
         hardware_io
         json
         mqtt_core
@@ -17,4 +20,5 @@ idf_component_register(
         scenehub_device_command_resolver
         scenehub_scenario_validation
         scenehub_state
+        service_status
 )

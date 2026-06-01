@@ -291,4 +291,12 @@ config SCENEHUB_GPIO_MAX_PULSE_MS
     help
         Maximum accepted pulse duration for universal IO output commands.
 
+config SCENEHUB_HARDWARE_MAX_EFFECT_MS
+    int "Built-in hardware max effect duration ms"
+    default 600000
+    range 10 3600000
+    help
+        Maximum accepted total duration for relay, MOSFET and universal IO
+        effect commands.
+
 endmenu

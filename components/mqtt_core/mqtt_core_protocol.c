@@ -237,8 +237,9 @@ int handle_subscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len)
             continue;
         }
         if (mqtt_upsert_subscription(sess, topic, rqos, &granted[granted_count])) {
+            uint8_t subscription_qos = granted[granted_count];
             granted_count++;
-            deliver_retain(sess, topic);
+            deliver_retain(sess, topic, subscription_qos);
         } else {
             granted[granted_count++] = 0x80;
         }

@@ -282,6 +282,10 @@ const char *orch_room_scenario_step_type_str(orch_room_scenario_step_type_t type
         return "wait_any_device_event";
     case ORCH_ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
         return "wait_all_device_events";
+    case ORCH_ROOM_SCENARIO_STEP_FAIL_REACTION:
+        return "fail_reaction";
+    case ORCH_ROOM_SCENARIO_STEP_RESET_REACTION:
+        return "reset_reaction";
     case ORCH_ROOM_SCENARIO_STEP_END_GAME:
         return "end_game";
     default:
@@ -294,6 +298,10 @@ const char *orch_room_scenario_trigger_kind_str(room_scenario_reactive_trigger_k
     switch (kind) {
     case ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT:
         return "device_event";
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS:
+        return "any_device_events";
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS:
+        return "all_device_events";
     case ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED:
         return "flag_changed";
     case ROOM_SCENARIO_REACTIVE_TRIGGER_OPERATOR_EVENT:

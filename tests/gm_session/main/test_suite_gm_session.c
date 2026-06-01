@@ -3,14 +3,12 @@
 #include "gm_room_session_internal.h"
 
 extern void register_gm_core_primitive_tests(void);
-extern void register_gm_api_tests(void);
 extern void register_gm_room_session_tests(void);
 extern void register_gm_room_session_runtime_chaos_tests(void);
 extern void register_integration_quest_flow_tests(void);
 
 static const scenehub_test_register_fn_t s_registrars[] = {
     register_gm_core_primitive_tests,
-    register_gm_api_tests,
     register_gm_room_session_tests,
     register_gm_room_session_runtime_chaos_tests,
     register_integration_quest_flow_tests,

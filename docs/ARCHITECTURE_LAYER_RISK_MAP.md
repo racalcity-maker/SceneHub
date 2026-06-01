@@ -13,7 +13,7 @@ The intended dependency direction is:
 
 ```text
 web_ui
-  -> scenehub_control / gm_control / scenehub_read_model
+  -> scenehub_control / scenehub_read_model
   -> gm_core / room_scenario / quest_device / device_control_ingest
   -> event_bus / mqtt_core / hardware_io / audio_player / storage
 ```
@@ -32,7 +32,8 @@ These dependency shapes are expected and acceptable:
 - `web_ui -> scenehub_control`
 - `web_ui -> scenehub_read_model`
 - `scenehub_control -> gm_core / room_scenario / quest_device`
-- `gm_core -> command_executor`
+- `gm_core -> registered command-plan dispatch hook`
+- `scenehub_control -> command_executor`
 - `command_executor -> mqtt_core / hardware_io / audio_player`
 - `device_control_ingest -> event_bus`
 - `mqtt_core -> event_bus`
@@ -99,7 +100,60 @@ Target cleanup:
 
 Tracked by:
 
-- `KNOWN_ISSUES.md` P0 and P2
+- `KNOWN_ISSUES.md` P2
+- `ARCHITECTURE.md` GM Core Boundary
+
+### SceneHub Control As New Heavy Facade
+
+Risk:
+
+- `scenehub_control` can become the new center where storage, runtime,
+  hardware, device metadata and HTTP-shaped response concerns accumulate.
+- The public umbrella header can force unrelated consumers to see broad DTO
+  families such as profiles, scenarios, devices, hardware IO and GM runtime.
+- Control orchestration can drift from "application facade" into a second
+  runtime engine or domain owner.
+
+Target cleanup:
+
+- Keep `scenehub_control` as an application/write-side facade, not a domain
+  subsystem.
+- Split public API headers by family when the next expansion needs it:
+  GM/session, scenarios, devices, profiles, sidebar presets and hardware IO.
+- Keep internal implementation files family-oriented and avoid adding unrelated
+  logic to the main facade file.
+- Use narrow DTO/result envelopes for control responses; do not let HTTP JSON
+  shapes define domain storage/runtime structs.
+
+Tracked by:
+
+- `KNOWN_ISSUES.md` P2 and P6
+- `ARCHITECTURE.md` SceneHub Control Boundary
+
+### Broad GM Room Session Header
+
+Risk:
+
+- `gm_room_session.h` exposes session control APIs, view DTOs, command-plan
+  ports, prepared-start DTOs and runtime-shaped structs through one public
+  include.
+- Read/control/web-adjacent components can accidentally depend on internal
+  runtime shape instead of narrow views or command ports.
+- Future additions can make the header a compatibility anchor that blocks
+  further `gm_core` isolation.
+
+Target cleanup:
+
+- Split the public surface when a real caller/dependency problem appears:
+  control entrypoints, view DTOs, command-plan port and shared enums/types.
+- Keep `gm_room_session_t` and branch runtime internals out of new external
+  consumers where a projection or prepared DTO is enough.
+- Prefer `scenehub_read_model` DTOs for UI/API serialization.
+
+Tracked by:
+
+- `KNOWN_ISSUES.md` P2 and P6
+- `ARCHITECTURE.md` GM Core Boundary
 
 ### Event Bus Bridge Cycles
 
@@ -117,7 +171,7 @@ Target cleanup:
 
 Tracked by:
 
-- `KNOWN_ISSUES.md` P0 and P2
+- `KNOWN_ISSUES.md` P0 regression coverage and P2
 
 ## Anti-Patterns
 

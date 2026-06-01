@@ -5,23 +5,7 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_timer.h"
-#include "sdkconfig.h"
-
-#ifndef CONFIG_SCENEHUB_MOSFET1_GPIO
-#define CONFIG_SCENEHUB_MOSFET1_GPIO -1
-#endif
-#ifndef CONFIG_SCENEHUB_MOSFET2_GPIO
-#define CONFIG_SCENEHUB_MOSFET2_GPIO -1
-#endif
-#ifndef CONFIG_SCENEHUB_MOSFET3_GPIO
-#define CONFIG_SCENEHUB_MOSFET3_GPIO -1
-#endif
-#ifndef CONFIG_SCENEHUB_MOSFET4_GPIO
-#define CONFIG_SCENEHUB_MOSFET4_GPIO -1
-#endif
-#ifndef CONFIG_SCENEHUB_MOSFET_PWM_FREQ_HZ
-#define CONFIG_SCENEHUB_MOSFET_PWM_FREQ_HZ 1000
-#endif
+#include "scenehub_config.h"
 
 #define HARDWARE_IO_MOSFET_FADE_TICK_US 20000ULL
 

@@ -18,7 +18,6 @@ extern void register_quest_device_tests(void);
 extern void register_room_catalog_tests(void);
 extern void register_room_scenario_tests(void);
 extern void register_gm_core_primitive_tests(void);
-extern void register_gm_api_tests(void);
 extern void register_gm_game_profile_tests(void);
 extern void register_gm_room_session_tests(void);
 extern void register_integration_quest_flow_tests(void);
@@ -195,7 +194,6 @@ static void unity_runner_task(void *arg)
     register_room_catalog_tests();
     register_room_scenario_tests();
     register_gm_core_primitive_tests();
-    register_gm_api_tests();
     register_gm_game_profile_tests();
     register_gm_room_session_tests();
     register_integration_quest_flow_tests();

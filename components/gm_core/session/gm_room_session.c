@@ -1,17 +1,13 @@
 #include "gm_room_session.h"
 #include "gm_room_session_commands_internal.h"
 #include "gm_room_session_internal.h"
-#include "gm_room_session_reactive_internal.h"
-
 #include <string.h>
 
-#include "command_executor.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "quest_common_utils.h"
-#include "hardware_io.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -22,6 +18,8 @@
 static const char *TAG = "gm_room_session";
 
 EXT_RAM_BSS_ATTR gm_room_session_t g_gm_room_sessions[GM_SESSION_MAX_ROOMS];
+EXT_RAM_BSS_ATTR static gm_room_session_prepared_scenario_t
+    s_prepared_scenarios[GM_SESSION_MAX_ROOMS];
 static uint32_t s_generation = 0;
 /* Coalesce repeated per-session invalidations within one sessions-lock transaction. */
 static uint32_t s_sessions_lock_epoch = 0;
@@ -49,7 +47,7 @@ typedef struct {
 } gm_room_session_deferred_flag_event_t;
 
 typedef struct {
-    char cancel_request_ids[GM_ROOM_SESSION_DEFERRED_CANCEL_MAX][COMMAND_EXECUTOR_REQUEST_ID_MAX_LEN];
+    char cancel_request_ids[GM_ROOM_SESSION_DEFERRED_CANCEL_MAX][GM_ROOM_SESSION_COMMAND_REQUEST_ID_MAX_LEN];
     size_t cancel_count;
     gm_room_session_deferred_flag_event_t flag_events[GM_ROOM_SCENARIO_MAX_FLAGS];
     size_t flag_event_count;
@@ -112,15 +110,6 @@ esp_err_t gm_room_session_runtime_post_event_with_wait(const scenehub_event_t *m
     return xQueueSend(s_runtime_queue, &cause, wait_ticks) == pdTRUE
                ? ESP_OK
                : ESP_ERR_TIMEOUT;
-}
-
-void *gm_room_session_heap_alloc(size_t size)
-{
-    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!ptr) {
-        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return ptr;
 }
 
 static esp_err_t sessions_ensure_mutex(void)
@@ -223,7 +212,7 @@ esp_err_t gm_room_session_sessions_lock(void)
 
 void gm_room_session_sessions_unlock(void)
 {
-    char cancel_request_ids[GM_ROOM_SESSION_DEFERRED_CANCEL_MAX][COMMAND_EXECUTOR_REQUEST_ID_MAX_LEN] = {{0}};
+    char cancel_request_ids[GM_ROOM_SESSION_DEFERRED_CANCEL_MAX][GM_ROOM_SESSION_COMMAND_REQUEST_ID_MAX_LEN] = {{0}};
     gm_room_session_deferred_flag_event_t flag_events[GM_ROOM_SCENARIO_MAX_FLAGS] = {0};
     size_t cancel_count = 0;
     size_t flag_event_count = 0;
@@ -245,7 +234,7 @@ void gm_room_session_sessions_unlock(void)
 
     for (size_t i = 0; i < cancel_count; ++i) {
         if (cancel_request_ids[i][0]) {
-            command_executor_cancel_request(cancel_request_ids[i]);
+            gm_room_session_cancel_command_request(cancel_request_ids[i]);
         }
     }
     for (size_t i = 0; i < flag_event_count; ++i) {
@@ -377,7 +366,54 @@ void scenario_clear_running_snapshot_locked(gm_room_session_t *session)
     memset(&session->running_scenario, 0, sizeof(session->running_scenario));
     session->running_scenario_valid = false;
     session->running_scenario_generation = 0;
+    gm_room_session_clear_prepared_scenario_locked(session);
     scenario_clear_branch_runtimes_locked(session);
+}
+
+static gm_room_session_prepared_scenario_t *prepared_scenario_for_session(
+    const gm_room_session_t *session)
+{
+    ptrdiff_t index = 0;
+
+    if (!session) {
+        return NULL;
+    }
+    index = session - g_gm_room_sessions;
+    if (index < 0 || index >= GM_SESSION_MAX_ROOMS) {
+        return NULL;
+    }
+    return &s_prepared_scenarios[index];
+}
+
+void gm_room_session_store_prepared_scenario_locked(
+    gm_room_session_t *session,
+    const gm_room_session_prepared_scenario_t *prepared_scenario)
+{
+    gm_room_session_prepared_scenario_t *dst = prepared_scenario_for_session(session);
+
+    if (!dst) {
+        return;
+    }
+    if (!prepared_scenario) {
+        memset(dst, 0, sizeof(*dst));
+        return;
+    }
+    memcpy(dst, prepared_scenario, sizeof(*dst));
+}
+
+const gm_room_session_prepared_scenario_t *gm_room_session_get_prepared_scenario_locked(
+    const gm_room_session_t *session)
+{
+    return prepared_scenario_for_session(session);
+}
+
+void gm_room_session_clear_prepared_scenario_locked(gm_room_session_t *session)
+{
+    gm_room_session_prepared_scenario_t *prepared = prepared_scenario_for_session(session);
+
+    if (prepared) {
+        memset(prepared, 0, sizeof(*prepared));
+    }
 }
 
 void scenario_clear_flags_locked(gm_room_session_t *session)
@@ -542,7 +578,7 @@ void gm_room_session_scenario_update_summary_from_branches_locked(gm_room_sessio
 
 esp_err_t scenario_init_branch_runtimes_locked(
     gm_room_session_t *session,
-    const gm_room_session_reactive_trigger_resolution_t *trigger_resolutions)
+    const gm_room_session_prepared_scenario_t *prepared_scenario)
 {
     const room_scenario_t *scenario = NULL;
     if (!session || !session->running_scenario_valid) {
@@ -595,25 +631,31 @@ esp_err_t scenario_init_branch_runtimes_locked(
                                       : GM_ROOM_SCENARIO_STOPPED;
             scenario_branch_clear_wait(dst);
             if (src->type == ROOM_SCENARIO_BRANCH_REACTIVE &&
-                src->trigger.kind == ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT) {
-                dst->reactive_trigger_resolved = true;
-                quest_str_copy(dst->reactive_trigger_match.device_id,
-                               sizeof(dst->reactive_trigger_match.device_id),
-                               src->trigger.device_id);
-                quest_str_copy(dst->reactive_trigger_match.event_id,
-                               sizeof(dst->reactive_trigger_match.event_id),
-                               src->trigger.event_id);
-                quest_str_copy(dst->reactive_trigger_match.event_type,
-                               sizeof(dst->reactive_trigger_match.event_type),
-                               src->trigger.event_id);
-                quest_str_copy(dst->reactive_trigger_match.source_id,
-                               sizeof(dst->reactive_trigger_match.source_id),
-                               src->trigger.device_id);
-                if (trigger_resolutions && trigger_resolutions[i].present) {
-                    dst->reactive_trigger_match = trigger_resolutions[i].match;
-                    quest_str_copy(dst->reactive_trigger_alt_event_type,
-                                   sizeof(dst->reactive_trigger_alt_event_type),
-                                   trigger_resolutions[i].alternate_event_type);
+                (src->trigger.kind == ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT ||
+                 src->trigger.kind == ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS ||
+                 src->trigger.kind == ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS)) {
+                const gm_room_session_prepared_event_resolution_t *resolution =
+                    prepared_scenario ? &prepared_scenario->reactive_triggers[i] : NULL;
+                if (resolution && resolution->present &&
+                    resolution->match_count > 0 &&
+                    resolution->match_count <= ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS) {
+                    dst->reactive_trigger_resolved = true;
+                    dst->reactive_trigger_event_count = resolution->match_count;
+                    for (uint8_t j = 0; j < resolution->match_count; ++j) {
+                        uint16_t event_ref_index = resolution->event_ref_indices[j];
+                        if (event_ref_index >= prepared_scenario->event_ref_count ||
+                            event_ref_index >= GM_ROOM_SESSION_PREPARED_EVENT_REF_MAX) {
+                            return ESP_ERR_INVALID_ARG;
+                        }
+                        dst->reactive_trigger_matches[j] =
+                            prepared_scenario->event_refs[event_ref_index].match;
+                        quest_str_copy(
+                            dst->reactive_trigger_alt_event_types[j],
+                            sizeof(dst->reactive_trigger_alt_event_types[j]),
+                            prepared_scenario->event_refs[event_ref_index].alternate_event_type);
+                    }
+                } else {
+                    return ESP_ERR_INVALID_ARG;
                 }
             }
         }
@@ -851,6 +893,7 @@ gm_room_session_t *alloc_session_locked(const char *room_id)
     for (size_t i = 0; i < GM_SESSION_MAX_ROOMS; ++i) {
         if (!g_gm_room_sessions[i].in_use) {
             memset(&g_gm_room_sessions[i], 0, sizeof(g_gm_room_sessions[i]));
+            memset(&s_prepared_scenarios[i], 0, sizeof(s_prepared_scenarios[i]));
             g_gm_room_sessions[i].in_use = true;
             quest_str_copy(g_gm_room_sessions[i].room_id, sizeof(g_gm_room_sessions[i].room_id), room_id);
             gm_room_session_mark_session_changed_locked(&g_gm_room_sessions[i]);
@@ -869,6 +912,16 @@ esp_err_t gm_room_session_init(void)
     if (err != ESP_OK) {
         return err;
     }
+    gm_room_session_reset_all();
+    return ESP_OK;
+}
+
+esp_err_t gm_room_session_start_async_runtime(void)
+{
+    esp_err_t err = sessions_ensure_mutex();
+    if (err != ESP_OK) {
+        return err;
+    }
     err = gm_room_session_ensure_runtime_worker();
     if (err != ESP_OK) {
         return err;
@@ -877,17 +930,12 @@ esp_err_t gm_room_session_init(void)
     if (err != ESP_OK) {
         return err;
     }
-    err = event_bus_register_handler(gm_room_session_event_handler);
-    if (err != ESP_OK) {
-        return err;
-    }
-    gm_room_session_reset_all();
     return ESP_OK;
 }
 
 void gm_room_session_reset_all(void)
 {
-    command_executor_reset_pending();
+    gm_room_session_reset_pending_commands();
     if (s_event_queue) {
         (void)xQueueReset(s_event_queue);
     }
@@ -896,12 +944,14 @@ void gm_room_session_reset_all(void)
     }
     if (gm_room_session_sessions_lock() == ESP_OK) {
         memset(g_gm_room_sessions, 0, sizeof(g_gm_room_sessions));
+        memset(s_prepared_scenarios, 0, sizeof(s_prepared_scenarios));
         s_last_changed_room_id[0] = '\0';
         s_generation++;
         gm_room_session_sessions_unlock();
         return;
     }
     memset(g_gm_room_sessions, 0, sizeof(g_gm_room_sessions));
+    memset(s_prepared_scenarios, 0, sizeof(s_prepared_scenarios));
     s_last_changed_room_id[0] = '\0';
     s_generation++;
 }

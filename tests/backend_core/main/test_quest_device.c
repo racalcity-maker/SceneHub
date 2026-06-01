@@ -270,7 +270,9 @@ static void test_quest_device_compact_manifest_event_templates_are_resolvable(vo
                               "\"manifest_version\":2,\"format\":\"compact_resources\","
                               "\"node_kind\":\"virtual_uid_gate\","
                               "\"capability_contract\":\"scenehub.node.compact.v1\","
-                              "\"resources\":{\"relays\":[],\"mosfets\":[],\"inputs\":[],\"outputs\":[],\"led_strips\":[]},"
+                              "\"resources\":{\"relays\":[],\"mosfets\":[],"
+                              "\"inputs\":[{\"channel\":1,\"label\":\"UID reader\",\"event\":\"uid.sequence_valid\"}],"
+                              "\"outputs\":[],\"led_strips\":[]},"
                               "\"command_templates\":[],"
                               "\"event_templates\":[{\"id\":\"uid.sequence_valid\","
                               "\"label\":\"UID sequence valid\",\"source\":\"inputs\","
@@ -290,6 +292,8 @@ static void test_quest_device_compact_manifest_event_templates_are_resolvable(vo
     TEST_ASSERT_EQUAL_STRING("inputs", event.capability);
     TEST_ASSERT_EQUAL_STRING("uid.sequence_valid", event.event);
     TEST_ASSERT_EQUAL_STRING("", event.match_json);
+    memset(&event, 0, sizeof(event));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, quest_device_get_event("node", "uid.sequence_valid@1", &event));
     cJSON_Delete(root);
 }
 

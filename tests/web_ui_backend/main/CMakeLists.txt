@@ -13,7 +13,7 @@ set(TEST_SRCS
 idf_component_register(
     SRCS ${TEST_SRCS}
     INCLUDE_DIRS "." "${TEST_SHARED}" "../../../components/web_ui" "../../../components/audio_player" "../../../components/command_executor" "../../../components/device_control_ingest" "../../../components/gm_core/session"
-    PRIV_REQUIRES web_ui audio_player command_executor ota_manager gm_core room_catalog orchestrator_core scenehub_read_model event_bus service_status config_store device_control_ingest room_scenario quest_device scenehub_scenario_validation unity json
+    PRIV_REQUIRES web_ui audio_player command_executor ota_manager gm_core gm_profile_store room_catalog orchestrator_core scenehub_control scenehub_read_model event_bus service_status config_store device_control_ingest room_scenario quest_device scenehub_scenario_validation unity json
 )
 
 target_link_libraries(${COMPONENT_LIB} INTERFACE

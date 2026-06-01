@@ -1,8 +1,28 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 function questDeviceDisplayName(dev){return dev&&(dev.name||dev.display_name||dev.id)||'Device';}
 function observedDisplayName(item){if(!item)return 'Device';const reg=observedRegistration(item.device_id);return reg&&(reg.name||reg.device_id)||item.name||item.display_name||item.device_id||'Device';}
-function questDeviceHealth(dev){return dev&&(dev.health||'unknown')||'unknown';}
-function questDeviceStatusText(dev){return dev&&(dev.status_text||dev.state_text||'unknown')||'missing device';}
+function questDeviceObserved(dev){return observedByClientId(dev&&((dev.client_id||dev.id)||''));}
+function questDeviceHealth(dev){
+const observed=questDeviceObserved(dev);
+if(observed){
+const connectivity=String(observed.connectivity||'').toLowerCase();
+const health=String(observed.health||'').toLowerCase();
+if(connectivity==='offline')return 'fault';
+if(health)return health;
+if(connectivity==='online')return 'ok';
+}
+return dev&&(dev.health||'unknown')||'unknown';
+}
+function questDeviceStatusText(dev){
+const observed=questDeviceObserved(dev);
+if(observed){
+const state=String(observed.state||'').trim();
+if(state)return state;
+const connectivity=String(observed.connectivity||'').trim();
+if(connectivity)return connectivity;
+}
+return dev&&(dev.status_text||dev.state_text||'unknown')||'missing device';
+}
 function questDeviceCompactSummary(dev){return dev&&dev.manifest_summary&&dev.manifest_summary.compact?dev.manifest_summary:null;}
 function questDeviceCommandList(dev){return typeof compactCommandsForDevice==='function'?compactCommandsForDevice(dev):Array.isArray(dev&&dev.commands)?dev.commands:[];}
 function questDeviceEventList(dev){return typeof compactEventsForDevice==='function'?compactEventsForDevice(dev):Array.isArray(dev&&dev.events)?dev.events:[];}

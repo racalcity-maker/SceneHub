@@ -4,9 +4,12 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "gm_api.h"
+#include "esp_log.h"
+#include "gm_room_session.h"
 #include "room_scenario.h"
 #include "scenehub_scenario_validation.h"
+
+static const char *TAG = "scenehub_scenarios";
 
 static const cJSON *scenehub_control_scenario_payload_object(const cJSON *payload)
 {
@@ -17,18 +20,158 @@ static const cJSON *scenehub_control_scenario_payload_object(const cJSON *payloa
     return payload;
 }
 
+static esp_err_t scenehub_control_load_selected_scenario(const char *room_id,
+                                                         room_scenario_t *scenario,
+                                                         uint32_t *out_generation)
+{
+    gm_room_session_selected_view_t selected = {0};
+    esp_err_t err = ESP_OK;
+
+    if (!room_id || !room_id[0] || !scenario) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(scenario, 0, sizeof(*scenario));
+    err = gm_room_session_get_selected_view(room_id, &selected);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!selected.selected_scenario_id[0]) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    err = room_scenario_get(selected.selected_scenario_id, scenario);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (strcmp(scenario->room_id, room_id) != 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (out_generation) {
+        *out_generation = room_scenario_generation();
+    }
+    return ESP_OK;
+}
+
+static void scenehub_control_scenario_dispatch_from_executor(
+    gm_room_session_command_dispatch_result_t *out,
+    const command_executor_dispatch_t *in)
+{
+    if (!out || !in) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    out->result_required = in->result_required;
+    out->timeout_ms = in->timeout_ms;
+    scenehub_control_copy(out->request_id, sizeof(out->request_id), in->request_id);
+    scenehub_control_copy(out->source_id, sizeof(out->source_id), in->source_id);
+    scenehub_control_copy(out->command, sizeof(out->command), in->command);
+}
+
+void scenehub_control_register_session_command_dispatcher(void)
+{
+    gm_room_session_set_command_plan_dispatcher(scenehub_control_dispatch_session_command_plan);
+    gm_room_session_set_command_lifecycle_hooks(command_executor_on_event,
+                                                command_executor_poll_timeouts,
+                                                command_executor_next_timeout_deadline_ms,
+                                                command_executor_cancel_request,
+                                                command_executor_reset_pending);
+}
+
+esp_err_t scenehub_control_dispatch_session_command_plan(
+    const char *source,
+    gm_room_session_command_plan_t *plan)
+{
+    (void)source;
+    scenehub_control_register_session_command_dispatcher();
+    while (gm_room_session_command_plan_present(plan)) {
+        room_scenario_device_command_t command = {0};
+        command_executor_dispatch_t executor_dispatch = {0};
+        gm_room_session_command_dispatch_result_t dispatch = {0};
+        char error[96] = {0};
+        const char *result_required_error = NULL;
+        bool has_more = false;
+        esp_err_t err = ESP_OK;
+
+        err = gm_room_session_command_plan_next_command(plan,
+                                                        &command,
+                                                        &has_more,
+                                                        error,
+                                                        sizeof(error));
+        if (err != ESP_OK) {
+            if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_STATE) {
+                gm_room_session_command_plan_clear(plan);
+                return ESP_OK;
+            }
+            (void)gm_room_session_command_plan_fail(plan,
+                                                    error[0] ? error : "device_command_failed");
+            return err;
+        }
+
+        if (plan->kind == GM_ROOM_SESSION_COMMAND_PLAN_SCENARIO_STEP_GROUP) {
+            result_required_error = "device_command_group_result_required_unsupported";
+        } else if (plan->kind == GM_ROOM_SESSION_COMMAND_PLAN_REACTIVE_ACTION_GROUP) {
+            result_required_error = "reactive_group_result_required_unsupported";
+        }
+        err = scenehub_control_dispatch_scenario_command(command.device_id,
+                                                         command.command_id,
+                                                         command.params_json,
+                                                         result_required_error,
+                                                         &executor_dispatch,
+                                                         error,
+                                                         sizeof(error));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG,
+                     "scenario command failed: device=%s command=%s err=%s code=%s",
+                     command.device_id,
+                     command.command_id,
+                     esp_err_to_name(err),
+                     error[0] ? error : "-");
+            (void)gm_room_session_command_plan_fail(plan, error);
+            return err;
+        }
+
+        scenehub_control_scenario_dispatch_from_executor(&dispatch, &executor_dispatch);
+        err = gm_room_session_command_plan_apply_dispatch_result(plan, &dispatch, has_more);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
 esp_err_t scenehub_control_select_scenario(const char *source,
                                            const char *room_id,
                                            const char *scenario_id,
                                            scenehub_control_result_t *out_result)
 {
+    room_scenario_t *scenario = NULL;
     (void)source;
     esp_err_t err = scenehub_control_prepare_result(room_id, "scenario_select", out_result);
     if (err != ESP_OK) {
         return err;
     }
+    if (!room_id || !room_id[0] || !scenario_id || !scenario_id[0]) {
+        scenehub_control_fill_common_error(out_result, ESP_ERR_INVALID_ARG);
+        return ESP_OK;
+    }
+    err = scenehub_control_require_room(room_id);
+    if (err == ESP_OK) {
+        err = room_scenario_acquire_scratch(&scenario, NULL);
+    }
+    if (err == ESP_OK) {
+        memset(scenario, 0, sizeof(*scenario));
+        err = room_scenario_get(scenario_id, scenario);
+    }
+    if (err == ESP_OK && strcmp(scenario->room_id, room_id) != 0) {
+        err = ESP_ERR_INVALID_STATE;
+    }
+    if (err == ESP_OK) {
+        err = gm_room_session_select_scenario_prepared(room_id, scenario);
+    }
+    if (scenario) {
+        room_scenario_release_scratch();
+    }
     return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  gm_api_select_scenario(room_id, scenario_id),
+                                                                  err,
                                                                   SCENEHUB_STATE_SLICE_ROOM_RUNTIME,
                                                                   room_id,
                                                                   "scenario_select");
@@ -38,13 +181,43 @@ esp_err_t scenehub_control_scenario_start(const char *source,
                                           const char *room_id,
                                           scenehub_control_result_t *out_result)
 {
-    (void)source;
+    room_scenario_t *scenario = NULL;
+    const gm_room_session_prepared_scenario_t *prepared_scenario = NULL;
+    gm_room_session_command_plan_t plan = {0};
+    uint32_t scenario_generation = 0;
     esp_err_t err = scenehub_control_prepare_result(room_id, "scenario_start", out_result);
     if (err != ESP_OK) {
         return err;
     }
+    scenehub_control_register_session_command_dispatcher();
+    err = scenehub_control_require_room(room_id);
+    if (err == ESP_OK) {
+        err = room_scenario_acquire_scratch(&scenario, NULL);
+    }
+    if (err == ESP_OK) {
+        err = scenehub_control_load_selected_scenario(room_id, scenario, &scenario_generation);
+    }
+    if (err == ESP_OK) {
+        err = scenehub_control_acquire_prepared_session_scenario(scenario, &prepared_scenario);
+    }
+    if (err == ESP_OK) {
+        err = gm_room_session_scenario_start_prepared_plan(room_id,
+                                                           scenario,
+                                                           prepared_scenario,
+                                                           scenario_generation,
+                                                           &plan);
+    }
+    if (prepared_scenario) {
+        scenehub_control_release_prepared_session_scenario();
+    }
+    if (scenario) {
+        room_scenario_release_scratch();
+    }
+    if (err == ESP_OK) {
+        err = scenehub_control_dispatch_session_command_plan(source, &plan);
+    }
     return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  gm_api_scenario_start(room_id),
+                                                                  err,
                                                                   SCENEHUB_STATE_SLICE_ROOM_RUNTIME,
                                                                   room_id,
                                                                   "scenario_start");
@@ -59,8 +232,12 @@ esp_err_t scenehub_control_scenario_stop(const char *source,
     if (err != ESP_OK) {
         return err;
     }
+    err = scenehub_control_require_room(room_id);
+    if (err == ESP_OK) {
+        err = gm_room_session_scenario_stop(room_id);
+    }
     return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  gm_api_scenario_stop(room_id),
+                                                                  err,
                                                                   SCENEHUB_STATE_SLICE_ROOM_RUNTIME,
                                                                   room_id,
                                                                   "scenario_stop");
@@ -71,15 +248,20 @@ esp_err_t scenehub_control_scenario_next(const char *source,
                                          const char *branch_id,
                                          scenehub_control_result_t *out_result)
 {
-    (void)source;
+    gm_room_session_command_plan_t plan = {0};
     esp_err_t err = scenehub_control_prepare_result(room_id, "scenario_next", out_result);
     if (err != ESP_OK) {
         return err;
     }
-    if (branch_id && branch_id[0]) {
-        err = gm_api_scenario_next_branch(room_id, branch_id);
-    } else {
-        err = gm_api_scenario_next(room_id);
+    scenehub_control_register_session_command_dispatcher();
+    err = scenehub_control_require_room(room_id);
+    if (err == ESP_OK && branch_id && branch_id[0]) {
+        err = gm_room_session_scenario_next_branch_plan(room_id, branch_id, &plan);
+    } else if (err == ESP_OK) {
+        err = gm_room_session_scenario_next_plan(room_id, &plan);
+    }
+    if (err == ESP_OK) {
+        err = scenehub_control_dispatch_session_command_plan(source, &plan);
     }
     return scenehub_control_finalize_api_result_with_invalidation(out_result,
                                                                   err,
@@ -92,13 +274,21 @@ esp_err_t scenehub_control_scenario_approve(const char *source,
                                             const char *room_id,
                                             scenehub_control_result_t *out_result)
 {
-    (void)source;
+    gm_room_session_command_plan_t plan = {0};
     esp_err_t err = scenehub_control_prepare_result(room_id, "scenario_approve", out_result);
     if (err != ESP_OK) {
         return err;
     }
+    scenehub_control_register_session_command_dispatcher();
+    err = scenehub_control_require_room(room_id);
+    if (err == ESP_OK) {
+        err = gm_room_session_scenario_approve_plan(room_id, &plan);
+    }
+    if (err == ESP_OK) {
+        err = scenehub_control_dispatch_session_command_plan(source, &plan);
+    }
     return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  gm_api_scenario_approve(room_id),
+                                                                  err,
                                                                   SCENEHUB_STATE_SLICE_ROOM_RUNTIME,
                                                                   room_id,
                                                                   "scenario_approve");
@@ -113,8 +303,12 @@ esp_err_t scenehub_control_scenario_reset(const char *source,
     if (err != ESP_OK) {
         return err;
     }
+    err = scenehub_control_require_room(room_id);
+    if (err == ESP_OK) {
+        err = gm_room_session_scenario_reset(room_id);
+    }
     return scenehub_control_finalize_api_result_with_invalidation(out_result,
-                                                                  gm_api_scenario_reset(room_id),
+                                                                  err,
                                                                   SCENEHUB_STATE_SLICE_ROOM_RUNTIME,
                                                                   room_id,
                                                                   "scenario_reset");

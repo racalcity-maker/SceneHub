@@ -477,6 +477,7 @@ if((currentView!=='room'||currentRoomId!==nextRoomId)&&!confirmDiscardEditorChan
 currentRoomId=nextRoomId;
 currentView='room';
 roomTab='control';
+roomProgressTab='flow';
 await loadGMViewData(false);
 await loadGMRuntimeOnly(currentRoomId,false);
 });
@@ -506,6 +507,11 @@ gmRegisterAction('room.tab',async el=>{
 if(!confirmDiscardEditorChanges())return;
 if((el.dataset.scope||'')==='room')roomTab=el.dataset.tab||'overview';
 render();
+});
+
+gmRegisterAction('room.progress.tab',async el=>{
+roomProgressTab=el.dataset.tab||'flow';
+if(!refreshCurrentRoomProgressTab())render();
 });
 
 gmRegisterAction('room.scenario.runtime',async el=>{
@@ -607,7 +613,7 @@ applyScenarioBranchAction(el.dataset.op||'',Number.isFinite(index)?index:0);
 });
 
 gmRegisterAction('scenario.reactive_v2',async el=>{
-applyReactiveV2Action(el.dataset.op||'',el.dataset.variantIndex,el.dataset.actionIndex||el.dataset.guardIndex,el.dataset.actionType||'');
+applyReactiveV2Action(el.dataset.op||'',el.dataset.variantIndex,el.dataset.actionIndex||el.dataset.guardIndex,el.dataset.actionType||el.dataset.triggerEventIndex||el.dataset.eventIndex||el.dataset.flagIndex||'');
 });
 
 gmRegisterAction('scenario.step.help',async el=>{
@@ -617,7 +623,7 @@ alert(scenarioStepHelpText(el.dataset.stepType||''));
 gmRegisterAction('scenario.step',async el=>{
 const v2ActionEl=el.closest('[data-v2-action]');
 if(v2ActionEl){
-applyReactiveV2Action(el.dataset.op||'',v2ActionEl.dataset.variantIndex,v2ActionEl.dataset.v2Action,el.dataset.commandIndex||'');
+applyReactiveV2Action(el.dataset.op||'',v2ActionEl.dataset.variantIndex,v2ActionEl.dataset.v2Action,el.dataset.commandIndex||el.dataset.eventIndex||el.dataset.flagIndex||'');
 return;
 }
 const stepEl=el.closest('[data-scenario-step]');
@@ -792,6 +798,7 @@ audioFiles:{loaded:false,loading:false,scheduled:false,error:'',items:[]}
 ui:{
 currentRoomScenarioId:{},
 currentRoomProfileId:{},
+roomProgressTab:'flow',
 deviceFilterRoom:'',
 observedFilter:'all',
 currentView:'rooms',
@@ -844,6 +851,7 @@ gmAudioFiles:{get(){return GM.data.audioFiles;},set(v){GM.data.audioFiles=v||{lo
 gmSession:{get(){return GM.session.current;},set(v){GM.session.current=v||{role:'user',username:''};}},
 currentRoomScenarioId:{get(){return GM.ui.currentRoomScenarioId;},set(v){GM.ui.currentRoomScenarioId=v||{};}},
 currentRoomProfileId:{get(){return GM.ui.currentRoomProfileId;},set(v){GM.ui.currentRoomProfileId=v||{};}},
+roomProgressTab:{get(){return GM.ui.roomProgressTab;},set(v){GM.ui.roomProgressTab=v==='reactive'?'reactive':'flow';}},
 profileEditor:{get(){return GM.editors.profile;},set(v){GM.editors.profile=v||{};}},
 scenarioEditor:{get(){return GM.editors.scenario;},set(v){GM.editors.scenario=v||{};}},
 questDeviceEditor:{get(){return GM.editors.questDevice;},set(v){GM.editors.questDevice=v||{};}},
@@ -986,6 +994,24 @@ return false;
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 function scenarioById(roomId,scenarioId){return roomScenarioRuntimeProjectionById(roomId,scenarioId);}
 function roomSelectedScenarioObject(room){if(!room)return null;const profiles=roomProfiles(room.room_id);const profileId=roomSelectedProfileId(room.room_id)||room.selected_profile_id||'';const profile=profiles.find(p=>p.id===profileId)||null;const preferred=room.running_scenario_id||room.selected_profile_scenario_id||(profile&&profile.scenario_id)||room.selected_scenario_id||'';return scenarioById(room.room_id,preferred)||scenarioById(room.room_id,room.selected_scenario_id)||null;}
+function scenarioSourceBranchById(room,branchId){
+const scenario=roomSelectedScenarioObject(room);
+const branches=Array.isArray(scenario&&scenario.branches)?scenario.branches:[];
+if(!branchId)return null;
+return branches.find(branch=>String(branch&&branch.id||'')===String(branchId))||null;
+}
+function scenarioMergeRuntimeBranch(room,branch,index){
+const source=scenarioSourceBranchById(room,branch&&branch.id||'');
+if(!source)return branch;
+return {
+...JSON.parse(JSON.stringify(source)),
+...branch,
+trigger:branch&&branch.trigger?branch.trigger:(source&&source.trigger)||null,
+policy:branch&&branch.policy?branch.policy:(source&&source.policy)||null,
+variants:Array.isArray(source&&source.variants)?JSON.parse(JSON.stringify(source.variants)):[],
+steps:Array.isArray(branch&&branch.steps)&&branch.steps.length?branch.steps:(Array.isArray(source&&source.steps)?JSON.parse(JSON.stringify(source.steps)):[])
+};
+}
 function scenarioBranchDisplaySteps(branch){
 if(!branch)return [];
 const steps=Array.isArray(branch.steps)?branch.steps:[];
@@ -1087,13 +1113,108 @@ const trigger=branch&&branch.trigger&&typeof branch.trigger==='object'?branch.tr
 const kind=String(trigger.kind||'device_event').toLowerCase();
 if(kind==='device_event'){
 const device=deviceDisplayName(trigger.device_id||'');
-const event=questDeviceEventName(trigger.device_id||'',trigger.event_id||'');
+const event=questDeviceEventName(trigger.device_id||'',normalizeScenarioEventIdValue(trigger.event_id||''));
 return compactText(`${device}: ${event}`,40);
 }
 if(kind==='flag_changed')return compactText(`Flag: ${trigger.flag_name||'flag'}`,36);
 if(kind==='operator_event')return compactText(`Operator: ${trigger.event_id||trigger.operator_event||'event'}`,36);
 if(kind==='runtime_event')return compactText(`Runtime: ${trigger.event_id||trigger.runtime_event||'event'}`,36);
 return compactText(branch&&branch.name||'Reactive trigger',36);
+}
+function scenarioReactiveTriggerIcon(branch){
+const trigger=branch&&branch.trigger&&typeof branch.trigger==='object'?branch.trigger:{};
+const kind=String(trigger.kind||'device_event').toLowerCase();
+if(kind==='device_event')return '&#128276;';
+if(kind==='flag_changed')return '&#9873;';
+if(kind==='operator_event')return '&#9997;';
+if(kind==='runtime_event')return '&#9881;';
+return '&#9881;';
+}
+function scenarioReactivePolicyLabel(branch,branchRuntime){
+const policy=String(branch&&branch.policy&&branch.policy.mode||'').toLowerCase();
+if(policy==='escalate')return 'escalate';
+if(policy==='rotate')return 'rotate';
+if(policy==='random')return 'random';
+if(policy==='single')return 'single';
+const maxFire=Number(branchRuntime&&branchRuntime.max_fire_count)||0;
+if(maxFire===1||branch&&branch.run_once)return 'single';
+return 'reaction';
+}
+function scenarioReactiveVariantLabel(branch,branchRuntime){
+const policy=String(branch&&branch.policy&&branch.policy.mode||'').toLowerCase();
+const variantIndex=scenarioReactiveCurrentVariantIndex(branch,branchRuntime);
+if(!Number.isFinite(variantIndex)||variantIndex<0)return '';
+if(policy==='escalate')return `Level ${variantIndex+1}`;
+if(policy==='rotate'||policy==='random')return `Variant ${variantIndex+1}`;
+return '';
+}
+function scenarioReactiveDisplaySteps(branch,branchRuntime){
+const variants=Array.isArray(branch&&branch.variants)?branch.variants:[];
+if(!variants.length)return Array.isArray(branch&&branch.steps)?branch.steps:[];
+const variantIndexRaw=Number(branchRuntime&&branchRuntime.last_variant_index);
+const variantIndex=(Number.isFinite(variantIndexRaw)&&variantIndexRaw>=0&&variantIndexRaw<variants.length)?variantIndexRaw:0;
+const variant=variants[variantIndex]||variants[0]||null;
+return Array.isArray(variant&&variant.actions)?variant.actions:[];
+}
+function scenarioReactiveVariants(branch){
+const variants=Array.isArray(branch&&branch.variants)?branch.variants:[];
+if(variants.length)return variants;
+const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
+return steps.length?[{actions:steps}]:[];
+}
+function scenarioReactiveCurrentVariantIndex(branch,branchRuntime){
+const variants=scenarioReactiveVariants(branch);
+if(!variants.length)return -1;
+const policy=String(branch&&branch.policy&&branch.policy.mode||'').toLowerCase();
+const raw=Number(branchRuntime&&branchRuntime.last_variant_index);
+if(policy==='escalate'){
+if(Number.isFinite(raw)&&raw>=0&&raw<variants.length)return raw;
+const fireCount=Math.max(0,Number(branchRuntime&&branchRuntime.fire_count)||0);
+if(fireCount>0)return Math.max(0,Math.min(variants.length-1,fireCount-1));
+return -1;
+}
+const state=String(branchRuntime&&branchRuntime.state||'').toLowerCase();
+const waitType=String(branchRuntime&&branchRuntime.wait_type||'').toLowerCase();
+if(Number.isFinite(raw)&&raw>=0&&raw<variants.length){
+if(branchRuntime&&branchRuntime.fired_once)return raw;
+if(state&&!(state==='waiting'&&(!waitType||waitType==='none')))return raw;
+}
+return -1;
+}
+function scenarioReactiveVariantTitle(branch,variantIndex){
+const policy=String(branch&&branch.policy&&branch.policy.mode||'').toLowerCase();
+if(policy==='escalate')return `Level ${variantIndex+1}`;
+if(policy==='rotate'||policy==='random')return `Variant ${variantIndex+1}`;
+return variantIndex===0?'Actions':`Variant ${variantIndex+1}`;
+}
+function scenarioReactiveMetaParts(branch,branchRuntime){
+const parts=[];
+const policy=scenarioReactivePolicyLabel(branch,branchRuntime);
+if(policy&&policy!=='reaction')parts.push(policy);
+const variantLabel=scenarioReactiveVariantLabel(branch,branchRuntime);
+if(variantLabel)parts.push(variantLabel);
+if(branchRuntime&&branchRuntime.pending_trigger)parts.push('queued');
+const fireCount=Number(branchRuntime&&branchRuntime.fire_count)||0;
+const maxFire=Number(branchRuntime&&branchRuntime.max_fire_count)||0;
+if(maxFire>0)parts.push(`${fireCount} / ${maxFire} fires`);
+return parts;
+}
+function scenarioReactiveCurrentText(branch,branchRuntime){
+const waitType=String(branchRuntime&&branchRuntime.wait_type||'').toLowerCase();
+const waitSummary=String(branchRuntime&&branchRuntime.wait_summary||branch&&branch.wait_summary||'').trim();
+const currentText=String(branchRuntime&&branchRuntime.current_step_text||branch&&branch.current_step_text||'').trim();
+if(waitType&&waitType!=='none'&&waitSummary)return waitSummary;
+if(currentText)return currentText;
+if(branchRuntime&&String(branchRuntime.state||'').toLowerCase()==='idle')return 'Ready';
+if(branchRuntime&&String(branchRuntime.state||'').toLowerCase()==='waiting'&&waitSummary)return waitSummary;
+return '';
+}
+function scenarioFlagNamesText(flags,maxLen){
+const list=(Array.isArray(flags)?flags:[])
+.map(flag=>String(flag&&((flag.flag_name!==undefined?flag.flag_name:flag.name)||'')).trim())
+.filter(Boolean);
+if(!list.length)return 'flag';
+return compactText(list.join(', '),maxLen||32);
 }
 function scenarioProgressStepCompactText(step){
 if(!step)return 'Step';
@@ -1114,12 +1235,12 @@ if(type==='WAIT_TIME')return compactText(waitTimeLabel(step.duration_ms),20);
 if(type==='OPERATOR_APPROVAL')return compactText(step.prompt||step.operator_prompt||step.label||'Operator approval',34);
 if(type==='SHOW_OPERATOR_MESSAGE')return compactText(step.message||'Operator message',34);
 if(type==='SET_FLAG')return compactText(`Set ${step.flag_name||'flag'}`,24);
-if(type==='WAIT_FLAGS')return compactText(`Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`,24);
+if(type==='WAIT_FLAGS')return compactText(`Wait: ${scenarioFlagNamesText(step.flags,30)}`,34);
 if(type==='END_GAME')return 'End game';
 if(typeof scenarioStepSummaryText==='function')return compactText(scenarioStepSummaryText(step),40);
 return compactText(scenarioStepText(step),40);
 }
-function scenarioProgressBranches(room,scenarioOrSteps){if(room&&Array.isArray(room.scenario_branches)&&room.scenario_branches.some(branch=>Array.isArray(branch&&branch.steps)&&branch.steps.length))return room.scenario_branches.map((branch,index)=>({id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type:String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal',enabled:branch.active!==false,required_for_completion:branch.required_for_completion!==false,trigger:branch.trigger||null,current_step_text:branch.current_step_text||'',wait_summary:branch.wait_summary||'',steps:Array.isArray(branch.steps)?branch.steps:[]}));if(scenarioOrSteps&&Array.isArray(scenarioOrSteps.branches)&&scenarioOrSteps.branches.length)return scenarioOrSteps.branches.map((branch,index)=>{const type=String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal';return {id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type,enabled:branch.enabled!==false,required_for_completion:type==='normal'&&branch.required_for_completion!==false,trigger:branch.trigger||null,steps:scenarioBranchDisplaySteps(branch)};});const steps=Array.isArray(scenarioOrSteps)?scenarioOrSteps:(scenarioOrSteps&&Array.isArray(scenarioOrSteps.steps)?scenarioOrSteps.steps:[]);return steps.length?[{id:'main',name:'Main',type:'normal',enabled:true,required_for_completion:true,steps}]:[];}
+function scenarioProgressBranches(room,scenarioOrSteps){if(room&&Array.isArray(room.scenario_branches)&&room.scenario_branches.some(branch=>Array.isArray(branch&&branch.steps)&&branch.steps.length))return room.scenario_branches.map((branch,index)=>{const merged=scenarioMergeRuntimeBranch(room,branch,index);return {id:merged.id||`branch_${index+1}`,name:merged.name||`Branch ${index+1}`,type:String(merged.type||'normal').toLowerCase()==='reactive'?'reactive':'normal',enabled:merged.active!==false,required_for_completion:merged.required_for_completion!==false,trigger:merged.trigger||null,policy:merged.policy||null,current_step_text:merged.current_step_text||'',wait_summary:merged.wait_summary||'',variants:Array.isArray(merged.variants)?merged.variants:[],steps:Array.isArray(merged.steps)?merged.steps:[]};});if(scenarioOrSteps&&Array.isArray(scenarioOrSteps.branches)&&scenarioOrSteps.branches.length)return scenarioOrSteps.branches.map((branch,index)=>{const type=String(branch.type||'normal').toLowerCase()==='reactive'?'reactive':'normal';return {id:branch.id||`branch_${index+1}`,name:branch.name||`Branch ${index+1}`,type,enabled:branch.enabled!==false,required_for_completion:type==='normal'&&branch.required_for_completion!==false,trigger:branch.trigger||null,policy:branch.policy||null,variants:Array.isArray(branch.variants)?branch.variants:[],steps:scenarioBranchDisplaySteps(branch)};});const steps=Array.isArray(scenarioOrSteps)?scenarioOrSteps:(scenarioOrSteps&&Array.isArray(scenarioOrSteps.steps)?scenarioOrSteps.steps:[]);return steps.length?[{id:'main',name:'Main',type:'normal',enabled:true,required_for_completion:true,steps}]:[];}
 function scenarioProgressBranchRuntime(room,branch,index){const runtimes=Array.isArray(room&&room.scenario_branches)?room.scenario_branches:[];const byIndex=runtimes.find(item=>Number(item.index)===index);if(byIndex)return byIndex;const branchId=branch&&branch.id||'';if(branchId)return runtimes.find(item=>(item.id||'')===branchId)||null;return null;}
 function renderScenarioProgressStep(room,step,index,globalIndex,branchRuntime){const disabled=step&&step.enabled===false;const state=disabled?'disabled':scenarioProgressBranchState(room,branchRuntime,index,globalIndex);const visual=typeof scenarioStepVisualType==='function'?scenarioStepVisualType(step):'command';const icon=typeof scenarioStepIcon==='function'?scenarioStepIcon(step):scenarioProgressIcon(state);const text=scenarioProgressStepCompactText(step);const fullText=(typeof scenarioStepSummaryText==='function'?scenarioStepSummaryText(step):scenarioStepText(step))||text;return `<div class='scenario-progress-step ${state} scenario-step-${esc(visual)}' title='${esc(fullText)}'><span class='scenario-progress-index'>${esc(index+1)}.</span><span class='scenario-step-icon scenario-progress-type-icon'>${icon}</span><span class='scenario-progress-text'>${esc(text)}</span>${disabled?`<span class='badge'>disabled</span>`:''}</div>`;}
 function scenarioProgressBranchDomId(room,item){
@@ -1133,7 +1254,7 @@ const room=item&&item.room||null;
 const branch=item&&item.branch||{};
 const branchRuntime=item&&item.runtime||null;
 const start=Number(item&&item.start)||0;
-const steps=Array.isArray(branch.steps)?branch.steps:[];
+const steps=branch.type==='reactive'?scenarioReactiveDisplaySteps(branch,branchRuntime):(Array.isArray(branch.steps)?branch.steps:[]);
 const stepStates=steps.map((step,stepIndex)=>{
 const disabled=step&&step.enabled===false;
 const state=disabled?'disabled':scenarioProgressBranchState(room,branchRuntime,stepIndex,start+stepIndex);
@@ -1149,26 +1270,49 @@ String(branch.name||''),
 String(branch.type||'normal'),
 branch.enabled===false?'0':'1',
 branch.required_for_completion===false?'0':'1',
+String(branch&&branch.policy&&branch.policy.mode||''),
 String(branchRuntime&&branchRuntime.state||''),
 String(branchRuntime&&branchRuntime.wait_type||''),
 String(branchRuntime&&branchRuntime.wait_summary||branch.wait_summary||''),
 String(branchRuntime&&branchRuntime.current_step_text||branch.current_step_text||''),
+String(branchRuntime&&branchRuntime.current_step_state||''),
 String(branchRuntime&&((branchRuntime.done_steps??branchRuntime.completed_step_count)||0)||0),
 String(branchRuntime&&branchRuntime.failed_step_index!==undefined&&branchRuntime.failed_step_index!==null?branchRuntime.failed_step_index:''),
 String(branchRuntime&&branchRuntime.current_step_local_index!==undefined&&branchRuntime.current_step_local_index!==null?branchRuntime.current_step_local_index:''),
 String(branchRuntime&&branchRuntime.current_step_index!==undefined&&branchRuntime.current_step_index!==null?branchRuntime.current_step_index:''),
+String(branchRuntime&&branchRuntime.pending_trigger?'1':'0'),
+String(branchRuntime&&branchRuntime.last_variant_index!==undefined&&branchRuntime.last_variant_index!==null?branchRuntime.last_variant_index:''),
+String(branchRuntime&&branchRuntime.fire_count!==undefined&&branchRuntime.fire_count!==null?branchRuntime.fire_count:''),
+String(branchRuntime&&branchRuntime.max_fire_count!==undefined&&branchRuntime.max_fire_count!==null?branchRuntime.max_fire_count:''),
+String(branchRuntime&&branchRuntime.run_once?'1':'0'),
+String(branchRuntime&&branchRuntime.fired_once?'1':'0'),
 stepStates,
 runtimeSteps
 ].join('|'));
 }
 function scenarioBranchDoneCount(room,branch,branchRuntime,globalStart){
-const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
+const steps=branch&&branch.type==='reactive'?scenarioReactiveDisplaySteps(branch,branchRuntime):(Array.isArray(branch&&branch.steps)?branch.steps:[]);
 const total=steps.length;
 if(!total)return 0;
 return Math.min(total,Math.max(0,Number(branchRuntime&&((branchRuntime.done_steps??branchRuntime.completed_step_count)||0))||0));
 }
+function scenarioBranchProgressCount(branch,branchRuntime,total,done){
+const state=String(branchRuntime&&branchRuntime.state||'').toLowerCase();
+const waitType=String(branchRuntime&&branchRuntime.wait_type||'').toLowerCase();
+const currentLocal=Math.max(0,Number(branchRuntime&&branchRuntime.current_step_local_index)||0);
+if(branch&&branch.type==='reactive'&&branchRuntime){
+const waitingForTrigger=state==='waiting'&&(!waitType||waitType==='none')&&currentLocal===0;
+if(waitingForTrigger){
+return branchRuntime.fired_once?total:done;
+}
+if(state==='running'||state==='waiting'||state==='error'||state==='paused'){
+return Math.min(total,Math.max(done,currentLocal+1));
+}
+}
+return done;
+}
 function scenarioBranchCurrentStep(branch,branchRuntime){
-const steps=Array.isArray(branch&&branch.steps)?branch.steps:[];
+const steps=branch&&branch.type==='reactive'?scenarioReactiveDisplaySteps(branch,branchRuntime):(Array.isArray(branch&&branch.steps)?branch.steps:[]);
 if(!steps.length)return branch&&branch.type==='reactive'?'No actions':'No steps';
 if(branch&&branch.current_step_text)return branch.current_step_text;
 return '';
@@ -1192,31 +1336,56 @@ confirm:'Force complete this branch wait?',
 function renderScenarioActiveWaits(room,items){
 return '';
 }
-function renderScenarioProgressBranch(room,item){
+function renderScenarioProgressBranch(room,item,mode){
 const branch=item.branch;
-const steps=Array.isArray(branch.steps)?branch.steps:[];
+const steps=branch.type==='reactive'?scenarioReactiveDisplaySteps(branch,item.runtime):(Array.isArray(branch.steps)?branch.steps:[]);
 const branchRuntime=item.runtime;
 const state=(branchRuntime&&branchRuntime.state)||(!branch.enabled?'disabled':'idle');
 const waitType=(branchRuntime&&branchRuntime.wait_type)||'none';
 const waitText=scenarioBranchWaitText(branchRuntime,branch);
 const done=scenarioBranchDoneCount(room,branch,branchRuntime,item.start);
+const progressCount=scenarioBranchProgressCount(branch,branchRuntime,steps.length,done);
 const current=scenarioBranchCurrentStep(branch,branchRuntime);
 const unit=branch.type==='reactive'?'actions':'steps';
-const progressLabel=`${done} / ${steps.length} ${unit}`;
+const progressLabel=`${progressCount} / ${steps.length} ${unit}`;
 const metaParts=[scenarioProgressTypeLabel(branch)];
 if(waitType&&waitType!=='none'&&state==='waiting')metaParts.push(`waiting ${waitText}`);
 const meta=metaParts.filter(Boolean).join(' / ');
 const actionRuntime=branch.type==='reactive'&&state==='waiting'&&(!waitType||waitType==='none')?null:branchRuntime;
 const fullStepsHtml=steps.length?steps.map((step,stepIndex)=>renderScenarioProgressStep(room,step,stepIndex,item.start+stepIndex,actionRuntime)).join(''):`<div class='empty'>No ${esc(unit)}</div>`;
-if(branch.type==='reactive'){
+if(branch.type==='reactive'&&mode!=='reactions'){
 const triggerLabel=scenarioReactiveTriggerLabel(branch);
-return `<section class='scenario-progress-branch reactive compact-reaction ${!branch.enabled?'disabled':''} ${state}' data-scenario-progress-branch='${esc(scenarioProgressBranchDomId(room,item))}' data-scenario-progress-branch-key='${esc(scenarioProgressBranchRenderKey(item))}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(triggerLabel)}</div><div class='scenario-progress-branch-headside'><span class='scenario-progress-count'>${esc(progressLabel)}</span><span class='badge'>${esc(state)}</span></div></div></div></div></section>`;
+const reactiveMeta=scenarioReactiveMetaParts(branch,branchRuntime).join(' / ');
+const reactiveCurrent=scenarioReactiveCurrentText(branch,branchRuntime);
+return `<section class='scenario-progress-branch reactive compact-reaction ${!branch.enabled?'disabled':''} ${state}' data-scenario-progress-branch='${esc(scenarioProgressBranchDomId(room,item))}' data-scenario-progress-branch-key='${esc(scenarioProgressBranchRenderKey(item))}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(triggerLabel)}</div><div class='scenario-progress-branch-headside'><span class='scenario-progress-count'>${esc(progressLabel)}</span><span class='badge'>${esc(state)}</span></div></div>${reactiveMeta?`<div class='row-meta'>${esc(reactiveMeta)}</div>`:''}${reactiveCurrent?`<div class='scenario-progress-current'>${esc(reactiveCurrent)}</div>`:''}</div></div></section>`;
 }
-return `<section class='scenario-progress-branch ${!branch.enabled?'disabled':''} ${branch.type==='reactive'?'reactive':''} ${state}' data-scenario-progress-branch='${esc(scenarioProgressBranchDomId(room,item))}' data-scenario-progress-branch-key='${esc(scenarioProgressBranchRenderKey(item))}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${esc(branch.name||branch.id||`Branch ${item.index+1}`)}</div><div class='scenario-progress-branch-headside'><span class='scenario-progress-count'>${esc(progressLabel)}</span><span class='badge'>${esc(state)}</span></div></div>${meta?`<div class='row-meta'>${esc(meta)}</div>`:''}<div class='scenario-progress-current'>${esc(current)}</div></div></div><div class='scenario-progress-step-details scenario-progress-step-details-static'><div class='scenario-progress'>${fullStepsHtml}</div></div></section>`;
+const branchTitle=branch.type==='reactive'?scenarioReactiveTriggerLabel(branch):(branch.name||branch.id||`Branch ${item.index+1}`);
+const branchTitleHtml=branch.type==='reactive'
+?`<span class='scenario-reactive-trigger-head'><span class='scenario-reactive-trigger-icon'>${scenarioReactiveTriggerIcon(branch)}</span><span>${esc(branchTitle)}</span></span>`
+:`${esc(branchTitle)}`;
+const branchCurrent=branch.type==='reactive'?(scenarioReactiveCurrentText(branch,branchRuntime)||current):current;
+const branchMeta=branch.type==='reactive'
+?scenarioReactiveMetaParts(branch,branchRuntime).concat(metaParts.filter(part=>part!=='reaction')).filter(Boolean).join(' / ')
+:meta;
+if(branch.type==='reactive'&&mode==='reactions'){
+const variants=scenarioReactiveVariants(branch);
+const currentVariantIndex=scenarioReactiveCurrentVariantIndex(branch,branchRuntime);
+const groupedHtml=variants.length?variants.map((variant,variantIndex)=>{
+const variantActions=Array.isArray(variant&&variant.actions)?variant.actions:[];
+const isCurrent=variantIndex===currentVariantIndex;
+const variantRuntime=isCurrent?actionRuntime:null;
+const variantStepsHtml=variantActions.length
+?variantActions.map((step,stepIndex)=>renderScenarioProgressStep(room,step,stepIndex,item.start+stepIndex,variantRuntime)).join('')
+:`<div class='empty'>No actions</div>`;
+return `<div class='scenario-reactive-level ${isCurrent?'current':'pending'}'><div class='scenario-reactive-level-head'><div class='scenario-reactive-level-title'>${esc(scenarioReactiveVariantTitle(branch,variantIndex))}</div>${isCurrent?`<span class='badge'>current</span>`:''}</div><div class='scenario-progress'>${variantStepsHtml}</div></div>`;
+}).join(''):fullStepsHtml;
+return `<section class='scenario-progress-branch ${!branch.enabled?'disabled':''} reactive ${state}' data-scenario-progress-branch='${esc(scenarioProgressBranchDomId(room,item))}' data-scenario-progress-branch-key='${esc(scenarioProgressBranchRenderKey(item))}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${branchTitleHtml}</div><div class='scenario-progress-branch-headside'><span class='scenario-progress-count'>${esc(progressLabel)}</span><span class='badge'>${esc(state)}</span></div></div>${branchMeta?`<div class='row-meta'>${esc(branchMeta)}</div>`:''}<div class='scenario-progress-current'>${esc(branchCurrent)}</div></div></div><div class='scenario-progress-step-details scenario-progress-step-details-static'><div class='scenario-reactive-levels'>${groupedHtml}</div></div></section>`;
+}
+return `<section class='scenario-progress-branch ${!branch.enabled?'disabled':''} ${branch.type==='reactive'?'reactive':''} ${state}' data-scenario-progress-branch='${esc(scenarioProgressBranchDomId(room,item))}' data-scenario-progress-branch-key='${esc(scenarioProgressBranchRenderKey(item))}'><div class='scenario-progress-branch-head'><div class='scenario-progress-branch-main'><div class='scenario-progress-title-row'><div class='scenario-progress-branch-title'>${branchTitleHtml}</div><div class='scenario-progress-branch-headside'><span class='scenario-progress-count'>${esc(progressLabel)}</span><span class='badge'>${esc(state)}</span></div></div>${branchMeta?`<div class='row-meta'>${esc(branchMeta)}</div>`:''}<div class='scenario-progress-current'>${esc(branchCurrent)}</div></div></div><div class='scenario-progress-step-details scenario-progress-step-details-static'><div class='scenario-progress'>${fullStepsHtml}</div></div></section>`;
 }
 function renderScenarioProgressSection(title,items,mode){
 if(!items.length)return '';
-return `<div class='scenario-progress-section' data-scenario-progress-section='${esc(mode||'flow')}'><div class='scenario-progress-section-title'>${esc(title)}</div><div class='scenario-progress-branches ${esc(mode||'flow')}' data-scenario-progress-branches='${esc(mode||'flow')}'>${items.map(item=>renderScenarioProgressBranch(item.room,item)).join('')}</div></div>`;
+return `<div class='scenario-progress-section' data-scenario-progress-section='${esc(mode||'flow')}'><div class='scenario-progress-section-title'>${esc(title)}</div><div class='scenario-progress-branches ${esc(mode||'flow')}' data-scenario-progress-branches='${esc(mode||'flow')}'>${items.map(item=>renderScenarioProgressBranch(item.room,item,mode)).join('')}</div></div>`;
 }
 function scenarioProgressData(room,scenarioOrSteps){
 const branches=scenarioProgressBranches(room,scenarioOrSteps);
@@ -1305,9 +1474,31 @@ if(!items.length)return '';
 return renderScenarioProgressSection(`Reactive branches (${items.length})`,items,'reactions');
 }
 
+function scenarioProgressTabItems(data){
+return {
+flow:scenarioProgressSectionItems(data,'flow'),
+reactions:scenarioProgressSectionItems(data,'reactions')
+};
+}
+
+function scenarioProgressActiveTab(data){
+const items=scenarioProgressTabItems(data);
+if(roomProgressTab==='reactive'&&items.reactions.length)return 'reactive';
+return 'flow';
+}
+
+function renderScenarioProgressTabsHtml(data){
+if(!data||data.mode==='empty'||data.mode==='summary')return '';
+const items=scenarioProgressTabItems(data);
+if(!items.reactions.length)return '';
+const active=scenarioProgressActiveTab(data);
+return `<div class='scenario-progress-tabs' data-room-scenario-progress-tabs='1'>${uiButton({label:'Flow',kind:active==='flow'?'small-btn active':'small-btn',action:'room.progress.tab',dataset:{tab:'flow'}})}${uiButton({label:`Reactive (${items.reactions.length})`,kind:active==='reactive'?'small-btn active':'small-btn',action:'room.progress.tab',dataset:{tab:'reactive'}})}</div>`;
+}
+
 function renderScenarioProgress(room,scenarioOrSteps){
 const data=scenarioProgressData(room,scenarioOrSteps);
-return `<div class='scenario-progress-wrap' data-room-scenario-progress-wrap='1'><div data-room-scenario-progress-overview='1'></div><div data-room-scenario-progress-waits='1'></div><div data-room-scenario-progress-reactions='1'>${renderScenarioProgressReactionsHtml(data)}</div><div data-room-scenario-progress-flow='1'>${renderScenarioProgressFlowHtml(data)}</div></div>`;
+const active=scenarioProgressActiveTab(data);
+return `<div class='scenario-progress-wrap' data-room-scenario-progress-wrap='1' data-room-scenario-progress-tab='${esc(active)}'><div data-room-scenario-progress-overview='1'></div><div data-room-scenario-progress-waits='1'></div><div data-room-scenario-progress-tabs-host='1'>${renderScenarioProgressTabsHtml(data)}</div><div data-room-scenario-progress-reactions='1'>${renderScenarioProgressReactionsHtml(data)}</div><div data-room-scenario-progress-flow='1'>${renderScenarioProgressFlowHtml(data)}</div></div>`;
 }
 function scenarioValidationText(s){if(!s)return 'No scenario selected';const n=Number(s.validation_issue_count)||0;if(s.valid===false)return `${n||1} validation issue${n===1?'':'s'}`;return n?`Valid, ${n} warning${n===1?'':'s'}`:'Valid';}
 function scenarioIssueLocationText(issue){
@@ -1328,7 +1519,7 @@ function scenarioDraftValidationHtml(){const r=scenarioValidationReportCurrent()
 function isEditableControl(el){return !!(el&&el.closest&&el.closest('#gm_content')&&el.matches('input,select,textarea'));}
 function dirtyLockControl(el){
 if(!isEditableControl(el)||el.disabled||el.readOnly)return false;
-return !!el.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled,#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field],[data-quest-device-field],[data-quest-command-field],[data-quest-event-field],#gm_timer_minutes,#gm_hint_input,#storage_devices_file,#storage_scenarios_file,#storage_profiles_file');
+return !!el.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled,#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field],[data-quest-device-field],[data-quest-command-field],[data-quest-event-field],#gm_timer_minutes,#gm_hint_input,#storage_devices_file,#storage_scenarios_file,#storage_profiles_file');
 }
 function markControlEditing(el){if(!isEditableControl(el))return;el.classList.add('gm-field-editing');}
 function unmarkControlEditing(el){if(!isEditableControl(el))return;el.classList.remove('gm-field-editing');}
@@ -1375,8 +1566,28 @@ scenarioEditor.validation_revision=0;
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 function questDeviceDisplayName(dev){return dev&&(dev.name||dev.display_name||dev.id)||'Device';}
 function observedDisplayName(item){if(!item)return 'Device';const reg=observedRegistration(item.device_id);return reg&&(reg.name||reg.device_id)||item.name||item.display_name||item.device_id||'Device';}
-function questDeviceHealth(dev){return dev&&(dev.health||'unknown')||'unknown';}
-function questDeviceStatusText(dev){return dev&&(dev.status_text||dev.state_text||'unknown')||'missing device';}
+function questDeviceObserved(dev){return observedByClientId(dev&&((dev.client_id||dev.id)||''));}
+function questDeviceHealth(dev){
+const observed=questDeviceObserved(dev);
+if(observed){
+const connectivity=String(observed.connectivity||'').toLowerCase();
+const health=String(observed.health||'').toLowerCase();
+if(connectivity==='offline')return 'fault';
+if(health)return health;
+if(connectivity==='online')return 'ok';
+}
+return dev&&(dev.health||'unknown')||'unknown';
+}
+function questDeviceStatusText(dev){
+const observed=questDeviceObserved(dev);
+if(observed){
+const state=String(observed.state||'').trim();
+if(state)return state;
+const connectivity=String(observed.connectivity||'').trim();
+if(connectivity)return connectivity;
+}
+return dev&&(dev.status_text||dev.state_text||'unknown')||'missing device';
+}
 function questDeviceCompactSummary(dev){return dev&&dev.manifest_summary&&dev.manifest_summary.compact?dev.manifest_summary:null;}
 function questDeviceCommandList(dev){return typeof compactCommandsForDevice==='function'?compactCommandsForDevice(dev):Array.isArray(dev&&dev.commands)?dev.commands:[];}
 function questDeviceEventList(dev){return typeof compactEventsForDevice==='function'?compactEventsForDevice(dev):Array.isArray(dev&&dev.events)?dev.events:[];}
@@ -2236,7 +2447,7 @@ function questDevices(){return gmQuestDevices&&Array.isArray(gmQuestDevices.devi
 function observedByClientId(id){const key=String(id||'');if(!key)return null;return observedItems().find(o=>o.device_id===key)||null;}
 function questDeviceById(id){return questDevices().find(d=>(d.id||'')===id)||null;}
 function scenarioEditorCatalog(roomId){return gmScenarioEditorCatalogs[roomId]||{quest_devices:[],step_schemas:[]};}
-function optionList(items,selected,emptyLabel){let found=false;const opts=[];if(emptyLabel)opts.push(`<option value=''>${esc(emptyLabel)}</option>`);(Array.isArray(items)?items:[]).forEach(item=>{const id=item.id||'';if(id===selected)found=true;opts.push(`<option value='${esc(id)}' ${id===selected?'selected':''}>${esc(item.name||id)}</option>`);});if(selected&&!found)opts.push(`<option value='${esc(selected)}' selected>${esc(selected)} (missing)</option>`);return opts.join('');}
+function optionList(items,selected,emptyLabel){let found=false;const opts=[];if(emptyLabel)opts.push(`<option value=''>${esc(emptyLabel)}</option>`);(Array.isArray(items)?items:[]).forEach(item=>{const id=item.id||'';const label=item&&((item.name!==undefined?item.name:item.label)||id);if(id===selected)found=true;opts.push(`<option value='${esc(id)}' ${id===selected?'selected':''}>${esc(label)}</option>`);});if(selected&&!found)opts.push(`<option value='${esc(selected)}' selected>${esc(selected)} (missing)</option>`);return opts.join('');}
 function commandSupportsScenarioParams(command){
 const schema=Array.isArray(command&&command.args_schema)?command.args_schema:[];
 return !!(schema.length||(command&&command.default_args&&typeof command.default_args==='object'));
@@ -3120,6 +3331,8 @@ if(low==='operator_approval')return 'OPERATOR_APPROVAL';
 if(low==='show_operator_message'||low==='operator_message')return 'SHOW_OPERATOR_MESSAGE';
 if(low==='set_flag')return 'SET_FLAG';
 if(low==='wait_flags')return 'WAIT_FLAGS';
+if(low==='fail_reaction')return 'FAIL_REACTION';
+if(low==='reset_reaction')return 'RESET_REACTION';
 if(low==='end_game'||low==='finish_game')return 'END_GAME';
 if(step&&step.device_id&&step.event_id)return 'WAIT_DEVICE_EVENT';
 if(step&&Array.isArray(step.events)&&step.events.length)return 'WAIT_ANY_DEVICE_EVENT';
@@ -3133,12 +3346,26 @@ if(low==='wait_time')return 'WAIT_TIME';
 return 'WAIT_TIME';
 }
 
+function normalizeScenarioEventIdValue(eventId){
+return String(eventId||'').trim();
+}
+
+function normalizeScenarioDeviceEventIdValue(deviceId,eventId){
+const raw=normalizeScenarioEventIdValue(eventId);
+if(!raw||raw.indexOf('@')<0||typeof scenarioDeviceById!=='function')return raw;
+const device=scenarioDeviceById(deviceId);
+const events=device&&Array.isArray(device.events)?device.events:[];
+if(!events.length||events.some(ev=>String(ev&&ev.id||'')===raw))return raw;
+const base=raw.slice(0,raw.indexOf('@'));
+return events.some(ev=>String(ev&&ev.id||'')===base)?base:raw;
+}
+
 function normalizeScenarioEditorStep(step){
 step=step||{};
 const type=inferScenarioEditorStepType(step);
 const out={
 id:step.id||'',label:step.label||'',enabled:step.enabled!==false,type}
-;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms!==undefined&&step.duration_ms!==null)out.duration_ms=Number(step.duration_ms)||0;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:scenarioHydrateCommandParams(cmd.device_id||'',cmd.command_id||'',cmd.params&&typeof cmd.params==='object'?cmd.params:null)}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;if(type==='WAIT_TIME'&&(!Number.isFinite(Number(out.duration_ms))||Number(out.duration_ms)<=0))out.duration_ms=1000;if(out.device_id&&out.command_id)out.params=scenarioHydrateCommandParams(out.device_id,out.command_id,out.params&&typeof out.params==='object'?out.params:null);return out;}
+;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=normalizeScenarioDeviceEventIdValue(out.device_id,step.event_id);if(step.params)out.params=step.params;if(step.duration_ms!==undefined&&step.duration_ms!==null)out.duration_ms=Number(step.duration_ms)||0;if(step.timeout_ms!==undefined&&step.timeout_ms!==null)out.timeout_ms=Number(step.timeout_ms)||0;if(step.timeout_action)out.timeout_action=String(step.timeout_action||'');if(step.timeout_message)out.timeout_message=step.timeout_message;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:scenarioHydrateCommandParams(cmd.device_id||'',cmd.command_id||'',cmd.params&&typeof cmd.params==='object'?cmd.params:null)}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:normalizeScenarioDeviceEventIdValue(ev.device_id||'',ev.event_id||'')}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;if(type==='WAIT_TIME'&&(!Number.isFinite(Number(out.duration_ms))||Number(out.duration_ms)<=0))out.duration_ms=1000;if(scenarioStepIsWaitType(type)&&!out.timeout_action)out.timeout_action='continue';if(out.device_id&&out.command_id)out.params=scenarioHydrateCommandParams(out.device_id,out.command_id,out.params&&typeof out.params==='object'?out.params:null);return out;}
 function scenarioBranchTypeValue(branch){
 const raw=String(branch&&branch.type||'normal').toLowerCase();
 return raw==='reactive'||raw==='reaction'?'reactive':'normal';
@@ -3335,6 +3562,8 @@ if(low==='operator_approval')return 'OPERATOR_APPROVAL';
 if(low==='show_operator_message'||low==='operator_message')return 'SHOW_OPERATOR_MESSAGE';
 if(low==='set_flag')return 'SET_FLAG';
 if(low==='wait_flags')return 'WAIT_FLAGS';
+if(low==='fail_reaction')return 'FAIL_REACTION';
+if(low==='reset_reaction')return 'RESET_REACTION';
 return 'WAIT_TIME';
 }
 
@@ -3350,11 +3579,11 @@ return schemas;
 }
 
 function scenarioReactiveTriggerTypes(){
-return ['WAIT_DEVICE_EVENT','WAIT_ANY_DEVICE_EVENT','WAIT_ALL_DEVICE_EVENTS','WAIT_FLAGS'];
+return [];
 }
 
 function scenarioReactiveActionTypes(){
-return ['DEVICE_COMMAND','DEVICE_COMMAND_GROUP','WAIT_TIME','SHOW_OPERATOR_MESSAGE','SET_FLAG'];
+return ['DEVICE_COMMAND','DEVICE_COMMAND_GROUP','WAIT_TIME','WAIT_DEVICE_EVENT','WAIT_ANY_DEVICE_EVENT','WAIT_ALL_DEVICE_EVENTS','WAIT_FLAGS','SHOW_OPERATOR_MESSAGE','SET_FLAG','FAIL_REACTION','RESET_REACTION'];
 }
 
 function scenarioAllowedStepTypesForBranch(branch){
@@ -3445,6 +3674,20 @@ Example: wait until puzzle_done is true and door_ready is true.
 Setup: add one or more flag names and the expected value for each.
 
 During game: all listed flags must match. Operator Next can still force the step.`;
+if(normalized==='FAIL_REACTION')return `Fail reaction
+
+Use when this reactive branch must immediately stop with an error state.
+
+Setup: no fields are required.
+
+During game: the reaction switches to ERROR and stops waiting for more triggers until reset externally.`;
+if(normalized==='RESET_REACTION')return `Reset reaction
+
+Use when this reactive branch must drop its current progress and return to the initial waiting state.
+
+Setup: no fields are required.
+
+During game: the reaction clears its current level, counters, pending trigger, and cooldown, then waits again from the beginning.`;
 if(normalized==='END_GAME')return `End game
 
 Use when this branch reaches the real quest finish.
@@ -3457,6 +3700,9 @@ return 'This step type does not have a help text yet.';
 
 function scenarioStepTypeLabel(type){
 const schema=scenarioStepSchema(type);
+const normalized=scenarioStepTypeValue({type});
+if(normalized==='FAIL_REACTION')return 'Fail reaction';
+if(normalized==='RESET_REACTION')return 'Reset reaction';
 return schema&&(schema.label||schema.type)||type;
 }
 
@@ -3490,11 +3736,41 @@ setTimeout(()=>loadHardwareIoStatus(false),0);
 }
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const catalogDevices=Array.isArray(catalog.quest_devices)?catalog.quest_devices:[];
-const useCatalogOnly=currentView==='scenarios'&&isAdmin();
-const base=useCatalogOnly?catalogDevices:(catalogDevices.length?catalogDevices:questDevices().map(device=>({
-id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',device_description:device.device_description,commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
-)).filter(device=>device.id));
-return base.map(scenarioNormalizeHardwareDevice).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
+const liveDevices=questDevices().map(device=>({
+id:device.id||'',
+name:device.name||device.id||'',
+room_id:device.room_id||'',
+device_description:device.device_description,
+commands:Array.isArray(device.commands)?device.commands:[],
+events:Array.isArray(device.events)?device.events:[]
+})).filter(device=>device.id);
+const merged=new Map();
+[...catalogDevices,...liveDevices].forEach(device=>{
+if(!(device&&device.id))return;
+const normalized=scenarioNormalizeHardwareDevice(device);
+if(!normalized||!normalized.id)return;
+const previous=merged.get(normalized.id);
+if(!previous){
+merged.set(normalized.id,normalized);
+return;
+}
+const previousScore=(Array.isArray(previous.commands)?previous.commands.length:0)+
+  (Array.isArray(previous.events)?previous.events.length:0);
+const nextScore=(Array.isArray(normalized.commands)?normalized.commands.length:0)+
+  (Array.isArray(normalized.events)?normalized.events.length:0);
+if(nextScore>previousScore){
+merged.set(normalized.id,normalized);
+return;
+}
+if(nextScore===previousScore){
+merged.set(normalized.id,{
+...previous,
+...normalized,
+name:(previous.name&&previous.name!==previous.id)?previous.name:(normalized.name||normalized.id)
+});
+}
+});
+return Array.from(merged.values()).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
 }
 
 function compactManifest(device){
@@ -3502,14 +3778,21 @@ const manifest=device&&device.device_description;
 return manifest&&Number(manifest.manifest_version)===2&&manifest.format==='compact_resources'&&manifest.node_kind&&manifest.capability_contract==='scenehub.node.compact.v1'?manifest:null;
 }
 
+function compactResourceKey(item,target){
+const preferred=target==='led_strips'?'strip':'channel';
+const keys=target==='led_strips'?['strip','channel','reader','uid_reader','reader_id','index','id']:['channel','strip','reader','uid_reader','reader_id','index','id'];
+if(item&&item[preferred]!==undefined&&item[preferred]!==null&&String(item[preferred]).trim()!=='')return preferred;
+return keys.find(key=>item&&item[key]!==undefined&&item[key]!==null&&String(item[key]).trim()!=='')||preferred;
+}
+
 function compactResourceId(item,target){
-if(target==='led_strips')return String(item&&item.strip!==undefined?item.strip:'');
-return String(item&&item.channel!==undefined?item.channel:'');
+const key=compactResourceKey(item,target);
+return String(item&&item[key]!==undefined&&item[key]!==null?item[key]:'');
 }
 
 function compactResourceLabel(item,target){
 const id=compactResourceId(item,target);
-const fallback=target==='led_strips'?`LED Strip ${id}`:target==='mosfets'?`MOSFET ${id}`:target==='outputs'?`Output ${id}`:target==='inputs'?`Input ${id}`:`Relay ${id}`;
+const fallback=target==='led_strips'?`LED Strip ${id}`:target==='mosfets'?`MOSFET ${id}`:target==='outputs'?`Output ${id}`:target==='inputs'?`Input ${id}`:target.indexOf('reader')>=0?`Reader ${id}`:`Relay ${id}`;
 return item&&(item.label||fallback)||fallback;
 }
 
@@ -3519,15 +3802,22 @@ return (Array.isArray(resources[target])?resources[target]:[]).map(item=>({id:co
 }
 
 function compactEventMatchKey(target){
-return target==='led_strips'?'strip':'channel';
+return compactResourceKey(null,target);
 }
 
 function compactEventMatchForResource(item,target){
-const key=compactEventMatchKey(target);
+const key=compactResourceKey(item,target);
 const raw=item&&item[key]!==undefined&&item[key]!==null?item[key]:'';
 if(raw==='')return null;
 const num=Number(raw);
 return {[key]:Number.isFinite(num)?num:raw};
+}
+
+function compactEventTemplateUsesResourceMatch(template){
+const match=template&&template.match&&typeof template.match==='object'?template.match:null;
+if(match&&Object.keys(match).length)return true;
+const ref=String(template&&template.args_schema_ref||'');
+return !!ref&&ref!=='empty';
 }
 
 function compactSchemaForTemplate(manifest,template){
@@ -3582,35 +3872,27 @@ function compactEventsForDevice(device){
 const manifest=compactManifest(device);
 if(!manifest)return Array.isArray(device&&device.events)?device.events:[];
 const resources=manifest&&manifest.resources&&typeof manifest.resources==='object'?manifest.resources:{};
-return (Array.isArray(manifest.event_templates)?manifest.event_templates:[]).flatMap(template=>{
+const dedup=new Map();
+const addEvent=(id,label,capability,eventName,source)=>{
+if(!id||dedup.has(id))return;
+dedup.set(id,{id,label,capability,event:eventName,source});
+};
+(Array.isArray(manifest.event_templates)?manifest.event_templates:[]).forEach(template=>{
 const eventName=String(template&&template.event||'');
 const baseId=String(template&&template.id||eventName);
 const label=String(template&&template.label||template&&template.id||eventName);
 const capability=String(template&&template.capability||template&&template.source||eventName.split('.')[0]||'node');
 const source=String(template&&template.source||'');
 const resourceItems=(Array.isArray(resources[source])?resources[source]:[]).filter(item=>String(item&&item.event||'').trim()===eventName);
-const expanded=resourceItems.map(item=>{
+if(resourceItems.length&&compactEventTemplateUsesResourceMatch(template)){
+resourceItems.forEach(item=>{
 const resourceId=compactResourceId(item,source);
-const match=compactEventMatchForResource(item,source);
-if(!resourceId||!match)return null;
-return {
-id:`${baseId}@${resourceId}`,
-label:`${compactResourceLabel(item,source)} - ${label}`,
-capability,
-event:eventName,
-source,
-match
-};
-}).filter(Boolean);
-if(expanded.length)return expanded;
-return [{
-id:baseId,
-label,
-capability,
-event:eventName,
-source
-}];
-}).filter(event=>event.id&&event.event);
+if(resourceId)addEvent(`${baseId}@${resourceId}`,`${compactResourceLabel(item,source)} - ${label}`,capability,eventName,source);
+});
+}
+else addEvent(baseId,label,capability,eventName,source);
+});
+return Array.from(dedup.values()).filter(event=>event.id&&event.event);
 }
 
 function scenarioIoModeText(mode){
@@ -3775,6 +4057,8 @@ if(type==='OPERATOR_APPROVAL')return `Operator approval: ${step&&step.prompt||st
 if(type==='SHOW_OPERATOR_MESSAGE')return `Show operator: ${step&&step.message||'message'}`;
 if(type==='SET_FLAG')return `Set ${(step&&step.flag_name)||'flag'} = ${(step&&step.value)===false?'false':'true'}`;
 if(type==='WAIT_FLAGS')return `Wait flags (${(Array.isArray(step&&step.flags)?step.flags:[]).length||1})`;
+if(type==='FAIL_REACTION')return 'Fail reaction';
+if(type==='RESET_REACTION')return 'Reset reaction';
 if(type==='END_GAME')return 'End game';
 return step&&step.label||type;
 }
@@ -3815,10 +4099,10 @@ const eventName=event&&(event.label||event.id)||'event';
 return {id:`step_${n}`,label:`${room}: wait ${devName} - ${eventName}`,enabled:true,type:'WAIT_DEVICE_EVENT',device_id:device&&device.id||'',event_id:event&&event.id||''};
 }
 if(kind==='wait_any_device_event'){
-return {id:`step_${n}`,label:'Wait any device event',enabled:true,type:'WAIT_ANY_DEVICE_EVENT',events:[defaultScenarioEventItem()]};
+return {id:`step_${n}`,label:'Wait any device event',enabled:true,type:'WAIT_ANY_DEVICE_EVENT',events:[defaultScenarioEventItem()],timeout_ms:0,timeout_action:'continue'};
 }
 if(kind==='wait_all_device_events'){
-return {id:`step_${n}`,label:'Wait all device events',enabled:true,type:'WAIT_ALL_DEVICE_EVENTS',events:[defaultScenarioEventItem()]};
+return {id:`step_${n}`,label:'Wait all device events',enabled:true,type:'WAIT_ALL_DEVICE_EVENTS',events:[defaultScenarioEventItem()],timeout_ms:0,timeout_action:'continue'};
 }
 if(kind==='operator'){
 return {id:`step_${n}`,label:'Operator approval',enabled:true,type:'OPERATOR_APPROVAL',prompt:'Continue?',approve_label:'Continue'};
@@ -3830,12 +4114,18 @@ if(kind==='set_flag'){
 return {id:`step_${n}`,label:'Set flag',enabled:true,type:'SET_FLAG',flag_name:'puzzle_done',value:true};
 }
 if(kind==='wait_flags'){
-return {id:`step_${n}`,label:'Wait flags',enabled:true,type:'WAIT_FLAGS',flags:[{flag_name:'puzzle_done',value:true}]};
+return {id:`step_${n}`,label:'Wait flags',enabled:true,type:'WAIT_FLAGS',flags:[{flag_name:'puzzle_done',value:true}],timeout_ms:0,timeout_action:'continue'};
+}
+if(kind==='fail_reaction'){
+return {id:`step_${n}`,label:'Fail reaction',enabled:true,type:'FAIL_REACTION'};
+}
+if(kind==='reset_reaction'){
+return {id:`step_${n}`,label:'Reset reaction',enabled:true,type:'RESET_REACTION'};
 }
 if(kind==='end_game'){
 return {id:`step_${n}`,label:'End game',enabled:true,type:'END_GAME'};
 }
-return {id:`step_${n}`,label:waitTimeLabel(1000),enabled:true,type:'WAIT_TIME',duration_ms:1000};
+return {id:`step_${n}`,label:waitTimeLabel(1000),enabled:true,type:'WAIT_TIME',duration_ms:1000,timeout_action:'continue'};
 }
 
 function newScenarioStepForType(index,type){
@@ -3849,6 +4139,8 @@ if(normalized==='OPERATOR_APPROVAL')return newScenarioStep(index,'operator');
 if(normalized==='SHOW_OPERATOR_MESSAGE')return newScenarioStep(index,'operator_message');
 if(normalized==='SET_FLAG')return newScenarioStep(index,'set_flag');
 if(normalized==='WAIT_FLAGS')return newScenarioStep(index,'wait_flags');
+if(normalized==='FAIL_REACTION')return newScenarioStep(index,'fail_reaction');
+if(normalized==='RESET_REACTION')return newScenarioStep(index,'reset_reaction');
 if(normalized==='END_GAME')return newScenarioStep(index,'end_game');
 return newScenarioStep(index,'wait_time');
 }
@@ -4128,6 +4420,7 @@ if(type==='WAIT_DEVICE_EVENT')return renderWaitDeviceEventPayload(step);
 if(type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS')return renderEventGroupControl(step);
 if(type==='WAIT_FLAGS')return renderFlagListControl(step);
 if(type==='SET_FLAG')return renderSetFlagPayload(step);
+if(type==='FAIL_REACTION'||type==='RESET_REACTION')return '';
 if(scenarioStepSchema(type))return renderScenarioSchemaPayload(step,type);
 if(type==='OPERATOR_APPROVAL')return `<div class='row'><input data-step-field='prompt' placeholder='Operator prompt' value='${esc(step.prompt||step.operator_prompt||'')}'><input data-step-field='approve_label' placeholder='Approve label' value='${esc(step.approve_label||step.operator_approve_label||'Continue')}'></div>`;
 if(type==='SHOW_OPERATOR_MESSAGE')return `<textarea class='scenario-textarea' rows='1' data-step-field='message' placeholder='Operator message'>${esc(step.message||'')}</textarea>`;
@@ -4141,7 +4434,7 @@ return scenarioBranchTypeValue(branch)==='reactive';
 }
 
 function reactiveV2ActionTypes(){
-return ['DEVICE_COMMAND','DEVICE_COMMAND_GROUP','WAIT_TIME','SET_FLAG','SHOW_OPERATOR_MESSAGE'];
+return ['DEVICE_COMMAND','DEVICE_COMMAND_GROUP','WAIT_TIME','WAIT_DEVICE_EVENT','WAIT_ANY_DEVICE_EVENT','WAIT_ALL_DEVICE_EVENTS','WAIT_FLAGS','SET_FLAG','SHOW_OPERATOR_MESSAGE','FAIL_REACTION','RESET_REACTION'];
 }
 
 function reactiveV2ActionTypeOptions(type){
@@ -4149,6 +4442,17 @@ const selected=scenarioStepTypeValue({type});
 const types=reactiveV2ActionTypes();
 const all=types.includes(selected)?types:[selected].concat(types);
 return all.map(t=>`<option value='${esc(t)}' ${selected===t?'selected':''}>${esc(scenarioStepTypeLabel(t))}</option>`).join('');
+}
+
+function renderReactiveV2TimeoutControl(action,type){
+const timeoutAction=String(action&&action.timeout_action||'continue');
+if(type==='WAIT_TIME'){
+return `<div class='row compact-row scenario-v2-wait-timeout'><label class='field-stack'><span>On timeout</span><select data-step-field='timeout_action'><option value='continue' ${timeoutAction==='continue'?'selected':''}>Continue</option><option value='fail_reaction' ${timeoutAction==='fail_reaction'?'selected':''}>Fail reaction</option><option value='reset_reaction' ${timeoutAction==='reset_reaction'?'selected':''}>Reset reaction</option></select></label></div>`;
+}
+if(type==='WAIT_DEVICE_EVENT'||type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS'||type==='WAIT_FLAGS'){
+return `<div class='row compact-row scenario-v2-wait-timeout'><label class='field-stack'><span>Timeout, sec</span><input data-step-field='timeout_ms' type='number' min='0' step='1' value='${esc(Math.max(0,Math.round((Number(action&&action.timeout_ms)||0)/1000)))}'></label><label class='field-stack'><span>On timeout</span><select data-step-field='timeout_action'><option value='continue' ${timeoutAction==='continue'?'selected':''}>Continue</option><option value='fail_reaction' ${timeoutAction==='fail_reaction'?'selected':''}>Fail reaction</option><option value='reset_reaction' ${timeoutAction==='reset_reaction'?'selected':''}>Reset reaction</option></select></label></div>`;
+}
+return '';
 }
 
 function defaultReactiveV2Trigger(){
@@ -4159,14 +4463,27 @@ function defaultReactiveV2BranchFields(){
 return {priority:0,max_fire_count:0,trigger:defaultReactiveV2Trigger(),guard_flags:[],policy:{mode:'single',cooldown_ms:0,max_fire_count:0},reentry:{mode:'ignore'},variants:[{id:'variant_1',label:'Actions',actions:[]}],result_policy:{on_done:'continue',on_fail:'fail_reaction',on_timeout:'fail_reaction'},on_complete:[]};
 }
 
-function normalizeReactiveV2RepeatPolicy(branch){
+function normalizeReactiveV2RepeatPolicy(branch,previousMode){
 if(!branch)return branch;
 branch.policy=branch.policy&&typeof branch.policy==='object'?branch.policy:{};
-branch.policy.mode=branch.policy.mode||'single';
-if(branch.policy.mode==='single'){
+const mode=branch.policy.mode||'single';
+branch.policy.mode=mode;
+if(mode==='single'){
 branch.run_once=!!branch.run_once;
 branch.max_fire_count=branch.run_once?1:0;
 branch.policy.max_fire_count=branch.max_fire_count;
+}else{
+const variantCount=Array.isArray(branch.variants)&&branch.variants.length?branch.variants.length:0;
+const currentMax=Number(branch.max_fire_count)||Number(branch.policy.max_fire_count)||0;
+branch.run_once=false;
+if(previousMode==='single'&&currentMax<=1){
+const fallback=mode==='escalate'?(variantCount||0):0;
+branch.max_fire_count=fallback;
+branch.policy.max_fire_count=fallback;
+}else{
+branch.max_fire_count=currentMax;
+branch.policy.max_fire_count=currentMax;
+}
 }
 return branch;
 }
@@ -4178,6 +4495,8 @@ branch.priority=Number(branch.priority)||0;
 branch.max_fire_count=Number(branch.max_fire_count)||Number(branch.policy&&branch.policy.max_fire_count)||0;
 branch.trigger=branch.trigger&&typeof branch.trigger==='object'?branch.trigger:defaults.trigger;
 const triggerKind=String(branch.trigger.kind||'device_event');
+branch.trigger.event_id=normalizeScenarioDeviceEventIdValue(branch.trigger.device_id||'',branch.trigger.event_id||'');
+branch.trigger.events=Array.isArray(branch.trigger.events)?branch.trigger.events.map(defaulted=>({device_id:String(defaulted&&defaulted.device_id||''),event_id:normalizeScenarioDeviceEventIdValue(defaulted&&defaulted.device_id||'',defaulted&&defaulted.event_id||'')})):[defaultScenarioEventItem()];
 if((triggerKind==='operator_event'||triggerKind==='runtime_event')&&!branch.trigger.event_id){
 branch.trigger.event_id=branch.trigger.operator_event||branch.trigger.runtime_event||'';
 }
@@ -4212,16 +4531,21 @@ function renderReactiveV2Trigger(branch){
 const trigger=branch.trigger||defaultReactiveV2Trigger();
 const kind=String(trigger.kind||'device_event');
 const devices=scenarioCatalogDevices().filter(device=>Array.isArray(device.events)&&device.events.length);
-let selectedDevice=trigger.device_id||'';
-const device=scenarioDeviceById(selectedDevice)||null;
+const rawSelectedDevice=String(trigger.device_id||'');
+const resolvedDevice=scenarioDeviceById(rawSelectedDevice)||null;
+const selectedDevice=resolvedDevice&&resolvedDevice.id?resolvedDevice.id:rawSelectedDevice;
+const device=resolvedDevice;
 const events=device&&Array.isArray(device.events)?device.events:[];
-const selectedEvent=scenarioValidEventId(device,trigger.event_id||'');
-const kindOptions=['device_event','flag_changed','operator_event','runtime_event'].map(item=>`<option value='${item}' ${kind===item?'selected':''}>${item}</option>`).join('');
+const selectedEvent=scenarioValidEventId(device,normalizeScenarioEventIdValue(trigger.event_id||''));
+const triggerEvents=Array.isArray(trigger.events)&&trigger.events.length?trigger.events:[defaultScenarioEventItem()];
+const kindOptions=['device_event','any_device_events','all_device_events','flag_changed','operator_event','runtime_event'].map(item=>`<option value='${item}' ${kind===item?'selected':''}>${item}</option>`).join('');
 let body='';
 if(kind==='device_event'){
 const deviceControl=devices.length?`<select class='scenario-select' data-v2-trigger-field='device_id'>${optionList(devices,selectedDevice,'Select device')}</select>`:`<input data-v2-trigger-field='device_id' placeholder='Device ID' value='${esc(selectedDevice)}'>`;
-const eventControl=events.length?`<select class='scenario-select' data-v2-trigger-field='event_id'>${optionList(events,selectedEvent,'Select event')}</select>`:`<input data-v2-trigger-field='event_id' placeholder='Event ID' value='${esc(trigger.event_id||selectedEvent)}'>`;
+const eventControl=events.length?`<select class='scenario-select' data-v2-trigger-field='event_id'>${optionList(events,selectedEvent,'Select event')}</select>`:`<input data-v2-trigger-field='event_id' placeholder='Event ID' value='${esc(selectedEvent)}'>`;
 body=`<div class='scenario-v2-inline-fields'>${deviceControl}${eventControl}</div>`;
+}else if(kind==='any_device_events'||kind==='all_device_events'){
+body=`<div class='scenario-v2-event-group-list'>${triggerEvents.map((eventItem,index)=>{const rawItemDeviceId=String(eventItem&&eventItem.device_id||'');const itemDevice=scenarioDeviceById(rawItemDeviceId)||null;const itemDeviceId=itemDevice&&itemDevice.id?itemDevice.id:rawItemDeviceId;const itemEvents=itemDevice&&Array.isArray(itemDevice.events)?itemDevice.events:[];const itemEventId=scenarioValidEventId(itemDevice,normalizeScenarioEventIdValue(String(eventItem&&eventItem.event_id||'')));const deviceControl=devices.length?`<select class='scenario-select' data-v2-trigger-event-field='device_id'>${optionList(devices,itemDeviceId,'Select device')}</select>`:`<input data-v2-trigger-event-field='device_id' placeholder='Device ID' value='${esc(itemDeviceId)}'>`;const eventControl=itemEvents.length?`<select class='scenario-select' data-v2-trigger-event-field='event_id'>${optionList(itemEvents,itemEventId,'Select event')}</select>`:`<input data-v2-trigger-event-field='event_id' placeholder='Event ID' value='${esc(itemEventId)}'>`;return `<div class='scenario-v2-guard' data-v2-trigger-event-item='${index}'>${deviceControl}${eventControl}<button class='icon-btn danger' data-action='scenario.reactive_v2' data-op='delete_trigger_event' data-trigger-event-index='${index}'>&times;</button></div>`;}).join('')}${uiButton({label:'Add event',action:'scenario.reactive_v2',dataset:{op:'add_trigger_event'}})}</div>`;
 }else if(kind==='flag_changed'){
 body=`<div class='scenario-v2-inline-fields'>${renderScenarioFlagInput(trigger.flag_name||'',`data-v2-trigger-field='flag_name'`)}</div>`;
 }else if(kind==='operator_event'){
@@ -4237,7 +4561,7 @@ const policy=branch.policy||{};
 const mode=String(policy.mode||'single');
 const item=(value,label,sub)=>`<label class='scenario-v2-type-option ${mode===value?'active':''}'><input data-v2-policy-field='mode' type='radio' name='reactive_v2_mode' value='${esc(value)}' ${mode===value?'checked':''}><span><strong>${esc(label)}</strong><em>${esc(sub)}</em></span></label>`;
 const repeat=mode==='single'?`<div class='scenario-v2-repeat-choice'><label class='field-stack'><span>Trigger behavior</span><select data-scenario-branch-field='run_once'><option value='false' ${branch.run_once?'':'selected'}>Can repeat</option><option value='true' ${branch.run_once?'selected':''}>Run once</option></select></label></div>`:'';
-return `<section class='scenario-v2-type'><div class='scenario-v2-type-title'>Reaction type</div><div class='scenario-v2-type-grid'>${item('single','Same actions','Run the same action list on every trigger.')}${item('escalate','Escalate','Run level 1, then level 2, then the next levels.')}${item('rotate','Rotate','Cycle through variants on each trigger.')}${item('random','Random','Pick one variant randomly.')}</div>${repeat}</section>`;
+return `<section class='scenario-v2-type'><div class='scenario-v2-type-title'>Reaction type</div><div class='scenario-v2-type-grid'>${item('single','Same actions','Run the same action list on every trigger.')}${item('escalate','Escalate','Move to the next level on each trigger.')}${item('rotate','Rotate','Cycle through variants on each trigger.')}${item('random','Random','Pick one variant randomly.')}</div>${repeat}</section>`;
 }
 
 function renderReactiveV2Policy(branch){
@@ -4249,8 +4573,7 @@ const mode=String(policy.mode||'single');
 const isSingle=mode==='single';
 const isEscalate=mode==='escalate';
 const resultAction=value=>['continue','set_flag','fail_reaction','fail_scenario','retry'].map(item=>`<option value='${item}' ${String(value||'')===item?'selected':''}>${item}</option>`).join('');
-const runOnceAdvanced=isSingle?'':`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label>`;
-return `<details class='scenario-advanced scenario-v2-settings'><summary>Advanced reaction settings</summary><div class='scenario-v2-settings-grid'><label class='field-stack'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></label>${runOnceAdvanced}<label class='field-stack'><span>Reentry while running</span><select data-v2-reentry-field='mode'><option value='ignore' ${reentryMode==='ignore'?'selected':''}>ignore</option><option value='queue_one' ${reentryMode==='queue_one'?'selected':''}>queue_one</option></select></label>${isEscalate||isSingle?'':`<label class='field-stack'><span>Max fires</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(Number(policy.max_fire_count)||Number(branch.max_fire_count)||0)}'></label>`}<label class='field-stack'><span>Priority</span><input data-v2-branch-field='priority' type='number' step='1' value='${esc(Number(branch.priority)||0)}'></label><label class='field-stack'><span>On done</span><select data-v2-result-field='on_done'>${resultAction(result.on_done||'continue')}</select></label><label class='field-stack'><span>On fail</span><select data-v2-result-field='on_fail'>${resultAction(result.on_fail||'fail_reaction')}</select></label><label class='field-stack'><span>On timeout</span><select data-v2-result-field='on_timeout'>${resultAction(result.on_timeout||'fail_reaction')}</select></label><label class='field-stack'><span>Result flag</span>${renderScenarioFlagInput(result.timeout_flag||result.flag||'',`data-v2-result-field='timeout_flag'`)}</label></div></details>`;
+return `<section class='scenario-v2-rule scenario-v2-settings-card'><div class='scenario-v2-rule-label'>Options</div><div class='scenario-v2-rule-body'><div class='scenario-v2-settings-grid'><label class='field-stack'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></label><label class='field-stack'><span>Reentry while running</span><select data-v2-reentry-field='mode'><option value='ignore' ${reentryMode==='ignore'?'selected':''}>ignore</option><option value='queue_one' ${reentryMode==='queue_one'?'selected':''}>queue_one</option></select></label>${isEscalate||isSingle?'':`<label class='field-stack'><span>Max fires</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(Number(policy.max_fire_count)||Number(branch.max_fire_count)||0)}'></label>`}<label class='field-stack'><span>Priority</span><input data-v2-branch-field='priority' type='number' step='1' value='${esc(Number(branch.priority)||0)}'></label><label class='field-stack'><span>On done</span><select data-v2-result-field='on_done'>${resultAction(result.on_done||'continue')}</select></label><label class='field-stack'><span>On fail</span><select data-v2-result-field='on_fail'>${resultAction(result.on_fail||'fail_reaction')}</select></label><label class='field-stack'><span>On timeout</span><select data-v2-result-field='on_timeout'>${resultAction(result.on_timeout||'fail_reaction')}</select></label><label class='field-stack'><span>Result flag</span>${renderScenarioFlagInput(result.timeout_flag||result.flag||'',`data-v2-result-field='timeout_flag'`)}</label></div></div></section>`;
 }
 
 function renderReactiveV2Guards(branch){
@@ -4268,7 +4591,8 @@ const hasErrors=actionIssues.some(scenarioIssueIsError);
 const validationClass=actionIssues.length?(hasErrors?'scenario-step-invalid':'scenario-step-warning'):'';
 const issueBadge=actionIssues.length?`<span class='badge'>${esc(`Error ${actionIssues.length}`)}</span>`:'';
 const controls=`<button class='icon-btn' data-action='scenario.reactive_v2' data-op='edit_action' data-variant-index='${variantIndex}' data-action-index='${actionIndex}' title='Edit'>${expanded?'&times;':'&#9998;'}</button><button class='icon-btn danger' data-action='scenario.reactive_v2' data-op='delete_action' data-variant-index='${variantIndex}' data-action-index='${actionIndex}'>&times;</button>`;
-const body=expanded?`<div class='scenario-step-edit'><div class='scenario-v2-action-fields'><input data-step-field='label' placeholder='Action label' value='${esc(action.label||'')}'><select data-step-field='type'>${reactiveV2ActionTypeOptions(type)}</select></div>${renderScenarioStepPayload(action,type)}</div>`:'';
+const timeoutControl=renderReactiveV2TimeoutControl(action,type);
+const body=expanded?`<div class='scenario-step-edit'><div class='scenario-v2-action-fields'><input data-step-field='label' placeholder='Action label' value='${esc(action.label||'')}'><select data-step-field='type'>${reactiveV2ActionTypeOptions(type)}</select></div>${renderScenarioStepPayload(action,type)}${timeoutControl}</div>`:'';
 return `<div class='builder-step scenario-step-row scenario-step-${scenarioStepVisualType(action)} compact-step scenario-v2-action ${validationClass} ${expanded?'scenario-step-expanded':''}' data-v2-action='${actionIndex}' data-variant-index='${variantIndex}'><div class='scenario-step-line'><div class='scenario-step-line-main'><span class='scenario-step-number'>${actionIndex+1}.</span><span class='scenario-step-icon'>${scenarioStepIcon(action)}</span><span class='scenario-step-summary'>${esc(summary)}</span><span class='badge scenario-type-badge'>${esc(scenarioStepBadgeLabel(action))}</span>${issueBadge}</div><div class='actions compact-actions'>${controls}</div></div>${renderScenarioInlineIssues(actionIssues)}${body}</div>`;
 }
 
@@ -4277,7 +4601,7 @@ return `${Number(variantIndex)||0}:${Number(actionIndex)||0}`;
 }
 
 function renderReactiveV2ActionAddButtons(variantIndex){
-return `<div class='scenario-v2-action-add'>${uiButton({label:'Add device command',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'DEVICE_COMMAND','variant-index':variantIndex}})}${uiButton({label:'Add command group',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'DEVICE_COMMAND_GROUP','variant-index':variantIndex}})}${uiButton({label:'Add wait',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'WAIT_TIME','variant-index':variantIndex}})}${uiButton({label:'Add flag',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'SET_FLAG','variant-index':variantIndex}})}${uiButton({label:'Add message',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'SHOW_OPERATOR_MESSAGE','variant-index':variantIndex}})}</div>`;
+return `<div class='scenario-v2-action-add'>${uiButton({label:'Add device command',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'DEVICE_COMMAND','variant-index':variantIndex}})}${uiButton({label:'Add command group',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'DEVICE_COMMAND_GROUP','variant-index':variantIndex}})}${uiButton({label:'Add wait time',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'WAIT_TIME','variant-index':variantIndex}})}${uiButton({label:'Add wait event',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'WAIT_DEVICE_EVENT','variant-index':variantIndex}})}${uiButton({label:'Add wait any',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'WAIT_ANY_DEVICE_EVENT','variant-index':variantIndex}})}${uiButton({label:'Add wait all',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'WAIT_ALL_DEVICE_EVENTS','variant-index':variantIndex}})}${uiButton({label:'Add wait flags',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'WAIT_FLAGS','variant-index':variantIndex}})}${uiButton({label:'Add flag',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'SET_FLAG','variant-index':variantIndex}})}${uiButton({label:'Add message',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'SHOW_OPERATOR_MESSAGE','variant-index':variantIndex}})}${uiButton({label:'Add fail',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'FAIL_REACTION','variant-index':variantIndex}})}${uiButton({label:'Add reset',action:'scenario.reactive_v2',dataset:{op:'add_action','action-type':'RESET_REACTION','variant-index':variantIndex}})}</div>`;
 }
 
 function renderReactiveV2Variants(branch,issueState){
@@ -4291,7 +4615,7 @@ const shown=isSingle?(variants.length?[variants[0]]:[{id:'variant_1',label:'Acti
 const actionIssues=issueState&&issueState.actionIssues&&typeof issueState.actionIssues==='object'?issueState.actionIssues:{};
 const maxFireValue=Number(branch.policy&&branch.policy.max_fire_count)||Number(branch.max_fire_count)||shown.length||1;
 const escalateControls=isEscalate?`<label class='scenario-v2-max-fire'><span>Stop after level</span><input data-v2-policy-field='max_fire_count' type='number' min='0' step='1' value='${esc(maxFireValue)}'></label>`:'';
-return `<section class='scenario-v2-rule scenario-v2-then'><div class='scenario-v2-rule-label'>Then</div><div class='scenario-v2-rule-body'><div class='scenario-v2-subtitle-row'><div class='scenario-v2-subtitle'>${esc(title)}</div>${escalateControls}</div><div class='scenario-v2-variant-list'>${shown.map((variant,index)=>{const originalIndex=isSingle?0:index;const label=isEscalate?`Level ${index+1}`:(isSingle?'Actions':`Variant ${index+1}`);const nameValue=isSingle?'Actions':(variant.label||variant.name||label);return `<div class='scenario-v2-variant' data-v2-variant='${originalIndex}'><div class='scenario-v2-variant-head'><label class='field-stack'><span>${esc(label)}</span><input data-v2-variant-field='label' placeholder='${esc(label)} label' value='${esc(nameValue)}' ${isSingle?'readonly':''}></label><div class='actions'>${isSingle?'':uiButton({label:`Delete ${isEscalate?'level':'variant'}`,kind:'danger',action:'scenario.reactive_v2',dataset:{op:'delete_variant','variant-index':originalIndex},disabled:variants.length<=1})}</div></div><details class='scenario-advanced compact-advanced scenario-v2-variant-id'><summary>${esc(isEscalate?'Level id':'Variant id')}</summary><div class='row'><input data-v2-variant-field='id' placeholder='Variant ID' value='${esc(variant.id||'')}'></div></details><div class='scenario-v2-action-list'>${(Array.isArray(variant.actions)?variant.actions:[]).map((action,actionIndex)=>renderReactiveV2Action(action,originalIndex,actionIndex,actionIssues[reactiveV2ActionKey(originalIndex,actionIndex)]||[])).join('')||`<div class='empty'>No actions yet. Add one or more actions below.</div>`}</div>${renderReactiveV2ActionAddButtons(originalIndex)}</div>`;}).join('')}</div>${isSingle?'':uiButton({label:addLabel,action:'scenario.reactive_v2',dataset:{op:'add_variant'}})}</div></section>`;
+return `<section class='scenario-v2-rule scenario-v2-then'><div class='scenario-v2-rule-label'>Then</div><div class='scenario-v2-rule-body'><div class='scenario-v2-subtitle-row'><div class='scenario-v2-subtitle'>${esc(title)}</div>${escalateControls}</div><div class='scenario-v2-variant-list'>${shown.map((variant,index)=>{const originalIndex=isSingle?0:index;const itemTitle=isEscalate?`Level ${index+1}`:(isSingle?'Actions':`Variant ${index+1}`);return `<div class='scenario-v2-variant' data-v2-variant='${originalIndex}'><div class='scenario-v2-variant-head'><div class='scenario-v2-variant-title'>${esc(itemTitle)}</div><div class='actions'>${isSingle?'':uiButton({label:`Delete ${isEscalate?'level':'variant'}`,kind:'danger',action:'scenario.reactive_v2',dataset:{op:'delete_variant','variant-index':originalIndex},disabled:variants.length<=1})}</div></div><div class='scenario-v2-action-list'>${(Array.isArray(variant.actions)?variant.actions:[]).map((action,actionIndex)=>renderReactiveV2Action(action,originalIndex,actionIndex,actionIssues[reactiveV2ActionKey(originalIndex,actionIndex)]||[])).join('')||`<div class='empty'>No actions yet. Add one or more actions below.</div>`}</div>${renderReactiveV2ActionAddButtons(originalIndex)}</div>`;}).join('')}</div>${isSingle?'':uiButton({label:addLabel,action:'scenario.reactive_v2',dataset:{op:'add_variant'}})}</div></section>`;
 }
 
 function renderReactiveV2Editor(branch,issueState){
@@ -4314,6 +4638,16 @@ branch.guard_flags.push({flag:'puzzle_done',value:true});
 }else if(action==='delete_guard'){
 branch.guard_flags=Array.isArray(branch.guard_flags)?branch.guard_flags:[];
 branch.guard_flags.splice(actionIndex,1);
+}else if(action==='add_trigger_event'){
+branch.trigger=branch.trigger&&typeof branch.trigger==='object'?branch.trigger:defaultReactiveV2Trigger();
+branch.trigger.events=Array.isArray(branch.trigger.events)?branch.trigger.events:[];
+branch.trigger.events.push(defaultScenarioEventItem());
+}else if(action==='delete_trigger_event'){
+branch.trigger=branch.trigger&&typeof branch.trigger==='object'?branch.trigger:defaultReactiveV2Trigger();
+branch.trigger.events=Array.isArray(branch.trigger.events)?branch.trigger.events:[];
+const triggerEventIndex=Number.isFinite(Number(actionType))?Number(actionType):actionIndex;
+branch.trigger.events.splice(triggerEventIndex,1);
+if(!branch.trigger.events.length)branch.trigger.events.push(defaultScenarioEventItem());
 }else if(action==='add_variant'){
 branch.variants=Array.isArray(branch.variants)?branch.variants:[];
 const n=branch.variants.length+1;
@@ -4356,6 +4690,33 @@ item.commands.splice(commandIndex,1);
 if(!item.commands.length)item.commands.push(defaultScenarioCommandItem());
 }
 }
+}else if(action==='event_group_add'||action==='event_group_delete'){
+const variant=branch.variants[variantIndex];
+const item=variant&&Array.isArray(variant.actions)?variant.actions[actionIndex]:null;
+const type=scenarioStepTypeValue(item);
+if(item&&(type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS')){
+item.events=Array.isArray(item.events)?item.events:[];
+if(action==='event_group_add'){
+item.events.push(defaultScenarioEventItem());
+}else{
+const eventIndex=Number.isFinite(Number(actionType))?Number(actionType):0;
+item.events.splice(eventIndex,1);
+if(!item.events.length)item.events.push(defaultScenarioEventItem());
+}
+}
+}else if(action==='flag_list_add'||action==='flag_list_delete'){
+const variant=branch.variants[variantIndex];
+const item=variant&&Array.isArray(variant.actions)?variant.actions[actionIndex]:null;
+if(item&&scenarioStepTypeValue(item)==='WAIT_FLAGS'){
+item.flags=Array.isArray(item.flags)?item.flags:[];
+if(action==='flag_list_add'){
+item.flags.push(defaultScenarioFlagItem());
+}else{
+const flagIndex=Number.isFinite(Number(actionType))?Number(actionType):0;
+item.flags.splice(flagIndex,1);
+if(!item.flags.length)item.flags.push(defaultScenarioFlagItem());
+}
+}
 }
 scenarioCommitDraft(draft);
 skipNextScenarioDomSync();
@@ -4373,12 +4734,11 @@ return `<div class='scenario-branch-tabs grouped'><div class='scenario-branch-ta
 
 function renderScenarioBranchSettings(branch,index,total){
 if(!branch)return '';
-const branchIdKey=`scenario:branch:${scenarioEditor.room_id}:${branch.id||index}`;
 const type=scenarioBranchTypeValue(branch);
 const isV2=scenarioIsReactiveV2Branch(branch);
 const typeField=type==='normal'?`<div class='field-stack'><span>Type</span><select data-scenario-branch-field='type'><option value='normal' selected>Scenario flow</option><option value='reactive'>Reaction</option></select></div>`:`<input type='hidden' data-scenario-branch-field='type' value='reactive'>`;
 const controls=type==='normal'?`<label class='row-meta branch-toggle'><input data-scenario-branch-field='required_for_completion' type='checkbox' ${branch.required_for_completion!==false?'checked':''}> Required for finish</label>`:(isV2?'':`<label class='row-meta branch-toggle'><input data-scenario-branch-field='run_once' type='checkbox' ${branch.run_once?'checked':''}> Run once</label><div class='field-stack compact-field'><span>Cooldown, sec</span><input data-scenario-branch-field='cooldown_sec' type='number' min='0' step='1' value='${esc(Math.round((Number(branch.cooldown_ms)||0)/1000))}'></div>`);
-return `<div class='scenario-branch-settings ${type==='reactive'?'reactive':''}'><div class='field-stack branch-name-field'><span>${type==='reactive'?'Reaction name':'Branch name'}</span><input data-scenario-branch-field='name' placeholder='${type==='reactive'?'Reaction name':'Branch name'}' value='${esc(branch.name||'')}'></div>${typeField}<label class='row-meta branch-toggle'><input data-scenario-branch-field='enabled' type='checkbox' ${branch.enabled!==false?'checked':''}> Enabled</label>${controls}${uiButton({label:'Delete',kind:'danger scenario-branch-delete',action:'scenario.branch',dataset:{op:'delete','branch-index':index},disabled:total<=1})}<details class='scenario-advanced compact-advanced' ${detailsAttrs(branchIdKey,false)}><summary>Branch id</summary><div class='row'><input data-scenario-branch-field='id' placeholder='Branch ID' value='${esc(branch.id||'')}'></div></details></div>`;
+return `<div class='scenario-branch-settings ${type==='reactive'?'reactive':''}'><div class='field-stack branch-name-field'><span>${type==='reactive'?'Reaction name':'Branch name'}</span><input data-scenario-branch-field='name' placeholder='${type==='reactive'?'Reaction name':'Branch name'}' value='${esc(branch.name||'')}'></div>${typeField}<label class='row-meta branch-toggle'><input data-scenario-branch-field='enabled' type='checkbox' ${branch.enabled!==false?'checked':''}> Enabled</label>${controls}${uiButton({label:'Delete',kind:'danger scenario-branch-delete',action:'scenario.branch',dataset:{op:'delete','branch-index':index},disabled:total<=1})}</div>`;
 }
 
 function applyScenarioBranchAction(action,index){
@@ -4458,11 +4818,13 @@ return `${index+1}. Wait ${scenarioDeviceName(device)}: ${scenarioDeviceEventNam
 }
 if(type==='WAIT_ANY_DEVICE_EVENT')return `${index+1}. Wait any of ${(Array.isArray(step.events)?step.events:[]).length} events`;
 if(type==='WAIT_ALL_DEVICE_EVENTS')return `${index+1}. Wait all ${(Array.isArray(step.events)?step.events:[]).length} events`;
-if(type==='WAIT_TIME')return `${index+1}. ${waitTimeLabel(step.duration_ms)}`;
+if(type==='WAIT_TIME')return `${index+1}. ${scenarioWaitTimeSummary(step)}`;
 if(type==='OPERATOR_APPROVAL')return `${index+1}. Operator: ${step.prompt||step.operator_prompt||'approval'}`;
 if(type==='SHOW_OPERATOR_MESSAGE')return `${index+1}. Show operator: ${step.message||'message'}`;
 if(type==='SET_FLAG')return `${index+1}. Set flag ${step.flag_name||'flag'} = ${step.value===false?'false':'true'}`;
 if(type==='WAIT_FLAGS')return `${index+1}. Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`;
+if(type==='FAIL_REACTION')return `${index+1}. Fail reaction`;
+if(type==='RESET_REACTION')return `${index+1}. Reset reaction`;
 if(type==='END_GAME')return `${index+1}. End game`;
 return `${index+1}. ${step.label||type}`;
 }
@@ -4519,17 +4881,31 @@ return `${scenarioDeviceName(device)} -> ${scenarioCommandName(step.device_id,st
 if(type==='DEVICE_COMMAND_GROUP')return `Command group (${(Array.isArray(step.commands)?step.commands:[]).length})`;
 if(type==='WAIT_DEVICE_EVENT'){
 const device=scenarioDeviceById(step.device_id);
-return `Wait ${scenarioDeviceName(device)}: ${scenarioDeviceEventName(step.device_id,step.event_id)}`;
+return scenarioWaitSummaryWithTimeout(`Wait ${scenarioDeviceName(device)}: ${scenarioDeviceEventName(step.device_id,step.event_id)}`,step);
 }
-if(type==='WAIT_ANY_DEVICE_EVENT')return `Wait any event (${(Array.isArray(step.events)?step.events:[]).length})`;
-if(type==='WAIT_ALL_DEVICE_EVENTS')return `Wait all events (${(Array.isArray(step.events)?step.events:[]).length})`;
-if(type==='WAIT_TIME')return waitTimeLabel(step.duration_ms);
+if(type==='WAIT_ANY_DEVICE_EVENT')return scenarioWaitSummaryWithTimeout(`Wait any event (${(Array.isArray(step.events)?step.events:[]).length})`,step);
+if(type==='WAIT_ALL_DEVICE_EVENTS')return scenarioWaitSummaryWithTimeout(`Wait all events (${(Array.isArray(step.events)?step.events:[]).length})`,step);
+if(type==='WAIT_TIME')return scenarioWaitTimeSummary(step);
 if(type==='OPERATOR_APPROVAL')return `Operator: ${step.prompt||step.operator_prompt||'approval'}`;
 if(type==='SHOW_OPERATOR_MESSAGE')return `Show operator: ${step.message||'message'}`;
 if(type==='SET_FLAG')return `Set ${step.flag_name||'flag'} = ${step.value===false?'false':'true'}`;
-if(type==='WAIT_FLAGS')return `Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`;
+if(type==='WAIT_FLAGS')return scenarioWaitSummaryWithTimeout(`Wait flags (${(Array.isArray(step.flags)?step.flags:[]).length})`,step);
+if(type==='FAIL_REACTION')return 'Fail reaction';
+if(type==='RESET_REACTION')return 'Reset reaction';
 if(type==='END_GAME')return 'End game';
 return scenarioStepAutoLabel(step);
+}
+
+function scenarioWaitTimeSummary(step){
+const base=waitTimeLabel(step&&step.duration_ms);
+return scenarioWaitSummaryWithTimeout(base,step);
+}
+
+function scenarioWaitSummaryWithTimeout(base,step){
+const timeoutAction=String(step&&step.timeout_action||'continue');
+if(timeoutAction==='fail_reaction')return `${base} -> fail`;
+if(timeoutAction==='reset_reaction')return `${base} -> reset`;
+return base;
 }
 
 function scenarioStepVisualType(step){
@@ -4543,21 +4919,29 @@ if(type==='SHOW_OPERATOR_MESSAGE')return 'operator';
 if(type==='DEVICE_COMMAND_GROUP')return 'command-group';
 if(type==='SET_FLAG')return 'flag';
 if(type==='WAIT_FLAGS')return 'flag';
+if(type==='FAIL_REACTION')return 'reaction-fail';
+if(type==='RESET_REACTION')return 'reaction-reset';
 if(type==='END_GAME')return 'end-game';
-if(type==='DEVICE_COMMAND'&&String(step.device_id||'')==='system_audio')return 'audio';
+if(type==='DEVICE_COMMAND'&&String(step.device_id||'')==='system_audio'){
+const channel=typeof audioChannelValue==='function'?audioChannelValue(step&&step.params&&typeof step.params==='object'?step.params:{}):'effect';
+return channel==='background'?'audio-bg':'audio-sfx';
+}
 return 'command';
 }
 
 function scenarioStepIcon(step){
 const visual=scenarioStepVisualType(step);
 if(visual==='wait-time')return '&#9201;';
-if(visual==='wait-event')return '&#9678;';
-if(visual==='operator')return '&#10003;';
-if(visual==='audio')return '&#9835;';
-if(visual==='command-group')return '&#9658;&#9658;';
+if(visual==='wait-event')return '&#128276;';
+if(visual==='operator')return '&#9997;';
+if(visual==='audio-bg')return '&#9835;';
+if(visual==='audio-sfx')return '&#9834;';
+if(visual==='command-group')return '&#9776;';
 if(visual==='flag')return '&#9873;';
+if(visual==='reaction-fail')return '&#10005;';
+if(visual==='reaction-reset')return '&#8635;';
 if(visual==='end-game')return '&#9632;';
-return '&#9658;';
+return '&#9654;';
 }
 
 function scenarioStepBadgeLabel(step){
@@ -4565,9 +4949,12 @@ const visual=scenarioStepVisualType(step);
 if(visual==='wait-time')return 'Wait';
 if(visual==='wait-event')return 'Event';
 if(visual==='operator')return 'Operator';
-if(visual==='audio')return 'Audio';
+if(visual==='audio-bg')return 'BG audio';
+if(visual==='audio-sfx')return 'SFX';
 if(visual==='command-group')return 'Group';
 if(visual==='flag')return 'Flag';
+if(visual==='reaction-fail')return 'Fail';
+if(visual==='reaction-reset')return 'Reset';
 if(visual==='end-game')return 'End';
 return 'Command';
 }
@@ -4788,6 +5175,19 @@ builder.addReactive(branch,-1,-1,'REACTIVE_TRIGGER_INCOMPLETE','Reaction trigger
 }
 return;
 }
+if(kind==='any_device_events'||kind==='all_device_events'){
+const events=Array.isArray(trigger.events)?trigger.events:[];
+if(!events.length){
+builder.addReactive(branch,-1,-1,'REACTIVE_TRIGGER_EVENTS_EMPTY','Reaction trigger: add at least one device event.','field');
+return;
+}
+events.forEach((ev,eventIndex)=>{
+if(!String(ev&&ev.device_id||'').trim()||!String(ev&&ev.event_id||'').trim()){
+builder.addReactive(branch,-1,-1,'REACTIVE_TRIGGER_EVENT_INCOMPLETE',`Reaction trigger: event ${eventIndex+1} needs a device and event.`,'field');
+}
+});
+return;
+}
 if(kind==='flag_changed'){
 if(!String(trigger.flag_name||'').trim()){
 builder.addReactive(branch,-1,-1,'REACTIVE_TRIGGER_INCOMPLETE','Reaction trigger: choose a flag name.','field');
@@ -4883,6 +5283,9 @@ if(!String(action&&action.message||'').trim())builder.addReactive(branch,variant
 }
 else if(type==='SET_FLAG'){
 if(!String(action&&action.flag_name||'').trim())builder.addReactive(branch,variantIndex,actionIndex,'FLAG_NAME_EMPTY',`${actionLabel}: choose or type a flag name`,'field');
+}
+else if(type!=='FAIL_REACTION'&&type!=='RESET_REACTION'){
+builder.addReactive(branch,variantIndex,actionIndex,'REACTIVE_ACTION_UNSUPPORTED',`${actionLabel}: this action type is no longer supported in reactive branches`,'draft');
 }
 });
 });
@@ -5026,7 +5429,19 @@ return out;
 }
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 function scenarioDeviceById(deviceId){
-return scenarioCatalogDevices().find(device=>device.id===deviceId)||null;
+const id=String(deviceId||'');
+if(!id)return null;
+const direct=scenarioCatalogDevices().find(device=>device.id===id)||null;
+if(direct)return direct;
+const registration=typeof observedRegistration==='function'?observedRegistration(id):null;
+if(registration&&registration.device_id){
+return scenarioCatalogDevices().find(device=>device.id===registration.device_id)||null;
+}
+const quest=typeof questDevices==='function'?questDevices().find(device=>String(device&&device.client_id||'')===id):null;
+if(quest&&quest.id){
+return scenarioCatalogDevices().find(device=>device.id===quest.id)||null;
+}
+return null;
 }
 
 function scenarioCommandById(deviceId,commandId){
@@ -5041,6 +5456,7 @@ return commands[0]&&commands[0].id||'';
 }
 
 function scenarioValidEventId(device,eventId){
+eventId=typeof normalizeScenarioEventIdValue==='function'?normalizeScenarioEventIdValue(eventId):eventId;
 const events=device&&Array.isArray(device.events)?device.events:[];
 if(eventId&&events.some(ev=>ev.id===eventId))return eventId;
 return events[0]&&events[0].id||'';
@@ -5048,7 +5464,11 @@ return events[0]&&events[0].id||'';
 
 function scenarioEventById(deviceId,eventId){
 const device=scenarioDeviceById(deviceId);
-return device&&Array.isArray(device.events)?device.events.find(ev=>ev.id===eventId)||null:null;
+if(!(device&&Array.isArray(device.events)))return null;
+eventId=typeof normalizeScenarioEventIdValue==='function'?normalizeScenarioEventIdValue(eventId):eventId;
+const exact=device.events.find(ev=>ev.id===eventId)||null;
+if(exact)return exact;
+return null;
 }
 
 function scenarioCommandName(deviceId,commandId){
@@ -5148,7 +5568,6 @@ const activeBranch=scenarioActiveBranch(base);
 const activeSteps=scenarioActiveSteps(base);
 if(!Number.isFinite(Number(scenarioEditor.expanded_step)))scenarioEditor.expanded_step=-1;
 if(scenarioEditor.expanded_step>=activeSteps.length)scenarioEditor.expanded_step=-1;
-const json=JSON.stringify(base,null,2);
 const issues=editing&&Array.isArray(editing.validation_issues)?editing.validation_issues:[];
 const activeIssues=scenarioActiveValidationIssues(issues);
 const totalStepCount=scenarioTotalStepCount(base.branches);
@@ -5156,8 +5575,6 @@ const issuesByStep=scenarioIssuesForBranch(activeIssues,base.branches,activeBran
 const reactiveIssueState=scenarioReactiveIssuesForBranch(activeIssues,base.branches,activeBranchIndex);
 const issueHtml=renderScenarioValidationSummary(activeIssues,totalStepCount);
 const rows=scenarios.length?scenarios.map(s=>{const branchCount=Math.max(1,Number(s&&s.branch_count)||Number(Array.isArray(s&&s.branches)?s.branches.length:0)||1);return `<div class='row-card admin-item-card'><div class='admin-item-main'><div class='admin-item-title-row'><div class='row-title'>${esc(s.name||s.id)}</div>${s.valid===false?`<span class='badge'>invalid</span>`:''}</div><div class='admin-item-meta'><span>${esc(s.step_count||0)} steps</span><span>${esc(branchCount)} branch${branchCount===1?'':'es'}</span><span>${esc(scenarioValidationText(s))}</span></div></div><div class='admin-item-side'>${uiActions([uiButton({label:'Edit',action:'scenario.edit',dataset:{'scenario-id':s.id||''}}),uiButton({label:'Create game mode',action:'scenario.create_game_mode',dataset:{'scenario-id':s.id||''}}),uiButton({label:'Delete',kind:'danger',action:'scenario.delete',dataset:{'scenario-id':s.id||''},confirm:`Delete scenario ${s.id||''}?`})])}</div></div>`;}).join(''):`<div class='card empty'>No scenarios for this room</div>`;
-const scenarioIdKey=`scenario:id:${roomId}:${base.id||'new'}`;
-const jsonKey=`scenario:json:${roomId}:${base.id||'new'}`;
 const emptyStepsText=scenarioBranchTypeValue(activeBranch)==='reactive'?'Add a trigger first. This reaction will listen for it, then run the actions you add after it.':'No steps yet';
 const activeBranchIsV2=scenarioIsReactiveV2Branch(activeBranch);
 const branchEditorBody=activeBranchIsV2
@@ -5169,7 +5586,7 @@ subtitle:'Build room logic, branches and step flow for operators.',
 closeAction:'scenario.cancel',
 className:'card editor-modal-card scenario-modal-card',
 dataset:{'scenario-editor-modal':'1'},
-content:`<div class='scenario-editor-card' data-scenario-editor='1' data-active-branch-index='${activeBranchIndex}'><div class='scenario-editor-head'><div><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'>${uiButton({label:'Validate',action:'scenario.validate'})}${uiButton({label:'Save',action:'scenario.save'})}</div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(scenarioIdKey,false)}><summary>Scenario id</summary><div class='row'><input id='scenario_id' placeholder='Scenario ID' value='${esc(base.id||'')}'></div></details>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout ${activeBranchIsV2?'scenario-editor-layout-v2':''}'>${activeBranchIsV2?'':`<aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside>`}${branchEditorBody}</div><details style='margin-top:10px' ${detailsAttrs(jsonKey,false)}><summary class='row-meta'>Debug JSON</summary><textarea id='scenario_json' class='builder-json' readonly>${esc(json)}</textarea></details><div class='actions sticky-actions'>${uiButton({label:'Save scenario',action:'scenario.save'})}${uiButton({label:'Close',action:'scenario.cancel'})}</div></div>`
+content:`<div class='scenario-editor-card' data-scenario-editor='1' data-active-branch-index='${activeBranchIndex}'><div class='scenario-editor-head'><div><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'>${uiButton({label:'Validate',action:'scenario.validate'})}${uiButton({label:'Save',action:'scenario.save'})}</div></div>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout ${activeBranchIsV2?'scenario-editor-layout-v2':''}'>${activeBranchIsV2?'':`<aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside>`}${branchEditorBody}</div><div class='actions sticky-actions'>${uiButton({label:'Save scenario',action:'scenario.save'})}${uiButton({label:'Close',action:'scenario.cancel'})}</div></div>`
 }):'';
 return `<div class='scenario-room-bar'><div><span class='row-meta'>Room</span><select class='scenario-select' data-scenario-room-select>${rooms.map(r=>`<option value='${esc(r.room_id)}' ${r.room_id===roomId?'selected':''}>${esc(r.title||r.room_id)}</option>`).join('')}</select></div><div class='row-meta'>Steps can target devices in any room.</div></div><section class='card'><div class='card-head'><h2 class='section-title'>Scenarios</h2><div class='actions'>${uiButton({label:'Add scenario',action:'scenario.new'})}</div></div><div class='admin-entity-grid'>${rows}</div></section>${editorHtml}`;
 }
@@ -5298,9 +5715,22 @@ const summary=gmState&&gmState.summary?gmState.summary:{};
 setStatus(summary.has_fault?'fault':(summary.has_degraded?'degraded':'ok'),summary.has_fault?'state-fault':(summary.has_degraded?'state-degraded':'state-ok'));
 }
 
+function captureScenarioModalRenderState(){
+const card=document.querySelector('[data-scenario-editor-modal] .scenario-modal-card');
+if(!card)return null;
+return {scrollTop:card.scrollTop||0};
+}
+
+function restoreScenarioModalRenderState(state){
+if(!state)return;
+const card=document.querySelector('[data-scenario-editor-modal] .scenario-modal-card');
+if(card)card.scrollTop=state.scrollTop||0;
+}
+
 function renderMainContent(){
 const root=document.getElementById('gm_content');
 if(!root)return 'none';
+const scenarioModalState=captureScenarioModalRenderState();
 if(gmSkipScenarioDomSync)gmSkipScenarioDomSync=false;
 applyGMRoleLayout();
 syncGMSummaryStatus();
@@ -5326,6 +5756,7 @@ else if(currentView==='storage')html=renderStorageAdminView();
 else html=renderRoomsView();
 root.innerHTML=html;
 injectRoomScenarios();
+restoreScenarioModalRenderState(scenarioModalState);
 const navView=currentView==='room'?'rooms':currentView;
 
 document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.view===navView));
@@ -6329,18 +6760,40 @@ const scenario=roomSelectedScenarioObject(room);
 const wrap=container.querySelector('[data-room-scenario-progress-wrap]');
 const overview=wrap&&wrap.querySelector('[data-room-scenario-progress-overview]');
 const waits=wrap&&wrap.querySelector('[data-room-scenario-progress-waits]');
+const tabsHost=wrap&&wrap.querySelector('[data-room-scenario-progress-tabs-host]');
 const flow=wrap&&wrap.querySelector('[data-room-scenario-progress-flow]');
 const reactions=wrap&&wrap.querySelector('[data-room-scenario-progress-reactions]');
-if(!wrap||!overview||!waits||!flow||!reactions){
+if(!wrap||!overview||!waits||!tabsHost||!flow||!reactions){
 patchRoomRuntimeContainer(container,renderScenarioProgress(room,scenario));
 return;
 }
+const activeTab=scenarioProgressActiveTab(renderState.progressData);
+if(String(wrap.dataset.roomScenarioProgressTab||'')!==String(activeTab||'flow')){
+wrap.dataset.roomScenarioProgressTab=activeTab||'flow';
+}
+gmPatchRuntimeSection(tabsHost,renderScenarioProgressTabsHtml(renderState.progressData));
 if(renderState.progressFlowChanged){
 patchRoomScenarioProgressSection(flow,renderState.progressFlowHtml,scenarioProgressSectionItems(renderState.progressData,'flow'),'flow');
 }
 if(renderState.progressReactionsChanged){
 patchRoomScenarioProgressSection(reactions,renderState.progressReactionsHtml,scenarioProgressSectionItems(renderState.progressData,'reactions'),'reactions');
 }
+}
+
+function refreshCurrentRoomProgressTab(){
+if(currentView!=='room'||roomTab!=='control'||!currentRoomId)return false;
+const room=roomById(currentRoomId);
+if(!room)return false;
+const container=document.querySelector(`[data-room-scenario-progress="${currentRoomId}"]`);
+if(!container)return false;
+const wrap=container.querySelector('[data-room-scenario-progress-wrap]');
+const tabsHost=wrap&&wrap.querySelector('[data-room-scenario-progress-tabs-host]');
+if(!wrap||!tabsHost)return false;
+const progressData=scenarioProgressData(room,roomSelectedScenarioObject(room));
+const activeTab=scenarioProgressActiveTab(progressData);
+wrap.dataset.roomScenarioProgressTab=activeTab||'flow';
+gmPatchRuntimeSection(tabsHost,renderScenarioProgressTabsHtml(progressData));
+return true;
 }
 
 function patchRoomScenarioProgressSection(container,html,items,mode){
@@ -6366,7 +6819,7 @@ expectedItems.forEach((item,index)=>{
 if(fallbackToSectionPatch)return;
 const branchId=scenarioProgressBranchDomId(item.room,item);
 const branchKey=scenarioProgressBranchRenderKey(item);
-const branchHtml=renderScenarioProgressBranch(item.room,item);
+const branchHtml=renderScenarioProgressBranch(item.room,item,mode);
 expectedIds.add(branchId);
 let node=existingCards.get(branchId)||null;
 if(!node){
@@ -6577,8 +7030,10 @@ return;
 }
 let shouldRender=false;
 let shouldPatchSidebar=false;
-	if(gmVersionChanged(prev,versions,['devices','ingest'])){
-		gmStatTag('versions.change','devices_or_ingest');
+	const devicesChanged=gmVersionChanged(prev,versions,['devices']);
+	const ingestChanged=gmVersionChanged(prev,versions,['ingest']);
+	if(devicesChanged){
+		gmStatTag('versions.change','devices');
 		if(currentView==='room'||currentView==='rooms'){
 			gmStatTag('render.full.request','versions.devices_room_snapshot');
 			await loadGMFullSnapshot(true,false,{forceStatic:true,reason:'versions.devices_room_snapshot'});
@@ -6591,6 +7046,22 @@ shouldPatchSidebar=true;
 shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 if(currentView==='scenarios'&&isAdmin())shouldRender=true;
 }
+	if(ingestChanged){
+		gmStatTag('versions.change','ingest');
+		await loadObserved(true);
+		shouldPatchSidebar=true;
+		if(currentView==='room'&&roomTab==='control'&&currentRoomId){
+			await loadGMRuntimeOnly(currentRoomId,false);
+			if(shouldDeferAutoRender())gmQueueDeferredRender('sidebar','',true);
+			else renderRightSidebar(false);
+			return;
+		}
+		if(currentView==='rooms'){
+			await loadGMRoomsRuntimeOnly([],false);
+			return;
+		}
+		shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
+	}
 if(gmVersionChanged(prev,versions,['scenarios'])){
 gmStatTag('versions.change','scenarios');
 await loadRoomScenarios(true);
@@ -6672,12 +7143,17 @@ shouldPatchSidebar=true;
 shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 }
 	if(needsDeviceRuntime){
-		if(currentView==='room'||currentView==='rooms'){
-			gmStatTag('render.full.request','invalidate.devices_runtime_room_snapshot');
-			await loadGMFullSnapshot(true,false,{forceStatic:true,reason:'invalidate.devices_runtime_room_snapshot'});
+		await loadObserved(true);
+		if(currentView==='room'&&roomTab==='control'&&currentRoomId){
+			await loadGMRuntimeOnly(currentRoomId,false);
+			if(shouldDeferAutoRender())gmQueueDeferredRender('sidebar','',true);
+			else renderRightSidebar(false);
 			return;
 		}
-		await loadObserved(true);
+		if(currentView==='rooms'){
+			await loadGMRoomsRuntimeOnly([],false);
+			return;
+		}
 		shouldPatchSidebar=true;
 		shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 }
@@ -7523,6 +7999,50 @@ else if(type==='DEVICE_COMMAND_GROUP'){
 else if(type==='WAIT_TIME'){
 	const field=actionEl.querySelector('[data-step-field="duration_ms"]');
 	action.duration_ms=field?durationSecondsToMs(field.value||1):Number(action.duration_ms)||1000;
+	const timeoutField=actionEl.querySelector('[data-step-field="timeout_action"]');
+	action.timeout_action=timeoutField?String(timeoutField.value||'continue'):'continue';
+}
+else if(type==='WAIT_DEVICE_EVENT'){
+	const deviceField=actionEl.querySelector('[data-step-field="device_id"]');
+	const eventField=actionEl.querySelector('[data-step-field="event_id"]');
+	const timeoutMsField=actionEl.querySelector('[data-step-field="timeout_ms"]');
+	const timeoutField=actionEl.querySelector('[data-step-field="timeout_action"]');
+	action.device_id=deviceField?String(deviceField.value||''):'';
+	action.event_id=eventField?normalizeScenarioEventIdValue(String(eventField.value||'')):'';
+	action.timeout_ms=timeoutMsField&&timeoutMsField.value!==''?durationSecondsToMs(timeoutMsField.value):0;
+	action.timeout_action=timeoutField?String(timeoutField.value||'continue'):'continue';
+}
+else if(type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS'){
+	const timeoutMsField=actionEl.querySelector('[data-step-field="timeout_ms"]');
+	const timeoutField=actionEl.querySelector('[data-step-field="timeout_action"]');
+	action.events=[];
+	actionEl.querySelectorAll('[data-event-group-item]').forEach(itemEl=>{
+		const deviceField=itemEl.querySelector('[data-event-group-field="device_id"]');
+		const eventField=itemEl.querySelector('[data-event-group-field="event_id"]');
+		action.events.push({
+			device_id:deviceField?String(deviceField.value||''):'',
+			event_id:eventField?normalizeScenarioEventIdValue(String(eventField.value||'')):''
+		});
+	});
+	if(!action.events.length)action.events=[defaultScenarioEventItem()];
+	action.timeout_ms=timeoutMsField&&timeoutMsField.value!==''?durationSecondsToMs(timeoutMsField.value):0;
+	action.timeout_action=timeoutField?String(timeoutField.value||'continue'):'continue';
+}
+else if(type==='WAIT_FLAGS'){
+	const timeoutMsField=actionEl.querySelector('[data-step-field="timeout_ms"]');
+	const timeoutField=actionEl.querySelector('[data-step-field="timeout_action"]');
+	action.flags=[];
+	actionEl.querySelectorAll('[data-flag-list-item]').forEach(itemEl=>{
+		const flagField=itemEl.querySelector('[data-flag-list-field="flag_name"]');
+		const valueField=itemEl.querySelector('[data-flag-list-field="value"]');
+		action.flags.push({
+			flag_name:flagField?String(flagField.value||''):'',
+			value:valueField?String(valueField.value)!=='false':true
+		});
+	});
+	if(!action.flags.length)action.flags=[defaultScenarioFlagItem()];
+	action.timeout_ms=timeoutMsField&&timeoutMsField.value!==''?durationSecondsToMs(timeoutMsField.value):0;
+	action.timeout_action=timeoutField?String(timeoutField.value||'continue'):'continue';
 }
 else if(type==='SHOW_OPERATOR_MESSAGE'){
 	const field=actionEl.querySelector('[data-step-field="message"]');
@@ -7547,6 +8067,9 @@ if(kind==='device_event'){
 ctx.branch.trigger.device_id='';
 ctx.branch.trigger.event_id='';
 }
+else if(kind==='any_device_events'||kind==='all_device_events'){
+ctx.branch.trigger.events=[defaultScenarioEventItem()];
+}
 }
 else if(key==='device_id'){
 ctx.branch.trigger.device_id=field.value||'';
@@ -7554,7 +8077,7 @@ const device=scenarioDeviceById(ctx.branch.trigger.device_id);
 ctx.branch.trigger.event_id=scenarioValidEventId(device,'');
 }
 else if(key==='event_id'){
-ctx.branch.trigger.event_id=field.value||'';
+ctx.branch.trigger.event_id=normalizeScenarioEventIdValue(field.value||'');
 if(ctx.branch.trigger.kind==='operator_event')ctx.branch.trigger.operator_event=ctx.branch.trigger.event_id;
 else if(ctx.branch.trigger.kind==='runtime_event')ctx.branch.trigger.runtime_event=ctx.branch.trigger.event_id;
 }
@@ -7571,12 +8094,33 @@ else return false;
 return true;
 }
 
+function gmHandleReactiveV2TriggerEventField(field,ctx){
+const itemEl=field.closest('[data-v2-trigger-event-item]');
+const itemIndex=Number(itemEl&&itemEl.dataset.v2TriggerEventItem);
+if(!Number.isFinite(itemIndex))return false;
+ctx.branch.trigger=ctx.branch.trigger&&typeof ctx.branch.trigger==='object'?ctx.branch.trigger:defaultReactiveV2Trigger();
+ctx.branch.trigger.events=Array.isArray(ctx.branch.trigger.events)?ctx.branch.trigger.events:[];
+const item=ctx.branch.trigger.events[itemIndex]||defaultScenarioEventItem();
+if(field.matches('select[data-v2-trigger-event-field="device_id"],input[data-v2-trigger-event-field="device_id"]')){
+const device=scenarioDeviceById(field.value||'');
+item.device_id=field.value||'';
+item.event_id=scenarioValidEventId(device,'');
+}
+else if(field.matches('select[data-v2-trigger-event-field="event_id"],input[data-v2-trigger-event-field="event_id"]')){
+item.event_id=normalizeScenarioEventIdValue(field.value||'');
+}
+else return false;
+ctx.branch.trigger.events[itemIndex]=item;
+return true;
+}
+
 function gmHandleReactiveV2PolicyField(field,ctx){
 const key=field.dataset.v2PolicyField||'';
 ctx.branch.policy=ctx.branch.policy&&typeof ctx.branch.policy==='object'?ctx.branch.policy:{};
 if(key==='mode'){
+const previousMode=String(ctx.branch.policy.mode||'single');
 ctx.branch.policy.mode=field.value||'single';
-normalizeReactiveV2RepeatPolicy(ctx.branch);
+normalizeReactiveV2RepeatPolicy(ctx.branch,previousMode);
 }
 else if(key==='max_fire_count'){
 ctx.branch.policy.max_fire_count=Math.max(0,Math.round(Number(field.value)||0));
@@ -7664,6 +8208,9 @@ if(type==='DEVICE_COMMAND'){
 action.command_id=scenarioValidCommandId(device,'');
 action.params=defaultParamsForCommand(device,scenarioCommandById(action.device_id,action.command_id));
 }
+else if(type==='WAIT_DEVICE_EVENT'){
+action.event_id=scenarioValidEventId(device,'');
+}
 action=normalizeScenarioEditorStep(action);
 ctx.variant.actions[ctx.actionIndex]=action;
 scenarioRefreshAutoLabel(action,previous);
@@ -7677,6 +8224,9 @@ const type=scenarioStepTypeValue(action);
 if(type==='DEVICE_COMMAND'&&field.matches('select[data-step-field="command_id"]')){
 action.command_id=field.value||'';
 action.params=defaultParamsForCommand(scenarioDeviceById(action.device_id),scenarioCommandById(action.device_id,action.command_id));
+}
+else if(type==='WAIT_DEVICE_EVENT'&&field.matches('select[data-step-field="event_id"],input[data-step-field=\"event_id\"]')){
+action.event_id=normalizeScenarioEventIdValue(field.value||'');
 }
 else return false;
 action=normalizeScenarioEditorStep(action);
@@ -7743,11 +8293,58 @@ scenarioRefreshAutoLabel(action,previous);
 return true;
 }
 
+function gmHandleReactiveV2ActionEventGroupField(field,ctx){
+const itemEl=field.closest('[data-event-group-item]');
+const itemIndex=Number(itemEl&&itemEl.dataset.eventGroupItem);
+if(!Number.isFinite(itemIndex))return false;
+let action=ctx.action;
+const previous=scenarioClone(action);
+action.events=Array.isArray(action.events)?action.events:[];
+const item=action.events[itemIndex]||defaultScenarioEventItem();
+if(field.matches('select[data-event-group-field="device_id"],input[data-event-group-field="device_id"]')){
+const device=scenarioDeviceById(field.value||'');
+item.device_id=field.value||'';
+item.event_id=scenarioValidEventId(device,'');
+}
+else if(field.matches('select[data-event-group-field="event_id"],input[data-event-group-field="event_id"]')){
+item.event_id=normalizeScenarioEventIdValue(field.value||'');
+}
+else return false;
+action.events[itemIndex]=item;
+action=normalizeScenarioEditorStep(action);
+ctx.variant.actions[ctx.actionIndex]=action;
+scenarioRefreshAutoLabel(action,previous);
+return true;
+}
+
+function gmHandleReactiveV2ActionFlagField(field,ctx){
+const itemEl=field.closest('[data-flag-list-item]');
+const itemIndex=Number(itemEl&&itemEl.dataset.flagListItem);
+if(!Number.isFinite(itemIndex))return false;
+let action=ctx.action;
+const previous=scenarioClone(action);
+action.flags=Array.isArray(action.flags)?action.flags:[];
+const item=action.flags[itemIndex]||defaultScenarioFlagItem();
+if(field.matches('[data-flag-list-field="flag_name"]')){
+item.flag_name=field.value||'';
+}
+else if(field.matches('select[data-flag-list-field="value"]')){
+item.value=String(field.value)!=='false';
+}
+else return false;
+action.flags[itemIndex]=item;
+action=normalizeScenarioEditorStep(action);
+ctx.variant.actions[ctx.actionIndex]=action;
+scenarioRefreshAutoLabel(action,previous);
+return true;
+}
+
 function gmHandleReactiveV2Change(control,deferRender){
 const ctx=reactiveV2DraftContext(control);
 if(!ctx)return false;
 const branchField=control.closest('[data-v2-branch-field]');
 const triggerField=control.closest('[data-v2-trigger-field]');
+const triggerEventField=control.closest('[data-v2-trigger-event-field]');
 const policyField=control.closest('[data-v2-policy-field]');
 const reentryField=control.closest('[data-v2-reentry-field]');
 const resultField=control.closest('[data-v2-result-field]');
@@ -7755,6 +8352,7 @@ const guardField=control.closest('[data-v2-guard-field]');
 const variantField=control.closest('[data-v2-variant-field]');
 if(branchField&&gmHandleReactiveV2BranchField(branchField,ctx)){}
 else if(triggerField&&gmHandleReactiveV2TriggerField(triggerField,ctx)){}
+else if(triggerEventField&&gmHandleReactiveV2TriggerEventField(triggerEventField,ctx)){}
 else if(policyField&&gmHandleReactiveV2PolicyField(policyField,ctx)){}
 else if(reentryField&&gmHandleReactiveV2ReentryField(reentryField,ctx)){}
 else if(resultField&&gmHandleReactiveV2ResultField(resultField,ctx)){}
@@ -7766,13 +8364,17 @@ if(!actionCtx)return false;
 const stepType=control.closest('select[data-step-field="type"]');
 const stepDevice=control.closest('select[data-step-field="device_id"]');
 const stepCommand=control.closest('select[data-step-field="command_id"]');
-const stepField=control.closest('[data-v2-action] [data-step-field]');
-const stepParam=control.closest('[data-v2-action] [data-step-param]');
-const groupField=control.closest('[data-v2-action] [data-group-command-field], [data-v2-action] [data-command-group-item] [data-step-param]');
+	const stepField=control.closest('[data-v2-action] [data-step-field]');
+	const stepParam=control.closest('[data-v2-action] [data-step-param]');
+	const groupField=control.closest('[data-v2-action] [data-group-command-field], [data-v2-action] [data-command-group-item] [data-step-param]');
+	const eventGroupField=control.closest('[data-v2-action] [data-event-group-field]');
+	const flagListField=control.closest('[data-v2-action] [data-flag-list-field]');
 	if(stepType&&gmHandleReactiveV2ActionTypeField(stepType,actionCtx)){}
 	else if(stepDevice&&gmHandleReactiveV2ActionDeviceField(stepDevice,actionCtx)){}
 	else if(stepCommand&&gmHandleReactiveV2ActionCommandOrEventField(stepCommand,actionCtx)){}
 	else if(groupField&&gmHandleReactiveV2ActionGroupField(groupField,actionCtx)){}
+	else if(eventGroupField&&gmHandleReactiveV2ActionEventGroupField(eventGroupField,actionCtx)){}
+	else if(flagListField&&gmHandleReactiveV2ActionFlagField(flagListField,actionCtx)){}
 	else if(stepParam&&gmHandleReactiveV2ActionParamField(stepParam,actionCtx)){}
 	else if(stepField&&gmHandleReactiveV2ActionStepField(stepField,actionCtx)){}
 	else return false;
@@ -7830,7 +8432,7 @@ step.command_id=field.value||'';
 step.params=defaultParamsForCommand(scenarioDeviceById(step.device_id),scenarioCommandById(step.device_id,step.command_id));
 }
 else if(type==='WAIT_DEVICE_EVENT'&&field.matches('select[data-step-field="event_id"]')){
-step.event_id=field.value||'';
+step.event_id=normalizeScenarioEventIdValue(field.value||'');
 }
 scenarioRefreshAutoLabel(step,previous);
 }
@@ -7905,7 +8507,7 @@ item.device_id=eventGroupDevice.value||'';
 item.event_id=scenarioValidEventId(device,'');
 }
 else{
-item.event_id=eventGroupEvent.value||'';
+item.event_id=normalizeScenarioEventIdValue(eventGroupEvent.value||'');
 }
 step.events[itemIndex]=item;
 }
@@ -8064,7 +8666,7 @@ const stepField=e.target.closest('[data-scenario-step] [data-step-field]');
 const stepParam=e.target.closest('[data-scenario-step] [data-step-param]');
 const flagField=e.target.closest('[data-flag-list-field]');
 const groupParam=e.target.closest('[data-command-group-item] [data-step-param]');
-const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field],[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field]');
+const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field],[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field],[data-v2-action] [data-event-group-field],[data-v2-action] [data-flag-list-field]');
 if(reactiveV2Field&&String(reactiveV2Field.tagName||'').toLowerCase()==='select')return false;
 if(reactiveV2Field)return gmHandleReactiveV2Change(reactiveV2Field,true);
 if(groupParam)return gmHandleScenarioGroupParamInput(groupParam,true);
@@ -8093,8 +8695,8 @@ const flagField=e.target.closest('[data-flag-list-field]');
 const branchField=e.target.closest('[data-scenario-branch-field]');
 const meta=e.target.closest('#scenario_id,#scenario_name');
 const branchType=e.target.closest('select[data-scenario-branch-field="type"]');
-const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
-const reactiveV2ActionField=e.target.closest('[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field]');
+const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const reactiveV2ActionField=e.target.closest('[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field],[data-v2-action] [data-event-group-field],[data-v2-action] [data-flag-list-field]');
 if(branchType)return gmHandleScenarioBranchTypeChange(branchType);
 if(reactiveV2Field||reactiveV2ActionField)return gmHandleReactiveV2Change(reactiveV2Field||reactiveV2ActionField);
 if(stepDevice)return gmHandleScenarioStepDeviceChange(stepDevice);
@@ -8115,7 +8717,7 @@ return false;
 function gmMarkEditorDirtyFromEvent(e){
 markControlDirty(e.target);
 const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
 const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
 if(profileField)markProfileDirty();
 if(scenarioField)markScenarioDirty();
@@ -8192,7 +8794,7 @@ const editorRoom=e.target.closest('select[data-profile-room-select]');
 const scenarioRoom=e.target.closest('select[data-scenario-room-select]');
 const deviceRoom=e.target.closest('select[data-device-room-filter]');
 const observed=e.target.closest('select[data-observed-filter]');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
 const sidebarPresetField=e.target.closest('[data-sidebar-preset-field],[data-field]');
 const profile=e.target.closest('select[data-room-profile-room]');
 const scenario=e.target.closest('select[data-room-scenario-room]');
@@ -8228,7 +8830,7 @@ initGMEditorFocusAndDetails(content);
 content.oninput=e=>{
 gmMarkEditorDirtyFromEvent(e);
 if(gmHandleScenarioEditorInput(e))return;
-if(e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]'))return;
+if(e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]'))return;
 handleSidebarPresetFieldInput(e.target.closest('[data-sidebar-preset-field],[data-field]'));
 };
 content.onchange=gmHandleEditorChange;

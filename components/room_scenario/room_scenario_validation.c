@@ -14,6 +14,12 @@ static bool room_scenario_valid_command_ref(const char *device_id, const char *c
     return device_id && device_id[0] && command_id && command_id[0];
 }
 
+static bool room_scenario_is_reactive_control_action_type(room_scenario_step_type_t type)
+{
+    return type == ROOM_SCENARIO_STEP_FAIL_REACTION ||
+           type == ROOM_SCENARIO_STEP_RESET_REACTION;
+}
+
 static bool room_scenario_valid_step(const room_scenario_step_t *step)
 {
     if (!step || !step->id[0] || !room_scenario_valid_step_type(step->type)) {
@@ -80,6 +86,9 @@ static bool room_scenario_valid_step(const room_scenario_step_t *step)
             }
         }
         return true;
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
+        return false;
     case ROOM_SCENARIO_STEP_END_GAME:
         return true;
     default:
@@ -95,6 +104,18 @@ static bool room_scenario_valid_reactive_trigger(const room_scenario_reactive_tr
     switch (trigger->kind) {
     case ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT:
         return trigger->device_id[0] && trigger->event_id[0];
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS:
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS:
+        if (trigger->event_count == 0 ||
+            trigger->event_count > ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS) {
+            return false;
+        }
+        for (uint8_t i = 0; i < trigger->event_count; ++i) {
+            if (!trigger->events[i].device_id[0] || !trigger->events[i].event_id[0]) {
+                return false;
+            }
+        }
+        return true;
     case ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED:
         return trigger->flag_name[0];
     case ROOM_SCENARIO_REACTIVE_TRIGGER_OPERATOR_EVENT:
@@ -136,6 +157,9 @@ static bool room_scenario_valid_reactive_action(const room_scenario_t *scenario,
         return action->data.set_flag.name[0];
     case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
         return action->data.operator_message.message[0];
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
+        return true;
     default:
         return false;
     }
@@ -176,9 +200,10 @@ static bool room_scenario_valid_reactive_branch_v2(const room_scenario_t *scenar
         return false;
     }
     for (uint8_t i = 0; i < branch->on_complete_action_count; ++i) {
-        if (!room_scenario_valid_reactive_action(
-                scenario,
-                &scenario->reactive_actions[branch->on_complete_action_start_index + i])) {
+        const room_scenario_reactive_action_t *action =
+            &scenario->reactive_actions[branch->on_complete_action_start_index + i];
+        if (room_scenario_is_reactive_control_action_type(action->type) ||
+            !room_scenario_valid_reactive_action(scenario, action)) {
             return false;
         }
     }
@@ -735,6 +760,9 @@ static void validation_check_reactive_action_v2_static(const room_scenario_t *sc
                                           "Reactive SHOW_OPERATOR_MESSAGE message is empty");
         }
         break;
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
+        break;
     default:
         validation_add_reactive_issue(report,
                                       ROOM_SCENARIO_VALIDATION_ERROR,
@@ -878,6 +906,29 @@ static void validation_check_reactive_branch_v2_static(const room_scenario_t *sc
                                       branch_step_index,
                                       "REACTIVE_ON_COMPLETE_RANGE_INVALID",
                                       "Reactive on_complete action range is invalid");
+        return;
+    }
+    for (uint8_t i = 0; i < branch->on_complete_action_count; ++i) {
+        const room_scenario_reactive_action_t *action =
+            &scenario->reactive_actions[branch->on_complete_action_start_index + i];
+        if (room_scenario_is_reactive_control_action_type(action->type)) {
+            validation_add_reactive_issue(report,
+                                          ROOM_SCENARIO_VALIDATION_ERROR,
+                                          branch,
+                                          -1,
+                                          (int16_t)i,
+                                          branch_step_index,
+                                          "REACTIVE_ON_COMPLETE_CONTROL_UNSUPPORTED",
+                                          "Reactive on_complete does not support FAIL_REACTION or RESET_REACTION");
+            continue;
+        }
+        validation_check_reactive_action_v2_static(scenario,
+                                                   action,
+                                                   branch,
+                                                   -1,
+                                                   (int16_t)i,
+                                                   branch_step_index,
+                                                   report);
     }
 }
 

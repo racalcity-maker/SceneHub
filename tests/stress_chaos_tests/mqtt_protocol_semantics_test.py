@@ -360,6 +360,55 @@ def test_retained_messages(host: str, port: int, verbose: bool):
     time.sleep(0.5)
 
 
+def test_retained_qos1_delivery(host: str, port: int, verbose: bool):
+    print(f"\n{'-' * 60}")
+    print("  TEST 2 - Retained QoS1 delivery")
+    print(f"{'-' * 60}")
+
+    if not pre_test_health_probe(host, port, 2, verbose, "Retained QoS1"):
+        return
+
+    topic = "cp/v1/dev/all/control/command"
+    publisher, ok_pub = make_client(host, port, "dcc-all", keepalive=20, verbose=verbose)
+    subscriber, ok_sub = make_client(host, port, "dcc-proto-retain-qos1-sub", keepalive=20, verbose=verbose)
+    if not (ok_pub and ok_sub):
+        R.check(False, f"Retained QoS1: connect failed pub={ok_pub} sub={ok_sub}")
+        disconnect_clean(publisher)
+        disconnect_clean(subscriber)
+        return
+
+    received = threading.Event()
+    got = {"payload": None, "qos": None, "retain": None}
+
+    def on_message(c, userdata, msg):
+        got["payload"] = msg.payload.decode(errors="ignore")
+        got["qos"] = msg.qos
+        got["retain"] = msg.retain
+        received.set()
+
+    subscriber.on_message = on_message
+
+    R.check(publish_and_wait(publisher, topic, "retain-qos1", qos=1, retain=True),
+            "Retained QoS1: retained publish with QoS1 succeeded")
+    time.sleep(0.3)
+
+    ok_suback, granted = subscribe_and_wait(subscriber, topic, qos=1, timeout=2.0)
+    R.check(ok_suback and bool(granted) and granted[0] == 1,
+            "Retained QoS1: subscriber received QoS1 SUBACK")
+    R.check(received.wait(timeout=2.0)
+            and got["payload"] == "retain-qos1"
+            and got["qos"] == 1
+            and got["retain"] is True,
+            "Retained QoS1: fresh subscriber received retained message with QoS1 and retain flag")
+
+    R.check(publish_and_wait(publisher, topic, "", qos=0, retain=True),
+            "Retained QoS1: retained clear publish succeeded")
+
+    disconnect_clean(subscriber)
+    disconnect_clean(publisher)
+    time.sleep(0.5)
+
+
 def test_wildcard_routing(host: str, port: int, verbose: bool):
     print(f"\n{'─' * 60}")
     print("  TEST 2 — Wildcard routing")
@@ -536,6 +585,57 @@ def test_max_subscriptions_per_client(host: str, port: int, max_subs: int, verbo
 
     disconnect_clean(client)
     disconnect_clean(pub)
+    time.sleep(0.5)
+
+
+def test_duplicate_subscribe_updates_qos_without_consuming_slot(host: str, port: int, max_subs: int, verbose: bool):
+    print(f"\n{'-' * 60}")
+    print("  TEST 4 - Duplicate subscribe updates QoS without consuming slot")
+    print(f"{'-' * 60}")
+
+    if not pre_test_health_probe(host, port, 1, verbose, "Duplicate subscribe"):
+        return
+
+    client, ok_client = make_client(host, port, "dcc-proto-dup-sub", keepalive=20, verbose=verbose)
+    if not ok_client:
+        R.check(False, "Duplicate subscribe: client failed to connect")
+        return
+
+    base_topic = "cp/v1/dev/proto_dup_sub/control/command"
+    ok_first, granted_first = subscribe_and_wait(client, base_topic, qos=0, timeout=2.0)
+    ok_second, granted_second = subscribe_and_wait(client, base_topic, qos=1, timeout=2.0)
+
+    R.check(ok_first and bool(granted_first) and granted_first[0] == 0,
+            "Duplicate subscribe: first subscribe granted QoS0")
+    R.check(ok_second and bool(granted_second) and granted_second[0] == 1,
+            "Duplicate subscribe: second subscribe updated grant to QoS1")
+
+    extra_ok = True
+    deny_topic = None
+    granted_log = []
+    for i in range(1, max_subs):
+        topic = f"cp/v1/dev/proto_dup_sub/{i}/control/command"
+        ok_sub, granted = subscribe_and_wait(client, topic, qos=0, timeout=2.0)
+        granted_log.append((topic, granted))
+        if not ok_sub or not granted or granted[0] == 0x80:
+            extra_ok = False
+            break
+
+    overflow_topic = f"cp/v1/dev/proto_dup_sub/{max_subs}/control/command"
+    ok_overflow, granted_overflow = subscribe_and_wait(client, overflow_topic, qos=0, timeout=2.0)
+    overflow_denied = ok_overflow and bool(granted_overflow) and granted_overflow[0] == 0x80
+
+    if verbose or not (extra_ok and overflow_denied):
+        for topic, granted in granted_log:
+            info(f"[dup-sub] {topic} -> granted={granted}")
+        info(f"[dup-sub] {overflow_topic} -> granted={granted_overflow}")
+
+    R.check(extra_ok,
+            f"Duplicate subscribe: duplicate topic did not consume an extra slot and remaining {max_subs - 1} unique subscriptions were accepted")
+    R.check(overflow_denied,
+            "Duplicate subscribe: first topic past the slot limit was rejected")
+
+    disconnect_clean(client)
     time.sleep(0.5)
 
 
@@ -742,10 +842,12 @@ def main():
 
     tests = {
         1: lambda: test_retained_messages(args.host, args.port, args.verbose),
-        2: lambda: test_self_contract_wildcard_routing(args.host, args.port, args.verbose),
-        3: lambda: test_max_subscriptions_per_client(args.host, args.port, args.max_subs, args.verbose),
-        4: lambda: test_random_protocol_soak(args.host, args.port, args.max_clients, args.duration, args.verbose),
-        5: lambda: test_acl_deny_qos1_is_acked_but_not_delivered(args.host, args.port, args.verbose),
+        2: lambda: test_retained_qos1_delivery(args.host, args.port, args.verbose),
+        3: lambda: test_self_contract_wildcard_routing(args.host, args.port, args.verbose),
+        4: lambda: test_duplicate_subscribe_updates_qos_without_consuming_slot(args.host, args.port, args.max_subs, args.verbose),
+        5: lambda: test_max_subscriptions_per_client(args.host, args.port, args.max_subs, args.verbose),
+        6: lambda: test_random_protocol_soak(args.host, args.port, args.max_clients, args.duration, args.verbose),
+        7: lambda: test_acl_deny_qos1_is_acked_but_not_delivered(args.host, args.port, args.verbose),
     }
 
     selected = parse_test_selection(args.tests)

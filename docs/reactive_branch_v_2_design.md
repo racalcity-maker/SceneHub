@@ -13,7 +13,8 @@ Examples:
 - blink lights when a sensor is triggered;
 - set a runtime flag after a side event.
 
-Reactive Branch v2 is intentionally not a second scenario engine. It has a trigger, optional guards, a policy, and a list of actions.
+Reactive Branch v2 is intentionally not a second scenario engine. It has a
+trigger, optional guards, a policy, and a bounded list of actions.
 
 ```text
 trigger -> guard_flags -> policy -> selected variant -> actions -> result_policy
@@ -59,7 +60,8 @@ trigger -> guard_flags -> policy -> selected variant -> actions -> result_policy
 
 ## Implemented
 
-- Trigger kinds: `device_event`, `flag_changed`, `operator_event`, `runtime_event`.
+- Trigger kinds: `device_event`, `any_device_events`, `all_device_events`,
+  `flag_changed`, `operator_event`, `runtime_event`.
 - Device-event matching accepts saved Quest Device ids and physical client ids.
 - Device-event matching accepts saved event ids and physical event names.
 - Guard flags use strict `all` semantics.
@@ -68,11 +70,19 @@ trigger -> guard_flags -> policy -> selected variant -> actions -> result_policy
 - Reentry modes: `ignore`, `queue_one`.
 - `max_fire_count` limits completed executions.
 - One incoming event may start at most one active reaction. Conflicting matches are rejected and logged as a warning.
-- Actions: `DEVICE_COMMAND`, sequential `DEVICE_COMMAND_GROUP`, `WAIT_TIME`, `SET_FLAG`, `SHOW_OPERATOR_MESSAGE`.
+- Actions: `DEVICE_COMMAND`, sequential `DEVICE_COMMAND_GROUP`, `WAIT_TIME`,
+  `WAIT_DEVICE_EVENT`, `WAIT_ANY_DEVICE_EVENT`, `WAIT_ALL_DEVICE_EVENTS`,
+  `WAIT_FLAGS`, `SET_FLAG`, `SHOW_OPERATOR_MESSAGE`, `FAIL_REACTION`,
+  `RESET_REACTION`.
 - `DEVICE_COMMAND` goes through `command_executor`.
 - Result-required commands wait for terminal command results.
 - `accepted` does not advance an action.
 - `done`, `failed`, `rejected`, and `timeout` are handled through `result_policy`.
+- Wait actions can time out with `continue`, `fail_reaction`, or
+  `reset_reaction`.
+- `result_policy` supports `continue`, `set_flag`, `fail_reaction`, and
+  `fail_scenario`; `retry` is parsed/exported but currently fails the reaction
+  as unsupported runtime behavior.
 - GM scenario builder can create and edit v2 reactions.
 - GM room control renders v2 reaction progress from `variants[].actions`.
 
@@ -80,9 +90,17 @@ trigger -> guard_flags -> policy -> selected variant -> actions -> result_policy
 
 - A reaction only fires when it is enabled, its trigger matches, guards pass, cooldown is clear, and `max_fire_count` is not exhausted.
 - A reaction does not replace or advance the main scenario flow.
+- `any_device_events` fires on the first matching event.
+- `all_device_events` records seen trigger events and fires only after every
+  configured event has arrived since the last trigger reset.
 - `accepted` keeps the current action pending.
 - `done` advances to the next action.
 - `failed`, `rejected`, and `timeout` follow `result_policy`.
+- Reactive wait actions suspend only the reaction branch. The main flow keeps
+  its own runtime state.
+- `FAIL_REACTION` moves the reaction branch to error state.
+- `RESET_REACTION` clears pending trigger/wait/cooldown/cursor state and moves
+  the reaction branch back to waiting.
 - During cooldown, triggers are ignored unless `reentry.mode` is `queue_one`.
 - `queue_one` stores only one pending trigger.
 - If multiple active reactions match the same incoming event, none of them runs. This prevents ambiguous behavior.
@@ -105,7 +123,7 @@ Not implemented yet:
 - parallel `DEVICE_COMMAND_GROUP` result aggregation
 - separate `CLEAR_FLAG` action type; use `SET_FLAG` with `"value": false`
 - `EMIT_EVENT`
-- `WAIT_EVENT`, `WAIT_FLAGS`, `OPERATOR_APPROVAL`, and `GOTO` inside v2 variant actions
+- `OPERATOR_APPROVAL` and `GOTO` inside v2 variant actions
 
 ## Non-Goals
 
@@ -116,4 +134,3 @@ Do not add these to Reactive Branch v2:
 - Node-RED-style graph editor;
 - recursive scenario flow;
 - support for the old reactive trigger-step model as a product feature.
-

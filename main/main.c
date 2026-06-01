@@ -20,6 +20,7 @@
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
+#include "scenehub_control.h"
 #include "scenehub_state.h"
 #include "service_status.h"
 #include "system_reset_policy.h"
@@ -312,6 +313,11 @@ void app_main(void)
     esp_err_t err = app_start_service("event_bus", SERVICE_STATUS_EVENT_BUS, event_bus_start);
     if (err != ESP_OK) {
         app_abort_startup("event_bus_start", err);
+    }
+    ESP_LOGI(TAG, "init scenehub_control");
+    err = scenehub_control_init();
+    if (err != ESP_OK) {
+        app_abort_startup("scenehub_control_init", err);
     }
     if (audio_ok) {
         ESP_LOGI(TAG, "start audio_player");

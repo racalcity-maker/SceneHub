@@ -4,23 +4,7 @@
 
 #include "driver/gpio.h"
 #include "esp_timer.h"
-#include "sdkconfig.h"
-
-#ifndef CONFIG_SCENEHUB_RELAY1_GPIO
-#define CONFIG_SCENEHUB_RELAY1_GPIO -1
-#endif
-#ifndef CONFIG_SCENEHUB_RELAY2_GPIO
-#define CONFIG_SCENEHUB_RELAY2_GPIO -1
-#endif
-#ifndef CONFIG_SCENEHUB_RELAY3_GPIO
-#define CONFIG_SCENEHUB_RELAY3_GPIO -1
-#endif
-#ifndef CONFIG_SCENEHUB_RELAY4_GPIO
-#define CONFIG_SCENEHUB_RELAY4_GPIO -1
-#endif
-#ifndef CONFIG_SCENEHUB_RELAY_ACTIVE_LOW
-#define CONFIG_SCENEHUB_RELAY_ACTIVE_LOW 1
-#endif
+#include "scenehub_config.h"
 
 typedef struct {
     int gpio;

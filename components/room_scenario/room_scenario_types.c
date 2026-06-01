@@ -15,6 +15,8 @@ bool room_scenario_valid_step_type(room_scenario_step_type_t type)
     case ROOM_SCENARIO_STEP_WAIT_FLAGS:
     case ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT:
     case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
     case ROOM_SCENARIO_STEP_END_GAME:
         return true;
     default:
@@ -45,6 +47,10 @@ const char *room_scenario_step_type_to_str(room_scenario_step_type_t type)
         return "WAIT_ANY_DEVICE_EVENT";
     case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
         return "WAIT_ALL_DEVICE_EVENTS";
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+        return "FAIL_REACTION";
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
+        return "RESET_REACTION";
     case ROOM_SCENARIO_STEP_END_GAME:
         return "END_GAME";
     default:
@@ -100,6 +106,42 @@ esp_err_t room_scenario_reentry_mode_from_str(const char *s,
     }
     if (strcasecmp(s, "parallel") == 0) {
         *out = ROOM_SCENARIO_REENTRY_PARALLEL;
+        return ESP_OK;
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
+const char *room_scenario_wait_timeout_action_to_str(room_scenario_wait_timeout_action_t action)
+{
+    switch (action) {
+    case ROOM_SCENARIO_WAIT_TIMEOUT_FAIL_REACTION:
+        return "fail_reaction";
+    case ROOM_SCENARIO_WAIT_TIMEOUT_RESET_REACTION:
+        return "reset_reaction";
+    case ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE:
+    default:
+        return "continue";
+    }
+}
+
+esp_err_t room_scenario_wait_timeout_action_from_str(const char *s,
+                                                     room_scenario_wait_timeout_action_t *out)
+{
+    if (!s || !s[0] || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strcasecmp(s, "continue") == 0) {
+        *out = ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "fail_reaction") == 0 ||
+        strcasecmp(s, "fail-reaction") == 0) {
+        *out = ROOM_SCENARIO_WAIT_TIMEOUT_FAIL_REACTION;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "reset_reaction") == 0 ||
+        strcasecmp(s, "reset-reaction") == 0) {
+        *out = ROOM_SCENARIO_WAIT_TIMEOUT_RESET_REACTION;
         return ESP_OK;
     }
     return ESP_ERR_NOT_FOUND;
@@ -182,6 +224,16 @@ esp_err_t room_scenario_step_type_from_str(const char *s,
     if (strcasecmp(s, "WAIT_ALL_DEVICE_EVENTS") == 0 ||
         strcasecmp(s, "wait_all_device_events") == 0) {
         *out = ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "FAIL_REACTION") == 0 ||
+        strcasecmp(s, "fail_reaction") == 0) {
+        *out = ROOM_SCENARIO_STEP_FAIL_REACTION;
+        return ESP_OK;
+    }
+    if (strcasecmp(s, "RESET_REACTION") == 0 ||
+        strcasecmp(s, "reset_reaction") == 0) {
+        *out = ROOM_SCENARIO_STEP_RESET_REACTION;
         return ESP_OK;
     }
     if (strcasecmp(s, "END_GAME") == 0 ||

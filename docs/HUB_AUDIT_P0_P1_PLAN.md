@@ -39,7 +39,9 @@ Backend enforcement is confirmed for:
 Main enforcement points:
 
 - `components/command_executor/command_executor.c`
-- `components/gm_core/api/gm_api.c`
+- `components/command_executor/command_executor_mqtt.c`
+- `components/scenehub_control/scenehub_control_dispatch.c`
+- `components/scenehub_control/scenehub_control_scenarios.c`
 - `components/gm_core/session/gm_room_session_commands.c`
 - `components/command_executor/command_executor_result.c`
 
@@ -152,7 +154,7 @@ Current behavior:
 - mutex is released
 - JSON/layout send happens after unlock
 
-## Still Open
+## Closed In This Pass
 
 ### P0.2 confirmation policy is now explicit for manual HTTP actions
 
@@ -208,17 +210,20 @@ Conclusion:
 - the policy remains the same for future work: do not solve write-side
   transport cleanup with one-off workers and large dedicated stacks
 
-## Next Actions
+## Remaining Follow-Up
 
-1. Decide whether initial manual HTTP responses should ever expose early `remote_status` in addition to `status = accepted`.
-2. If richer manual lifecycle is required later, keep it additive and do not collapse write-side and remote statuses back into one field.
-5. Run targeted builds/tests for `tests/command_backend`, `tests/gm_session`, and `tests/web_ui_backend` when verification is allowed.
-6. Before larger device-count testing, verify that current throttling and
+1. Run targeted builds/tests for `tests/command_backend`, `tests/gm_session`,
+   and `tests/web_ui_backend` when verification is allowed.
+2. Before larger device-count testing, verify that current throttling and
    heartbeat-generation narrowing are sufficient before introducing more
    complex generation-family splits or additional invalidation classes.
-7. Before larger device-count polling/noise testing, verify that the narrowed
+3. Before larger device-count polling/noise testing, verify that the narrowed
    registry invalidation model is sufficient before introducing additional
    cache layers or generation-family splits.
+4. Decide later whether manual HTTP responses ever need an early
+   `remote_status` in addition to `status = accepted`. If richer manual
+   lifecycle is required, keep it additive and do not collapse write-side and
+   remote statuses back into one field.
 
 ## Verification Status
 

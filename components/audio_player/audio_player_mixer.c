@@ -351,7 +351,10 @@ static void audio_mixer_task(void *param)
                                                 &written,
                                                 pdMS_TO_TICKS(1000));
 
-        if (err != ESP_OK) {
+        if (err == ESP_ERR_TIMEOUT) {
+            ESP_LOGW(TAG, "i2s write timeout");
+            vTaskDelay(ticks_at_least_one(AUDIO_MIXER_IDLE_WAIT_MS));
+        } else if (err != ESP_OK) {
             ESP_LOGW(TAG, "i2s write failed: %s", esp_err_to_name(err));
             audio_player_output_reset();
             vTaskDelay(ticks_at_least_one(AUDIO_MIXER_IDLE_WAIT_MS));

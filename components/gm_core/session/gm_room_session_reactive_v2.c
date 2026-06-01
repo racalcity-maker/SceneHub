@@ -9,44 +9,34 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_random.h"
-#include "freertos/semphr.h"
 #include "quest_common_utils.h"
-#include "quest_device.h"
 
 #define GM_REACTIVE_V2_MAX_ACTIONS_PER_TICK 8
 
 static const char *TAG = "gm_room_session";
-static EXT_RAM_BSS_ATTR quest_device_t s_reactive_resolve_device;
-static SemaphoreHandle_t s_reactive_resolve_mutex = NULL;
-static StaticSemaphore_t s_reactive_resolve_mutex_storage;
-static portMUX_TYPE s_reactive_resolve_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
-static esp_err_t reactive_v2_ensure_resolve_mutex(void)
-{
-    if (s_reactive_resolve_mutex) {
-        return ESP_OK;
-    }
-    portENTER_CRITICAL(&s_reactive_resolve_mutex_init_lock);
-    if (!s_reactive_resolve_mutex) {
-        s_reactive_resolve_mutex = xSemaphoreCreateMutexStatic(&s_reactive_resolve_mutex_storage);
-    }
-    portEXIT_CRITICAL(&s_reactive_resolve_mutex_init_lock);
-    return s_reactive_resolve_mutex ? ESP_OK : ESP_ERR_NO_MEM;
-}
+static esp_err_t reactive_v2_reset_reaction_locked(gm_room_session_t *session,
+                                                   gm_room_scenario_branch_runtime_t *branch);
 
-static esp_err_t reactive_v2_resolve_lock(void)
+static room_scenario_wait_timeout_action_t reactive_v2_action_timeout_action(
+    const room_scenario_reactive_action_t *action)
 {
-    esp_err_t err = reactive_v2_ensure_resolve_mutex();
-    if (err != ESP_OK) {
-        return err;
+    if (!action) {
+        return ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE;
     }
-    return xSemaphoreTake(s_reactive_resolve_mutex, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
-}
-
-static void reactive_v2_resolve_unlock(void)
-{
-    if (s_reactive_resolve_mutex) {
-        xSemaphoreGive(s_reactive_resolve_mutex);
+    switch (action->type) {
+    case ROOM_SCENARIO_STEP_WAIT_TIME:
+        return action->data.wait_time.timeout_action;
+    case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT:
+        return action->data.wait_device_event.timeout_action;
+    case ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT:
+        return action->data.wait_any_device_event.timeout_action;
+    case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
+        return action->data.wait_all_device_events.timeout_action;
+    case ROOM_SCENARIO_STEP_WAIT_FLAGS:
+        return action->data.wait_flags.timeout_action;
+    default:
+        return ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE;
     }
 }
 
@@ -130,79 +120,101 @@ static bool reactive_v2_event_id_matches(const char *expected,
     }
 }
 
-esp_err_t gm_room_session_reactive_v2_resolve_trigger_unlocked(
-    const room_scenario_reactive_trigger_t *trigger,
-    gm_room_session_reactive_trigger_resolution_t *out)
-{
-    quest_device_event_t event = {0};
-    quest_device_t *device = &s_reactive_resolve_device;
-    esp_err_t err = ESP_OK;
-    if (!trigger || !out) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    memset(out, 0, sizeof(*out));
-    if (trigger->kind != ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT ||
-        !trigger->device_id[0] ||
-        !trigger->event_id[0]) {
-        return ESP_OK;
-    }
-    out->present = true;
-    quest_str_copy(out->match.device_id, sizeof(out->match.device_id), trigger->device_id);
-    quest_str_copy(out->match.event_id, sizeof(out->match.event_id), trigger->event_id);
-    quest_str_copy(out->match.event_type, sizeof(out->match.event_type), trigger->event_id);
-    quest_str_copy(out->match.source_id, sizeof(out->match.source_id), trigger->device_id);
-    err = reactive_v2_resolve_lock();
-    if (err != ESP_OK) {
-        return err;
-    }
-    memset(device, 0, sizeof(*device));
-    if (quest_device_get_event(trigger->device_id, trigger->event_id, &event) != ESP_OK) {
-        reactive_v2_resolve_unlock();
-        return ESP_OK;
-    }
-    quest_str_copy(out->match.event_type,
-                   sizeof(out->match.event_type),
-                   event.event[0] ? event.event : event.id);
-    quest_str_copy(out->match.match_json, sizeof(out->match.match_json), event.match_json);
-    if (event.event[0] && strcmp(event.event, event.id) != 0) {
-        quest_str_copy(out->alternate_event_type,
-                       sizeof(out->alternate_event_type),
-                       event.id);
-    }
-    out->match.source_id[0] = '\0';
-    if (strcmp(trigger->device_id, QUEST_DEVICE_SYSTEM_AUDIO_ID) != 0 &&
-        quest_device_get(trigger->device_id, device) == ESP_OK) {
-        quest_str_copy(out->match.source_id, sizeof(out->match.source_id), device->client_id);
-    }
-    reactive_v2_resolve_unlock();
-    return ESP_OK;
-}
-
-static bool reactive_v2_device_event_matches(const gm_room_scenario_branch_runtime_t *branch,
-                                             const scenehub_event_t *message)
+static bool reactive_v2_device_event_match_single(const gm_room_scenario_wait_event_match_t *match,
+                                                  const char *alternate_event_type,
+                                                  const scenehub_event_t *message)
 {
     gm_room_scenario_wait_event_match_t alternate = {0};
-    if (!branch || !message || !branch->reactive_trigger_resolved) {
+    if (!match || !message) {
         return false;
     }
-    if (gm_room_session_wait_event_matches_message(&branch->reactive_trigger_match, message)) {
+    if (gm_room_session_wait_event_matches_message(match, message)) {
         return true;
     }
-    if (!branch->reactive_trigger_alt_event_type[0]) {
+    if (!alternate_event_type || !alternate_event_type[0]) {
         return false;
     }
-    alternate = branch->reactive_trigger_match;
+    alternate = *match;
     quest_str_copy(alternate.event_type,
                    sizeof(alternate.event_type),
-                   branch->reactive_trigger_alt_event_type);
+                   alternate_event_type);
     return gm_room_session_wait_event_matches_message(&alternate, message);
 }
 
-bool gm_room_session_reactive_v2_matches_event(const gm_room_session_t *session,
-                                               const gm_room_scenario_branch_runtime_t *branch,
-                                               const scenehub_event_t *message)
+static bool reactive_v2_device_trigger_has_match(const gm_room_scenario_branch_runtime_t *branch,
+                                                 const scenehub_event_t *message,
+                                                 uint8_t *out_match_index)
+{
+    if (!branch || !message || !branch->reactive_trigger_resolved) {
+        return false;
+    }
+    for (uint8_t i = 0; i < branch->reactive_trigger_event_count &&
+                        i < ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS;
+         ++i) {
+        if (reactive_v2_device_event_match_single(&branch->reactive_trigger_matches[i],
+                                                  branch->reactive_trigger_alt_event_types[i],
+                                                  message)) {
+            if (out_match_index) {
+                *out_match_index = i;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool reactive_v2_all_trigger_events_matched(const gm_room_scenario_branch_runtime_t *branch)
+{
+    if (!branch || branch->reactive_trigger_event_count == 0) {
+        return false;
+    }
+    for (uint8_t i = 0; i < branch->reactive_trigger_event_count &&
+                        i < ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS;
+         ++i) {
+        if (!branch->reactive_trigger_event_matched[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool reactive_v2_all_trigger_events_matched_after(
+    const gm_room_scenario_branch_runtime_t *branch,
+    uint8_t match_index)
+{
+    if (!branch || branch->reactive_trigger_event_count == 0 ||
+        match_index >= branch->reactive_trigger_event_count) {
+        return false;
+    }
+    for (uint8_t i = 0; i < branch->reactive_trigger_event_count &&
+                        i < ROOM_SCENARIO_WAIT_EVENT_GROUP_MAX_EVENTS;
+         ++i) {
+        if (i == match_index) {
+            continue;
+        }
+        if (!branch->reactive_trigger_event_matched[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void reactive_v2_clear_trigger_matches(gm_room_scenario_branch_runtime_t *branch)
+{
+    if (!branch) {
+        return;
+    }
+    memset(branch->reactive_trigger_event_matched, 0, sizeof(branch->reactive_trigger_event_matched));
+}
+
+static bool reactive_v2_trigger_event_matches_locked(
+    gm_room_session_t *session,
+    gm_room_scenario_branch_runtime_t *branch,
+    const scenehub_event_t *message,
+    bool consume)
 {
     const room_scenario_branch_t *model = reactive_v2_model_branch(session, branch);
+    uint8_t match_index = 0;
     if (!model || !message || !branch->active ||
         (branch->max_fire_count > 0 && branch->fire_count >= branch->max_fire_count) ||
         !reactive_v2_guards_match(session, model)) {
@@ -213,7 +225,23 @@ bool gm_room_session_reactive_v2_matches_event(const gm_room_session_t *session,
     }
     switch (model->trigger.kind) {
     case ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT:
-        return reactive_v2_device_event_matches(branch, message);
+        return reactive_v2_device_trigger_has_match(branch, message, NULL);
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS:
+        return reactive_v2_device_trigger_has_match(branch, message, NULL);
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS:
+        if (!reactive_v2_device_trigger_has_match(branch, message, &match_index)) {
+            return false;
+        }
+        if (!consume) {
+            return reactive_v2_all_trigger_events_matched_after(branch, match_index);
+        }
+        branch->reactive_trigger_event_matched[match_index] = true;
+        gm_room_session_mark_session_changed_locked(session);
+        if (!reactive_v2_all_trigger_events_matched(branch)) {
+            return false;
+        }
+        reactive_v2_clear_trigger_matches(branch);
+        return true;
     case ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED:
         return message->type == SCENEHUB_EVENT_FLAG_CHANGED &&
                reactive_v2_event_id_matches(model->trigger.flag_name, message);
@@ -227,6 +255,24 @@ bool gm_room_session_reactive_v2_matches_event(const gm_room_session_t *session,
     default:
         return false;
     }
+}
+
+bool gm_room_session_reactive_v2_consume_trigger_event_locked(
+    gm_room_session_t *session,
+    gm_room_scenario_branch_runtime_t *branch,
+    const scenehub_event_t *message)
+{
+    return reactive_v2_trigger_event_matches_locked(session, branch, message, true);
+}
+
+bool gm_room_session_reactive_v2_matches_event(const gm_room_session_t *session,
+                                               const gm_room_scenario_branch_runtime_t *branch,
+                                               const scenehub_event_t *message)
+{
+    return reactive_v2_trigger_event_matches_locked((gm_room_session_t *)session,
+                                                    (gm_room_scenario_branch_runtime_t *)branch,
+                                                    message,
+                                                    false);
 }
 
 static uint8_t reactive_v2_select_variant(gm_room_scenario_branch_runtime_t *branch,
@@ -300,8 +346,6 @@ static esp_err_t reactive_v2_finish_locked(gm_room_session_t *session,
         scenario_set_error_locked(session, "reactive_on_complete_failed");
         return err;
     }
-    branch->fire_count++;
-    branch->fired_once = true;
     branch->reactive_action_start_index = 0;
     branch->reactive_action_count = 0;
     branch->reactive_current_action = 0;
@@ -332,6 +376,7 @@ static esp_err_t reactive_v2_finish_locked(gm_room_session_t *session,
         branch->scenario_state = GM_ROOM_SCENARIO_WAITING;
         branch->cooldown_until_ms = 0;
     }
+    reactive_v2_clear_trigger_matches(branch);
     scenario_branch_clear_wait_fields(branch);
     gm_room_session_mark_session_changed_locked(session);
     return ESP_OK;
@@ -352,6 +397,57 @@ static esp_err_t reactive_v2_fail_reaction_locked(gm_room_session_t *session,
     quest_str_copy(session->scenario_last_error,
                    sizeof(session->scenario_last_error),
                    message ? message : "reactive_failed");
+    gm_room_session_mark_session_changed_locked(session);
+    return ESP_OK;
+}
+
+esp_err_t gm_room_session_reactive_v2_apply_wait_timeout_locked(
+    gm_room_session_t *session,
+    gm_room_scenario_branch_runtime_t *branch,
+    const room_scenario_reactive_action_t *action,
+    uint32_t now_ms,
+    gm_room_session_command_plan_t *out_plan)
+{
+    room_scenario_wait_timeout_action_t timeout_action = ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE;
+    if (!session || !branch || !action || !out_plan) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    timeout_action = reactive_v2_action_timeout_action(action);
+    switch (timeout_action) {
+    case ROOM_SCENARIO_WAIT_TIMEOUT_FAIL_REACTION:
+        return reactive_v2_fail_reaction_locked(session,
+                                                branch,
+                                                "reactive_wait_timeout_failed");
+    case ROOM_SCENARIO_WAIT_TIMEOUT_RESET_REACTION:
+        return reactive_v2_reset_reaction_locked(session, branch);
+    case ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE:
+    default:
+        branch->reactive_current_action++;
+        branch->scenario_state = GM_ROOM_SCENARIO_RUNNING;
+        scenario_branch_clear_wait_fields(branch);
+        return gm_room_session_reactive_v2_continue_locked(session, branch, now_ms, out_plan);
+    }
+}
+
+static esp_err_t reactive_v2_reset_reaction_locked(gm_room_session_t *session,
+                                                   gm_room_scenario_branch_runtime_t *branch)
+{
+    if (!session || !branch) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    branch->scenario_state = GM_ROOM_SCENARIO_WAITING;
+    branch->cooldown_until_ms = 0;
+    branch->pending_trigger = false;
+    branch->policy_cursor = 0;
+    branch->policy_stage = 0;
+    branch->reactive_action_start_index = 0;
+    branch->reactive_action_count = 0;
+    branch->reactive_current_action = 0;
+    branch->fire_count = 0;
+    branch->fired_once = false;
+    branch->current_step_index = branch->step_start_index;
+    reactive_v2_clear_trigger_matches(branch);
+    scenario_branch_clear_wait_fields(branch);
     gm_room_session_mark_session_changed_locked(session);
     return ESP_OK;
 }
@@ -520,6 +616,105 @@ esp_err_t gm_room_session_reactive_v2_continue_locked(gm_room_session_t *session
             branch->wait_until_ms = now_ms + action->data.wait_time.duration_ms;
             gm_room_session_mark_session_changed_locked(session);
             return ESP_OK;
+        case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT: {
+            const gm_room_session_prepared_scenario_t *prepared_scenario =
+                gm_room_session_get_prepared_scenario_locked(session);
+            gm_room_session_wait_resolution_t resolution = {0};
+            if (!prepared_scenario) {
+                scenario_set_error_locked(session, "reactive_wait_device_event_resolve_failed");
+                return ESP_ERR_INVALID_STATE;
+            }
+            esp_err_t err = gm_room_session_expand_prepared_wait_resolution(
+                prepared_scenario,
+                &prepared_scenario->reactive_action_waits[index],
+                &resolution);
+            if (err != ESP_OK) {
+                scenario_set_error_locked(session, "reactive_wait_device_event_resolve_failed");
+                return err;
+            }
+            err = scenario_enter_wait_device_event_locked(session,
+                                                          &action->data.wait_device_event,
+                                                          &resolution,
+                                                          now_ms);
+            if (err != ESP_OK) {
+                scenario_set_error_locked(session, "reactive_wait_device_event_failed");
+                return err;
+            }
+            gm_room_session_scenario_branch_save_from_session(branch, session);
+            return ESP_OK;
+        }
+        case ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT: {
+            const gm_room_session_prepared_scenario_t *prepared_scenario =
+                gm_room_session_get_prepared_scenario_locked(session);
+            gm_room_session_wait_resolution_t resolution = {0};
+            if (!prepared_scenario) {
+                scenario_set_error_locked(session, "reactive_wait_any_device_event_resolve_failed");
+                return ESP_ERR_INVALID_STATE;
+            }
+            esp_err_t err = gm_room_session_expand_prepared_wait_resolution(
+                prepared_scenario,
+                &prepared_scenario->reactive_action_waits[index],
+                &resolution);
+            if (err != ESP_OK) {
+                scenario_set_error_locked(session, "reactive_wait_any_device_event_resolve_failed");
+                return err;
+            }
+            err = scenario_enter_wait_any_device_event_locked(session,
+                                                              &action->data.wait_any_device_event,
+                                                              &resolution,
+                                                              now_ms);
+            if (err != ESP_OK) {
+                scenario_set_error_locked(session, "reactive_wait_any_device_event_failed");
+                return err;
+            }
+            gm_room_session_scenario_branch_save_from_session(branch, session);
+            return ESP_OK;
+        }
+        case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS: {
+            const gm_room_session_prepared_scenario_t *prepared_scenario =
+                gm_room_session_get_prepared_scenario_locked(session);
+            gm_room_session_wait_resolution_t resolution = {0};
+            if (!prepared_scenario) {
+                scenario_set_error_locked(session, "reactive_wait_all_device_events_resolve_failed");
+                return ESP_ERR_INVALID_STATE;
+            }
+            esp_err_t err = gm_room_session_expand_prepared_wait_resolution(
+                prepared_scenario,
+                &prepared_scenario->reactive_action_waits[index],
+                &resolution);
+            if (err != ESP_OK) {
+                scenario_set_error_locked(session, "reactive_wait_all_device_events_resolve_failed");
+                return err;
+            }
+            err = scenario_enter_wait_all_device_events_locked(session,
+                                                               &action->data.wait_all_device_events,
+                                                               &resolution,
+                                                               now_ms);
+            if (err != ESP_OK) {
+                scenario_set_error_locked(session, "reactive_wait_all_device_events_failed");
+                return err;
+            }
+            gm_room_session_scenario_branch_save_from_session(branch, session);
+            return ESP_OK;
+        }
+        case ROOM_SCENARIO_STEP_WAIT_FLAGS: {
+            esp_err_t err = scenario_enter_wait_flags_locked(session,
+                                                             &action->data.wait_flags,
+                                                             now_ms);
+            if (err != ESP_OK) {
+                scenario_set_error_locked(session, "reactive_wait_flags_failed");
+                return err;
+            }
+            if (scenario_wait_flags_met_locked(session)) {
+                branch->reactive_current_action++;
+                branch->scenario_state = GM_ROOM_SCENARIO_RUNNING;
+                scenario_branch_clear_wait_fields(branch);
+                gm_room_session_mark_session_changed_locked(session);
+                break;
+            }
+            gm_room_session_scenario_branch_save_from_session(branch, session);
+            return ESP_OK;
+        }
         case ROOM_SCENARIO_STEP_SET_FLAG: {
             esp_err_t err = scenario_set_flag_locked(session,
                                                      action->data.set_flag.name,
@@ -537,6 +732,12 @@ esp_err_t gm_room_session_reactive_v2_continue_locked(gm_room_session_t *session
                            action->data.operator_message.message);
             branch->reactive_current_action++;
             break;
+        case ROOM_SCENARIO_STEP_FAIL_REACTION:
+            return reactive_v2_fail_reaction_locked(session,
+                                                    branch,
+                                                    "reactive_failed_by_action");
+        case ROOM_SCENARIO_STEP_RESET_REACTION:
+            return reactive_v2_reset_reaction_locked(session, branch);
         default:
             scenario_set_error_locked(session, "reactive_action_unsupported");
             return ESP_ERR_NOT_SUPPORTED;
@@ -579,9 +780,42 @@ esp_err_t gm_room_session_reactive_v2_fire_locked(gm_room_session_t *session,
     branch->reactive_action_count = variant->action_count;
     branch->reactive_current_action = 0;
     branch->pending_trigger = false;
+    branch->fire_count++;
+    branch->fired_once = true;
     branch->cooldown_until_ms = branch->cooldown_ms > 0 ? now_ms + branch->cooldown_ms : 0;
     branch->scenario_state = GM_ROOM_SCENARIO_RUNNING;
+    reactive_v2_clear_trigger_matches(branch);
     scenario_branch_clear_wait_fields(branch);
     gm_room_session_mark_session_changed_locked(session);
     return gm_room_session_reactive_v2_continue_locked(session, branch, now_ms, out_plan);
+}
+
+esp_err_t gm_room_session_reactive_v2_trigger_during_wait_locked(
+    gm_room_session_t *session,
+    gm_room_scenario_branch_runtime_t *branch,
+    uint32_t now_ms,
+    gm_room_session_command_plan_t *out_plan)
+{
+    const room_scenario_branch_t *model = reactive_v2_model_branch(session, branch);
+    if (!session || !branch || !model || !out_plan) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (branch->scenario_state != GM_ROOM_SCENARIO_WAITING ||
+        branch->wait_type != GM_ROOM_SCENARIO_WAIT_TIME) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (model->policy_mode == ROOM_SCENARIO_REACTIVE_POLICY_SINGLE) {
+        if (branch->reentry_mode == ROOM_SCENARIO_REENTRY_QUEUE_ONE) {
+            branch->pending_trigger = true;
+            gm_room_session_mark_session_changed_locked(session);
+        }
+        return ESP_OK;
+    }
+    if (branch->reactive_current_action < branch->reactive_action_count) {
+        branch->reactive_current_action = branch->reactive_action_count;
+    }
+    branch->scenario_state = GM_ROOM_SCENARIO_WAITING;
+    scenario_branch_clear_wait_fields(branch);
+    gm_room_session_mark_session_changed_locked(session);
+    return gm_room_session_reactive_v2_fire_locked(session, branch, now_ms, out_plan);
 }

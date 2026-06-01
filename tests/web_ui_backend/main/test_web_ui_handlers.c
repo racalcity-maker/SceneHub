@@ -17,6 +17,7 @@
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
+#include "scenehub_control.h"
 #include "service_status.h"
 #include "web_ui_handlers.h"
 #include "web_ui_utils.h"
@@ -369,7 +370,7 @@ static void handler_bootstrap(void)
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_clear());
     TEST_ASSERT_EQUAL(ESP_OK, gm_game_profile_init());
     TEST_ASSERT_EQUAL(ESP_OK, gm_game_profile_clear());
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_init());
+    TEST_ASSERT_EQUAL(ESP_OK, scenehub_control_init());
     gm_room_session_reset_all();
     TEST_ASSERT_EQUAL(ESP_OK, orchestrator_registry_init());
     orchestrator_registry_invalidate();
@@ -377,6 +378,43 @@ static void handler_bootstrap(void)
     orchestrator_audit_reset();
     TEST_ASSERT_EQUAL(ESP_OK, orchestrator_timeline_init());
     orchestrator_timeline_reset();
+}
+
+static void handler_assert_control_done(esp_err_t err,
+                                        const scenehub_control_result_t *result)
+{
+    TEST_ASSERT_EQUAL(ESP_OK, err);
+    TEST_ASSERT_NOT_NULL(result);
+    TEST_ASSERT_EQUAL(SCENEHUB_CONTROL_STATUS_DONE, result->status);
+    TEST_ASSERT_EQUAL(ESP_OK, result->err);
+}
+
+static void handler_select_scenario_and_start(const char *room_id,
+                                              const char *scenario_id)
+{
+    scenehub_control_result_t result = {0};
+
+    handler_assert_control_done(scenehub_control_select_scenario("test",
+                                                                 room_id,
+                                                                 scenario_id,
+                                                                 &result),
+                                &result);
+    memset(&result, 0, sizeof(result));
+    handler_assert_control_done(scenehub_control_scenario_start("test",
+                                                                room_id,
+                                                                &result),
+                                &result);
+}
+
+static void handler_select_profile(const char *room_id, const char *profile_id)
+{
+    scenehub_control_result_t result = {0};
+
+    handler_assert_control_done(scenehub_control_select_profile("test",
+                                                                room_id,
+                                                                profile_id,
+                                                                &result),
+                                &result);
 }
 
 static void handler_add_room(const char *room_id)
@@ -618,8 +656,7 @@ static void test_web_ui_handler_room_runtime_progresses_wait_flags_without_gm_st
     wh_copy(step->data.operator_approval.approve_label, sizeof(step->data.operator_approval.approve_label), "Continue");
 
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(&s_handler_scenario));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_select_scenario("room_a", "scenario_flags"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_scenario_start("room_a"));
+    handler_select_scenario_and_start("room_a", "scenario_flags");
 
     http_test_reset_request("room_id=room_a", NULL);
     TEST_ASSERT_EQUAL(ESP_OK, gm_room_scenario_approve_handler(&s_http_req));
@@ -831,7 +868,7 @@ static void test_web_ui_handler_game_start_rejects_unhealthy_room(void)
             "opened");
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(&s_handler_scenario));
     handler_add_profile("profile_devices", "room_a", "scenario_devices", 60000);
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_select_profile("room_a", "profile_devices"));
+    handler_select_profile("room_a", "profile_devices");
 
     http_test_reset_request("room_id=room_a", NULL);
     TEST_ASSERT_EQUAL(ESP_OK, gm_room_game_start_handler(&s_http_req));
@@ -885,7 +922,7 @@ static void test_web_ui_profile_handler_lists_backend_owned_room_profiles(void)
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_add(&s_handler_scenario));
     handler_add_profile("profile_ok", "room_a", "scenario_ok", 60000);
     handler_add_profile("profile_bad", "room_a", "scenario_missing", 30000);
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_select_profile("room_a", "profile_ok"));
+    handler_select_profile("room_a", "profile_ok");
 
     http_test_reset_request("room_id=room_a", NULL);
     TEST_ASSERT_EQUAL(ESP_OK, gm_room_profiles_handler(&s_http_req));

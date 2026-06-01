@@ -1,14 +1,22 @@
 #pragma once
 
 #include "command_executor.h"
+#include "gm_room_session.h"
 #include "scenehub_control.h"
 #include "scenehub_state.h"
 
 void scenehub_control_copy(char *dst, size_t dst_size, const char *src);
+void scenehub_control_build_session_profile(const gm_game_profile_t *profile,
+                                            gm_room_session_profile_t *out);
+esp_err_t scenehub_control_acquire_prepared_session_scenario(
+    const room_scenario_t *scenario,
+    const gm_room_session_prepared_scenario_t **out);
+void scenehub_control_release_prepared_session_scenario(void);
 bool scenehub_control_persistence_enabled(void);
 esp_err_t scenehub_control_prepare_result(const char *room_id,
                                           const char *action_id,
                                           scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_require_room(const char *room_id);
 void scenehub_control_set_result(scenehub_control_result_t *result,
                                  scenehub_control_status_t status,
                                  esp_err_t err,
@@ -57,3 +65,15 @@ esp_err_t scenehub_control_dispatch_device_command(
     command_executor_dispatch_t *out_dispatch,
     bool *out_log_warning,
     scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_dispatch_scenario_command(
+    const char *device_id,
+    const char *command_id,
+    const char *params_json,
+    const char *result_required_error,
+    command_executor_dispatch_t *out_dispatch,
+    char *error,
+    size_t error_size);
+esp_err_t scenehub_control_dispatch_session_command_plan(
+    const char *source,
+    gm_room_session_command_plan_t *plan);
+void scenehub_control_register_session_command_dispatcher(void);

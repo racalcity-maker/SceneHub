@@ -40,7 +40,8 @@ an optimization.
 Already improved:
 
 - `event_bus` uses a PSRAM-backed fixed message pool.
-- `gm_room_session` stores room sessions in static PSRAM.
+- `gm_room_session` stores room sessions and prepared scenario event-ref
+  snapshots in static PSRAM.
 - `command_executor_execute()` reuses PSRAM-backed `quest_device_t` and
   `quest_device_command_t` scratch instead of allocating per command.
 - `command_executor_execute()` reads audio/hardware params with bounded
@@ -59,8 +60,10 @@ Already improved:
   storage instead of heap-backed mutex allocation.
 - `gm_room_session_runtime_process_pending_work()` uses static PSRAM timeout
   event scratch.
-- Runtime wait setup and Reactive V2 trigger matching use static PSRAM
-  `quest_device_t` scratch instead of alloc/free.
+- `scenehub_control` resolves the complete scenario event-ref catalog before
+  runtime start with reusable static PSRAM scratch. `gm_core` copies the
+  prepared catalog into the target room slot under the session lock. Runtime
+  wait entry and Reactive V2 trigger matching only read that local snapshot.
 - GM game-control paths use static PSRAM session/scenario/validation scratch
   protected by a mutex instead of allocating for start/reset/select actions.
 - Scenario start uses static PSRAM scenario/validation scratch and reads the
@@ -92,17 +95,17 @@ alloc/free churn in common game control actions.
 - [x] Remove per-command `quest_device_t` / `quest_device_command_t` allocation
   from `components/command_executor/command_executor.c`.
 - [x] Remove runtime tick stack timeout buffer from
-  `components/gm_core/gm_room_session_runtime.c`.
+  `components/gm_core/session/gm_room_session_runtime.c`.
 - [x] Remove wait-event `quest_device_t` allocation from
-  `components/gm_core/gm_room_session_runtime_wait.c`.
+  `components/gm_core/session/gm_room_session_runtime_wait.c`.
 - [x] Remove Reactive V2 trigger-match `quest_device_t` allocation from
-  `components/gm_core/gm_room_session_reactive_v2.c`.
+  `components/gm_core/session/gm_room_session_reactive_v2.c`.
 - [x] Audit and reduce `gm_room_session_game.c` allocations for start/stop/reset
   game paths.
 - [x] Audit and reduce `gm_room_session_runtime.c` scenario start allocations
   for scenario/report/session scratch.
-- [x] Audit `gm_api.c` session/scenario scratch allocations used by active GM
-  operations.
+- [x] Remove the legacy `gm_api.c` facade after active GM operations moved to
+  `scenehub_control`.
 - [x] Replace `command_executor.c` parameter cJSON parsing with a bounded
   parser or typed command args for system/audio/hardware commands.
 - [x] Decide whether `command_executor_mqtt.c` may keep cJSON envelope building
@@ -122,6 +125,12 @@ Notes:
 
 - Scenario start is not a 100 ms tick path, but it is a live operator action.
   It should still avoid large heap churn where practical.
+- Prepared event-ref storage is bounded static PSRAM, not heap allocation:
+  `GM_ROOM_SESSION_PREPARED_EVENT_REF_MAX` is currently `320`. One catalog is
+  approximately `104 KB`; two room slots plus one reusable control-layer build
+  scratch reserve approximately `313 KB`. Catalog bytes are zeroed on scenario
+  stop/reset, full session reset and fresh room-slot allocation. There is no
+  runtime alloc/free lifecycle.
 - Command dispatch is a control path and should remain allocation-light even
   when multiple devices are triggered.
 - `command_executor.c` reads flat params with a bounded scanner instead of
@@ -242,7 +251,7 @@ Current allocation points:
     buffers.
 - `components/web_ui/web_ui_ota.c`
   - OTA upload chunk allocated per upload handler.
-- `components/web_ui/web_ui_gm_scenario.c`
+- `components/web_ui/gm/web_ui_gm_scenario.c`
   - runtime response is now streamed through a bounded chunked writer backed by
     static scratch instead of building a transient cJSON tree.
 
@@ -288,9 +297,9 @@ inside realtime flows.
 
 Current allocation points:
 
-- `components/room_scenario/room_scenario_persistence.c`
+- `components/room_scenario/storage/room_scenario_persistence.c`
 - `components/quest_device/quest_device_storage.c`
-- `components/gm_core/gm_game_profile.c`
+- `components/gm_profile_store/gm_game_profile.c`
 - `components/config_store/config_store.c`
 
 Tasks:

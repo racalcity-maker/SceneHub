@@ -214,6 +214,7 @@ static void orch_room_runtime_detail_copy_from_projection(
                        sizeof(out_branch->reentry_mode_text),
                        room_scenario_reentry_mode_to_str(out_branch->reentry_mode));
         out_branch->pending_trigger = branch->pending_trigger;
+        out_branch->last_variant_index = branch->last_variant_index;
         out_branch->step_start_index = branch->step_start_index;
         out_branch->step_count = branch->step_count;
         out_branch->current_step_index = branch->current_step_index;

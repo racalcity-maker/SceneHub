@@ -11,7 +11,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "error_monitor.h"
-#include "sdkconfig.h"
+#include "scenehub_config.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -29,11 +29,7 @@
 #define AUDIO_SILENCE_DRAIN_MS 50
 #define AUDIO_SILENCE_FRAMES 256
 #define AUDIO_I2S_WRITE_WARN_MS 80
-#define AUDIO_MAX98357A_WAKE_DELAY_MS 1
-
-#ifndef CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO
-#define CONFIG_SCENEHUB_MAX98357A_SD_MODE_GPIO -1
-#endif
+#define AUDIO_MAX98357A_WAKE_DELAY_MS 2
 
 static const char *TAG = "audio_player";
 
@@ -196,7 +192,7 @@ static esp_err_t output_enable_locked(void)
         return ESP_OK;
     }
     esp_err_t err = i2s_channel_enable(s_tx_chan);
-    if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+    if (err == ESP_OK) {
         s_tx_enabled = true;
         if (audio_output_is_max98357a()) {
             max98357a_set_shutdown(false);
@@ -259,11 +255,9 @@ static esp_err_t audio_player_output_setup(void)
 
     i2s_std_config_t std_cfg = audio_output_std_config();
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_tx_chan, &std_cfg), TAG, "i2s std init failed");
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(s_tx_chan), TAG, "i2s enable failed");
-    s_tx_enabled = true;
+    s_tx_enabled = false;
     if (audio_output_is_max98357a()) {
-        max98357a_set_shutdown(false);
-        vTaskDelay(pdMS_TO_TICKS(AUDIO_MAX98357A_WAKE_DELAY_MS));
+        max98357a_set_shutdown(true);
     }
     ESP_LOGI(TAG,
              "audio output ready: driver=%s bclk=%d ws=%d data=%d rate=%d sd_mode_gpio=%d",

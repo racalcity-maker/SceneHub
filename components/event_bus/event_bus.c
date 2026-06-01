@@ -10,12 +10,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
-#include "sdkconfig.h"
+#include "scenehub_config.h"
 #include "service_status.h"
-
-#ifndef CONFIG_SCENEHUB_EVENT_BUS_SKIP_EVENT_VALIDATION
-#define CONFIG_SCENEHUB_EVENT_BUS_SKIP_EVENT_VALIDATION 0
-#endif
 
 #define EVENT_BUS_QUEUE_LEN 128
 #define EVENT_BUS_JOB_QUEUE_LEN 32

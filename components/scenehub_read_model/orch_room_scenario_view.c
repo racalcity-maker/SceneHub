@@ -38,6 +38,10 @@ static orch_room_scenario_step_type_t orch_room_scenario_map_step_type(room_scen
         return ORCH_ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT;
     case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
         return ORCH_ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS;
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+        return ORCH_ROOM_SCENARIO_STEP_FAIL_REACTION;
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
+        return ORCH_ROOM_SCENARIO_STEP_RESET_REACTION;
     case ROOM_SCENARIO_STEP_END_GAME:
         return ORCH_ROOM_SCENARIO_STEP_END_GAME;
     default:
@@ -119,6 +123,11 @@ static void orch_room_scenario_copy_reactive_trigger(
     quest_str_copy(dst->kind_text, sizeof(dst->kind_text), orch_room_scenario_trigger_kind_str(dst->kind));
     quest_str_copy(dst->device_id, sizeof(dst->device_id), src->device_id);
     quest_str_copy(dst->event_id, sizeof(dst->event_id), src->event_id);
+    dst->event_count = orch_room_scenario_min_u8(src->event_count, ORCH_ROOM_SCENARIO_MAX_EVENT_REFS);
+    for (uint8_t i = 0; i < dst->event_count; ++i) {
+        quest_str_copy(dst->events[i].device_id, sizeof(dst->events[i].device_id), src->events[i].device_id);
+        quest_str_copy(dst->events[i].event_id, sizeof(dst->events[i].event_id), src->events[i].event_id);
+    }
     quest_str_copy(dst->flag_name, sizeof(dst->flag_name), src->flag_name);
     quest_str_copy(dst->runtime_event, sizeof(dst->runtime_event), src->runtime_event);
     quest_str_copy(dst->operator_event, sizeof(dst->operator_event), src->operator_event);
@@ -150,6 +159,10 @@ static void orch_room_scenario_copy_step(const room_scenario_step_t *src,
         break;
     case ROOM_SCENARIO_STEP_WAIT_TIME:
         dst->duration_ms = src->data.wait_time.duration_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_time.timeout_action));
         break;
     case ROOM_SCENARIO_STEP_OPERATOR_APPROVAL:
         quest_str_copy(dst->operator_prompt,
@@ -167,6 +180,10 @@ static void orch_room_scenario_copy_step(const room_scenario_step_t *src,
                     sizeof(dst->event_id),
                     src->data.wait_device_event.event_id);
         dst->timeout_ms = src->data.wait_device_event.timeout_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_device_event.timeout_action));
         quest_str_copy(dst->timeout_message,
                        sizeof(dst->timeout_message),
                        src->data.wait_device_event.timeout_message);
@@ -202,6 +219,10 @@ static void orch_room_scenario_copy_step(const room_scenario_step_t *src,
                                           dst->flags,
                                           &dst->flag_count);
         dst->timeout_ms = src->data.wait_flags.timeout_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_flags.timeout_action));
         quest_str_copy(dst->timeout_message,
                        sizeof(dst->timeout_message),
                        src->data.wait_flags.timeout_message);
@@ -219,6 +240,11 @@ static void orch_room_scenario_copy_step(const room_scenario_step_t *src,
                         sizeof(dst->events[i].event_id),
                         src->data.wait_any_device_event.events[i].event_id);
         }
+        dst->timeout_ms = src->data.wait_any_device_event.timeout_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_any_device_event.timeout_action));
         break;
     case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
         dst->event_count = orch_room_scenario_min_u8(src->data.wait_all_device_events.event_count,
@@ -233,6 +259,11 @@ static void orch_room_scenario_copy_step(const room_scenario_step_t *src,
                         sizeof(dst->events[i].event_id),
                         src->data.wait_all_device_events.events[i].event_id);
         }
+        dst->timeout_ms = src->data.wait_all_device_events.timeout_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_all_device_events.timeout_action));
         break;
     case ROOM_SCENARIO_STEP_END_GAME:
         break;
@@ -273,6 +304,70 @@ static void orch_room_scenario_copy_reactive_action(
         break;
     case ROOM_SCENARIO_STEP_WAIT_TIME:
         dst->duration_ms = src->data.wait_time.duration_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_time.timeout_action));
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT:
+        quest_str_copy(dst->device_id, sizeof(dst->device_id), src->data.wait_device_event.device_id);
+        quest_str_copy(dst->event_id, sizeof(dst->event_id), src->data.wait_device_event.event_id);
+        dst->timeout_ms = src->data.wait_device_event.timeout_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_device_event.timeout_action));
+        quest_str_copy(dst->timeout_message,
+                       sizeof(dst->timeout_message),
+                       src->data.wait_device_event.timeout_message);
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT:
+        dst->event_count = orch_room_scenario_min_u8(src->data.wait_any_device_event.event_count,
+                                                     ORCH_ROOM_SCENARIO_MAX_EVENT_REFS);
+        for (uint8_t i = 0; i < dst->event_count; ++i) {
+            quest_str_copy(dst->events[i].device_id,
+                           sizeof(dst->events[i].device_id),
+                           src->data.wait_any_device_event.events[i].device_id);
+            quest_str_copy(dst->events[i].event_id,
+                           sizeof(dst->events[i].event_id),
+                           src->data.wait_any_device_event.events[i].event_id);
+        }
+        dst->timeout_ms = src->data.wait_any_device_event.timeout_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_any_device_event.timeout_action));
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
+        dst->event_count = orch_room_scenario_min_u8(src->data.wait_all_device_events.event_count,
+                                                     ORCH_ROOM_SCENARIO_MAX_EVENT_REFS);
+        for (uint8_t i = 0; i < dst->event_count; ++i) {
+            quest_str_copy(dst->events[i].device_id,
+                           sizeof(dst->events[i].device_id),
+                           src->data.wait_all_device_events.events[i].device_id);
+            quest_str_copy(dst->events[i].event_id,
+                           sizeof(dst->events[i].event_id),
+                           src->data.wait_all_device_events.events[i].event_id);
+        }
+        dst->timeout_ms = src->data.wait_all_device_events.timeout_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_all_device_events.timeout_action));
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_FLAGS:
+        orch_room_scenario_copy_flag_refs(src->data.wait_flags.flags,
+                                          src->data.wait_flags.flag_count,
+                                          dst->flags,
+                                          &dst->flag_count);
+        dst->timeout_ms = src->data.wait_flags.timeout_ms;
+        quest_str_copy(dst->timeout_action,
+                       sizeof(dst->timeout_action),
+                       room_scenario_wait_timeout_action_to_str(
+                           src->data.wait_flags.timeout_action));
+        quest_str_copy(dst->timeout_message,
+                       sizeof(dst->timeout_message),
+                       src->data.wait_flags.timeout_message);
         break;
     case ROOM_SCENARIO_STEP_SET_FLAG:
         quest_str_copy(dst->flag_name, sizeof(dst->flag_name), src->data.set_flag.name);
@@ -282,6 +377,9 @@ static void orch_room_scenario_copy_reactive_action(
         quest_str_copy(dst->operator_message,
                        sizeof(dst->operator_message),
                        src->data.operator_message.message);
+        break;
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
         break;
     default:
         break;

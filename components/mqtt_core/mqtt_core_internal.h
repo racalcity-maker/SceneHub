@@ -12,6 +12,7 @@
 
 #include "config_store.h"
 #include "event_bus.h"
+#include "scenehub_config.h"
 
 #define MQTT_MAX_CLIENTS       CONFIG_SCENEHUB_MQTT_MAX_CLIENTS
 #define MQTT_MAX_SUBS          16
@@ -116,7 +117,7 @@ void on_event_bus_message(const scenehub_event_t *msg);
 
 void retain_store(const char *topic, const char *payload, uint8_t qos);
 esp_err_t retain_init(void);
-void deliver_retain(mqtt_session_t *sess, const char *filter);
+void deliver_retain(mqtt_session_t *sess, const char *filter, uint8_t subscription_qos);
 void publish_to_subscribers(const char *topic,
                             const char *payload,
                             uint8_t qos,

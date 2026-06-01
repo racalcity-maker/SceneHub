@@ -1,6 +1,18 @@
 // GM panel source part. Edit this file, then rebuild gm_panel.js.
 function scenarioDeviceById(deviceId){
-return scenarioCatalogDevices().find(device=>device.id===deviceId)||null;
+const id=String(deviceId||'');
+if(!id)return null;
+const direct=scenarioCatalogDevices().find(device=>device.id===id)||null;
+if(direct)return direct;
+const registration=typeof observedRegistration==='function'?observedRegistration(id):null;
+if(registration&&registration.device_id){
+return scenarioCatalogDevices().find(device=>device.id===registration.device_id)||null;
+}
+const quest=typeof questDevices==='function'?questDevices().find(device=>String(device&&device.client_id||'')===id):null;
+if(quest&&quest.id){
+return scenarioCatalogDevices().find(device=>device.id===quest.id)||null;
+}
+return null;
 }
 
 function scenarioCommandById(deviceId,commandId){
@@ -15,6 +27,7 @@ return commands[0]&&commands[0].id||'';
 }
 
 function scenarioValidEventId(device,eventId){
+eventId=typeof normalizeScenarioEventIdValue==='function'?normalizeScenarioEventIdValue(eventId):eventId;
 const events=device&&Array.isArray(device.events)?device.events:[];
 if(eventId&&events.some(ev=>ev.id===eventId))return eventId;
 return events[0]&&events[0].id||'';
@@ -22,7 +35,11 @@ return events[0]&&events[0].id||'';
 
 function scenarioEventById(deviceId,eventId){
 const device=scenarioDeviceById(deviceId);
-return device&&Array.isArray(device.events)?device.events.find(ev=>ev.id===eventId)||null:null;
+if(!(device&&Array.isArray(device.events)))return null;
+eventId=typeof normalizeScenarioEventIdValue==='function'?normalizeScenarioEventIdValue(eventId):eventId;
+const exact=device.events.find(ev=>ev.id===eventId)||null;
+if(exact)return exact;
+return null;
 }
 
 function scenarioCommandName(deviceId,commandId){
@@ -122,7 +139,6 @@ const activeBranch=scenarioActiveBranch(base);
 const activeSteps=scenarioActiveSteps(base);
 if(!Number.isFinite(Number(scenarioEditor.expanded_step)))scenarioEditor.expanded_step=-1;
 if(scenarioEditor.expanded_step>=activeSteps.length)scenarioEditor.expanded_step=-1;
-const json=JSON.stringify(base,null,2);
 const issues=editing&&Array.isArray(editing.validation_issues)?editing.validation_issues:[];
 const activeIssues=scenarioActiveValidationIssues(issues);
 const totalStepCount=scenarioTotalStepCount(base.branches);
@@ -130,8 +146,6 @@ const issuesByStep=scenarioIssuesForBranch(activeIssues,base.branches,activeBran
 const reactiveIssueState=scenarioReactiveIssuesForBranch(activeIssues,base.branches,activeBranchIndex);
 const issueHtml=renderScenarioValidationSummary(activeIssues,totalStepCount);
 const rows=scenarios.length?scenarios.map(s=>{const branchCount=Math.max(1,Number(s&&s.branch_count)||Number(Array.isArray(s&&s.branches)?s.branches.length:0)||1);return `<div class='row-card admin-item-card'><div class='admin-item-main'><div class='admin-item-title-row'><div class='row-title'>${esc(s.name||s.id)}</div>${s.valid===false?`<span class='badge'>invalid</span>`:''}</div><div class='admin-item-meta'><span>${esc(s.step_count||0)} steps</span><span>${esc(branchCount)} branch${branchCount===1?'':'es'}</span><span>${esc(scenarioValidationText(s))}</span></div></div><div class='admin-item-side'>${uiActions([uiButton({label:'Edit',action:'scenario.edit',dataset:{'scenario-id':s.id||''}}),uiButton({label:'Create game mode',action:'scenario.create_game_mode',dataset:{'scenario-id':s.id||''}}),uiButton({label:'Delete',kind:'danger',action:'scenario.delete',dataset:{'scenario-id':s.id||''},confirm:`Delete scenario ${s.id||''}?`})])}</div></div>`;}).join(''):`<div class='card empty'>No scenarios for this room</div>`;
-const scenarioIdKey=`scenario:id:${roomId}:${base.id||'new'}`;
-const jsonKey=`scenario:json:${roomId}:${base.id||'new'}`;
 const emptyStepsText=scenarioBranchTypeValue(activeBranch)==='reactive'?'Add a trigger first. This reaction will listen for it, then run the actions you add after it.':'No steps yet';
 const activeBranchIsV2=scenarioIsReactiveV2Branch(activeBranch);
 const branchEditorBody=activeBranchIsV2
@@ -143,7 +157,7 @@ subtitle:'Build room logic, branches and step flow for operators.',
 closeAction:'scenario.cancel',
 className:'card editor-modal-card scenario-modal-card',
 dataset:{'scenario-editor-modal':'1'},
-content:`<div class='scenario-editor-card' data-scenario-editor='1' data-active-branch-index='${activeBranchIndex}'><div class='scenario-editor-head'><div><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'>${uiButton({label:'Validate',action:'scenario.validate'})}${uiButton({label:'Save',action:'scenario.save'})}</div></div><details class='scenario-advanced compact-advanced' ${detailsAttrs(scenarioIdKey,false)}><summary>Scenario id</summary><div class='row'><input id='scenario_id' placeholder='Scenario ID' value='${esc(base.id||'')}'></div></details>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout ${activeBranchIsV2?'scenario-editor-layout-v2':''}'>${activeBranchIsV2?'':`<aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside>`}${branchEditorBody}</div><details style='margin-top:10px' ${detailsAttrs(jsonKey,false)}><summary class='row-meta'>Debug JSON</summary><textarea id='scenario_json' class='builder-json' readonly>${esc(json)}</textarea></details><div class='actions sticky-actions'>${uiButton({label:'Save scenario',action:'scenario.save'})}${uiButton({label:'Close',action:'scenario.cancel'})}</div></div>`
+content:`<div class='scenario-editor-card' data-scenario-editor='1' data-active-branch-index='${activeBranchIndex}'><div class='scenario-editor-head'><div><input id='scenario_name' placeholder='Scenario name' value='${esc(base.name||'')}'></div><div class='actions'>${uiButton({label:'Validate',action:'scenario.validate'})}${uiButton({label:'Save',action:'scenario.save'})}</div></div>${issueHtml}${renderScenarioBranchTabs(base,activeBranchIndex)}${renderScenarioBranchSettings(activeBranch,activeBranchIndex,base.branches.length)}<div class='scenario-editor-layout ${activeBranchIsV2?'scenario-editor-layout-v2':''}'>${activeBranchIsV2?'':`<aside class='scenario-add-panel'>${scenarioStepPresetButtons(activeBranch)}</aside>`}${branchEditorBody}</div><div class='actions sticky-actions'>${uiButton({label:'Save scenario',action:'scenario.save'})}${uiButton({label:'Close',action:'scenario.cancel'})}</div></div>`
 }):'';
 return `<div class='scenario-room-bar'><div><span class='row-meta'>Room</span><select class='scenario-select' data-scenario-room-select>${rooms.map(r=>`<option value='${esc(r.room_id)}' ${r.room_id===roomId?'selected':''}>${esc(r.title||r.room_id)}</option>`).join('')}</select></div><div class='row-meta'>Steps can target devices in any room.</div></div><section class='card'><div class='card-head'><h2 class='section-title'>Scenarios</h2><div class='actions'>${uiButton({label:'Add scenario',action:'scenario.new'})}</div></div><div class='admin-entity-grid'>${rows}</div></section>${editorHtml}`;
 }

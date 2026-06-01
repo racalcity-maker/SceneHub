@@ -1,5 +1,6 @@
 #include "orchestrator/orchestrator_api_view.h"
 
+#include <stdint.h>
 #include <string.h>
 
 static esp_err_t api_add_wait_events(cJSON *obj, const orch_room_wait_event_entry_t *events, uint8_t count)
@@ -155,6 +156,9 @@ static esp_err_t api_add_scenario_branches(cJSON *obj,
         cJSON_AddBoolToObject(item, "fired_once", branch->fired_once);
         cJSON_AddStringToObject(item, "reentry_mode", branch->reentry_mode_text);
         cJSON_AddBoolToObject(item, "pending_trigger", branch->pending_trigger);
+        cJSON_AddNumberToObject(item,
+                                "last_variant_index",
+                                branch->last_variant_index == UINT8_MAX ? -1 : branch->last_variant_index);
         cJSON_AddNumberToObject(item, "step_start_index", branch->step_start_index);
         cJSON_AddNumberToObject(item, "step_count", branch->step_count);
         cJSON_AddNumberToObject(item, "total_steps", branch->total_steps);

@@ -7,22 +7,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "sdkconfig.h"
 
 #include "config_store.h"
 #include "esp_err.h"
 #include "esp_http_server.h"
+#include "scenehub_config.h"
 
 #include "web_ui_auth.h"
-
-#ifndef CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO
-#define CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO -1
-#endif
 
 #define WEB_SESSION_MAX        6
 #define WEB_SESSION_TOKEN_LEN  64
 #define WEB_SESSION_TTL_US     (12LL * 60 * 60 * 1000000)
-#define WEB_AUTH_RESET_HOLD_US (10LL * 1000000)
 #define WEB_AUTH_TRACE_HTTP    0
 
 typedef struct {
@@ -36,9 +31,6 @@ typedef struct {
 extern const char *g_web_ui_auth_tag;
 extern SemaphoreHandle_t g_web_ui_auth_session_mutex;
 extern web_session_entry_t g_web_ui_auth_sessions[WEB_SESSION_MAX];
-#if CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO >= 0
-extern TaskHandle_t g_web_ui_auth_reset_task;
-#endif
 
 esp_err_t web_http_check(esp_err_t err, const char *context);
 #define WEB_HTTP_CHECK(call) web_http_check((call), __func__)

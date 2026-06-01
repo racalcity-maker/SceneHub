@@ -273,6 +273,7 @@ if(type==='WAIT_DEVICE_EVENT')return renderWaitDeviceEventPayload(step);
 if(type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS')return renderEventGroupControl(step);
 if(type==='WAIT_FLAGS')return renderFlagListControl(step);
 if(type==='SET_FLAG')return renderSetFlagPayload(step);
+if(type==='FAIL_REACTION'||type==='RESET_REACTION')return '';
 if(scenarioStepSchema(type))return renderScenarioSchemaPayload(step,type);
 if(type==='OPERATOR_APPROVAL')return `<div class='row'><input data-step-field='prompt' placeholder='Operator prompt' value='${esc(step.prompt||step.operator_prompt||'')}'><input data-step-field='approve_label' placeholder='Approve label' value='${esc(step.approve_label||step.operator_approve_label||'Continue')}'></div>`;
 if(type==='SHOW_OPERATOR_MESSAGE')return `<textarea class='scenario-textarea' rows='1' data-step-field='message' placeholder='Operator message'>${esc(step.message||'')}</textarea>`;

@@ -148,6 +148,33 @@ static const char *qd_compact_resource_key(const char *source)
     return strcmp(source, "led_strips") == 0 ? "strip" : "channel";
 }
 
+static const char *qd_compact_resource_key_from_item(const char *source, const cJSON *item)
+{
+    static const char *keys[] = {
+        "channel",
+        "strip",
+        "reader",
+        "uid_reader",
+        "reader_id",
+        "index",
+        "id",
+    };
+    const char *preferred = qd_compact_resource_key(source);
+    if (!cJSON_IsObject(item)) {
+        return preferred;
+    }
+    if (preferred && cJSON_GetObjectItemCaseSensitive(item, preferred)) {
+        return preferred;
+    }
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+        const cJSON *value = cJSON_GetObjectItemCaseSensitive(item, keys[i]);
+        if (cJSON_IsString(value) || cJSON_IsNumber(value)) {
+            return keys[i];
+        }
+    }
+    return preferred;
+}
+
 static const cJSON *qd_compact_resources_array(const cJSON *root, const char *source)
 {
     const cJSON *resources = NULL;
@@ -186,16 +213,16 @@ static const cJSON *qd_compact_find_resource_item(const cJSON *root,
                                                   const char *event_name,
                                                   const char *resource_id)
 {
-    const char *resource_key = qd_compact_resource_key(source);
     const cJSON *resources = qd_compact_resources_array(root, source);
     int count = 0;
-    if (!resource_key || !cJSON_IsArray(resources) || !event_name || !event_name[0] ||
+    if (!cJSON_IsArray(resources) || !event_name || !event_name[0] ||
         !resource_id || !resource_id[0]) {
         return NULL;
     }
     count = cJSON_GetArraySize(resources);
     for (int i = 0; i < count; ++i) {
         const cJSON *item = cJSON_GetArrayItem(resources, i);
+        const char *resource_key = qd_compact_resource_key_from_item(source, item);
         if (strcmp(qd_json_string(item, "event"), event_name) == 0 &&
             qd_compact_resource_item_matches(item, resource_key, resource_id)) {
             return item;
@@ -209,7 +236,7 @@ static esp_err_t qd_compact_build_match_json(const cJSON *resource_item,
                                              char *dst,
                                              size_t dst_len)
 {
-    const char *resource_key = qd_compact_resource_key(source);
+    const char *resource_key = qd_compact_resource_key_from_item(source, resource_item);
     const cJSON *value = NULL;
     cJSON *match = NULL;
     char *json = NULL;
@@ -261,6 +288,21 @@ static esp_err_t qd_compact_copy_match_object(const cJSON *item,
     qd_copy(dst, dst_len, json);
     free(json);
     return dst[0] ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static bool qd_compact_event_template_allows_resource_expansion(const cJSON *item)
+{
+    const cJSON *match = NULL;
+    const char *schema_ref = NULL;
+    if (!cJSON_IsObject(item)) {
+        return false;
+    }
+    match = cJSON_GetObjectItemCaseSensitive(item, "match");
+    if (cJSON_IsObject(match) && cJSON_GetArraySize(match) > 0) {
+        return true;
+    }
+    schema_ref = qd_json_string(item, "args_schema_ref");
+    return schema_ref[0] && strcmp(schema_ref, "empty") != 0;
 }
 
 static esp_err_t qd_compact_manifest_get_event(const char *device_description_json,
@@ -322,6 +364,7 @@ static esp_err_t qd_compact_manifest_get_event(const char *device_description_js
         resource_match = base_event_id[0] &&
                          strcmp(id, base_event_id) == 0 &&
                          source[0] &&
+                         qd_compact_event_template_allows_resource_expansion(item) &&
                          (resource_item = qd_compact_find_resource_item(root,
                                                                         source,
                                                                         event_name,

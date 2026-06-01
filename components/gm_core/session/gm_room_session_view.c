@@ -152,6 +152,72 @@ static void gm_room_session_format_step_text(const room_scenario_step_t *step,
     }
 }
 
+static void gm_room_session_format_reactive_action_text(const room_scenario_reactive_action_t *action,
+                                                        char *out_text,
+                                                        size_t out_text_len)
+{
+    if (!out_text || out_text_len == 0) {
+        return;
+    }
+    out_text[0] = '\0';
+    if (!action) {
+        return;
+    }
+    if (action->label[0]) {
+        gm_room_session_view_copy(out_text, out_text_len, action->label);
+        return;
+    }
+    switch (action->type) {
+    case ROOM_SCENARIO_STEP_WAIT_TIME:
+        gm_room_session_view_copy(out_text, out_text_len, "Wait");
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_DEVICE_EVENT:
+        snprintf(out_text,
+                 out_text_len,
+                 "Wait %s",
+                 action->data.wait_device_event.device_id[0]
+                     ? action->data.wait_device_event.device_id
+                     : "event");
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_ANY_DEVICE_EVENT:
+        gm_room_session_view_copy(out_text, out_text_len, "Wait any event");
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS:
+        gm_room_session_view_copy(out_text, out_text_len, "Wait all events");
+        break;
+    case ROOM_SCENARIO_STEP_WAIT_FLAGS:
+        gm_room_session_view_copy(out_text, out_text_len, "Wait flags");
+        break;
+    case ROOM_SCENARIO_STEP_DEVICE_COMMAND:
+        snprintf(out_text,
+                 out_text_len,
+                 "Command %s",
+                 action->data.device_command.device_id[0] ? action->data.device_command.device_id : "device");
+        break;
+    case ROOM_SCENARIO_STEP_DEVICE_COMMAND_GROUP:
+        gm_room_session_view_copy(out_text, out_text_len, "Command group");
+        break;
+    case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
+        gm_room_session_view_copy(out_text, out_text_len, "Operator message");
+        break;
+    case ROOM_SCENARIO_STEP_SET_FLAG:
+        snprintf(out_text,
+                 out_text_len,
+                 "Set flag %s",
+                 action->data.set_flag.name[0] ? action->data.set_flag.name : "flag");
+        break;
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+        gm_room_session_view_copy(out_text, out_text_len, "Fail reaction");
+        break;
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
+        gm_room_session_view_copy(out_text, out_text_len, "Reset reaction");
+        break;
+    default:
+        gm_room_session_view_copy(out_text, out_text_len, "Action");
+        break;
+    }
+}
+
 static void gm_room_session_fill_wait_summary(gm_room_scenario_wait_type_t wait_type,
                                               uint32_t wait_started_at_ms,
                                               uint32_t wait_until_ms,
@@ -597,6 +663,7 @@ static void gm_room_session_fill_branch_runtime_view(
     out->fired_once = runtime->fired_once;
     out->reentry_mode = runtime->reentry_mode;
     out->pending_trigger = runtime->pending_trigger;
+    out->last_variant_index = runtime->last_variant_index;
     out->step_start_index = runtime->step_start_index;
     out->step_count = runtime->step_count;
     out->current_step_index = runtime->current_step_index;
@@ -770,22 +837,65 @@ esp_err_t gm_room_session_describe_branch_runtime(
     const gm_room_scenario_branch_runtime_t *runtime,
     gm_room_scenario_branch_semantics_t *out)
 {
+    const room_scenario_branch_t *branch = NULL;
     const room_scenario_step_t *step = NULL;
     if (!session || !runtime || !out) {
         return ESP_ERR_INVALID_ARG;
     }
     memset(out, 0, sizeof(*out));
-    out->current_local_step_index = gm_room_session_branch_local_step_index(runtime);
-    out->done_steps = gm_room_session_branch_done_steps(runtime);
-    out->total_steps = runtime->step_count;
-    out->failed_step_index = gm_room_session_branch_failed_step_index(runtime);
-    out->current_step_state = gm_room_session_branch_current_step_state(runtime);
+    if (runtime->branch_index < session->running_scenario.branch_count) {
+        branch = &session->running_scenario.branches[runtime->branch_index];
+    }
+    if (branch && branch->type == ROOM_SCENARIO_BRANCH_REACTIVE) {
+        const uint16_t total = runtime->reactive_action_count;
+        const uint16_t local = runtime->reactive_current_action;
+        out->total_steps = total;
+        out->current_local_step_index = local > total ? total : local;
+        out->done_steps = runtime->scenario_state == GM_ROOM_SCENARIO_DONE
+                              ? total
+                              : (out->current_local_step_index > total ? total : out->current_local_step_index);
+        out->failed_step_index = runtime->scenario_state == GM_ROOM_SCENARIO_ERROR &&
+                                         out->current_local_step_index < total
+                                     ? (int16_t)out->current_local_step_index
+                                     : -1;
+        if (total == 0) {
+            out->current_step_state = GM_ROOM_SCENARIO_STEP_STATE_PENDING;
+        } else if (runtime->scenario_state == GM_ROOM_SCENARIO_DONE) {
+            out->current_step_state = GM_ROOM_SCENARIO_STEP_STATE_DONE;
+        } else if (runtime->scenario_state == GM_ROOM_SCENARIO_WAITING) {
+            out->current_step_state = GM_ROOM_SCENARIO_STEP_STATE_WAITING;
+        } else if (runtime->scenario_state == GM_ROOM_SCENARIO_ERROR) {
+            out->current_step_state = GM_ROOM_SCENARIO_STEP_STATE_ERROR;
+        } else if (runtime->scenario_state == GM_ROOM_SCENARIO_RUNNING ||
+                   runtime->scenario_state == GM_ROOM_SCENARIO_PAUSED) {
+            out->current_step_state = GM_ROOM_SCENARIO_STEP_STATE_CURRENT;
+        } else {
+            out->current_step_state = GM_ROOM_SCENARIO_STEP_STATE_PENDING;
+        }
+    } else {
+        out->current_local_step_index = gm_room_session_branch_local_step_index(runtime);
+        out->done_steps = gm_room_session_branch_done_steps(runtime);
+        out->total_steps = runtime->step_count;
+        out->failed_step_index = gm_room_session_branch_failed_step_index(runtime);
+        out->current_step_state = gm_room_session_branch_current_step_state(runtime);
+    }
     if (runtime->type == ROOM_SCENARIO_BRANCH_REACTIVE &&
         runtime->scenario_state == GM_ROOM_SCENARIO_WAITING &&
         runtime->wait_type == GM_ROOM_SCENARIO_WAIT_NONE) {
         gm_room_session_view_copy(out->current_step_text,
                                   sizeof(out->current_step_text),
                                   "Waiting for trigger");
+    } else if (branch &&
+               branch->type == ROOM_SCENARIO_BRANCH_REACTIVE &&
+               runtime->reactive_action_count > 0 &&
+               (size_t)runtime->reactive_action_start_index + runtime->reactive_current_action <
+                   session->running_scenario.reactive_action_count) {
+        const room_scenario_reactive_action_t *action =
+            &session->running_scenario.reactive_actions[runtime->reactive_action_start_index +
+                                                        runtime->reactive_current_action];
+        gm_room_session_format_reactive_action_text(action,
+                                                    out->current_step_text,
+                                                    sizeof(out->current_step_text));
     } else if (runtime->scenario_state == GM_ROOM_SCENARIO_DONE) {
         gm_room_session_view_copy(out->current_step_text, sizeof(out->current_step_text), "Complete");
     } else if (session->running_scenario_valid &&

@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "esp_err.h"
 #include "gm_game_profile.h"
+#include "gm_room_session.h"
 #include "hardware_io.h"
 #include "quest_common_limits.h"
 #include "quest_device.h"
@@ -61,7 +62,11 @@ typedef struct {
 } scenehub_control_device_interface_info_t;
 
 const char *scenehub_control_status_str(scenehub_control_status_t status);
+esp_err_t scenehub_control_init(void);
 void scenehub_control_set_persistence_enabled_for_test(bool enabled);
+esp_err_t scenehub_control_prepare_session_scenario(
+    const room_scenario_t *scenario,
+    gm_room_session_prepared_scenario_t *out);
 
 esp_err_t scenehub_control_execute_room_action(const char *source,
                                                const char *room_id,

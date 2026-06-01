@@ -135,6 +135,7 @@ typedef struct {
     room_scenario_reentry_mode_t reentry_mode;
     char reentry_mode_text[ORCH_REGISTRY_STATE_MAX_LEN];
     bool pending_trigger;
+    uint8_t last_variant_index;
     uint16_t step_start_index;
     uint16_t step_count;
     uint16_t current_step_index;

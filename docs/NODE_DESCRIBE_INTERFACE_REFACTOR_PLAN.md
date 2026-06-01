@@ -51,7 +51,7 @@ The second outcome is the one to avoid.
 
 ### Large-payload producer path on the node
 
-- `scenehub_node_v1/esp_idf/components/node_control/node_control.c`
+- `scenehub_node_v1/esp_idf/components/node_control/node_control_describe.c`
   `execute_describe_interface(node_control_result_t *result)` builds the
   manifest into `result->data_json` and wraps it as
   `{"device_description": ... }`.
@@ -71,10 +71,10 @@ The second outcome is the one to avoid.
   `device_control_ingest_device_t` permanently owns:
   - `result_data_json[DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN]`
   - `event_args_json[DEVICE_CONTROL_INGEST_EVENT_ARGS_JSON_MAX_LEN]`
-- `components/scenehub_control/scenehub_control_devices.c`
-  `scenehub_control_device_describe_interface(...)` currently polls
-  `device_control_ingest_get_device(...)` and reads the returned
-  `result_data_json` blob as the source of truth for `describe_interface`.
+- `components/scenehub_control/scenehub_control_dispatch.c`
+  `scenehub_control_dispatch_describe_interface(...)` sends the request through
+  the dispatch owner and consumes the transient metadata response with
+  `device_control_ingest_take_describe_interface_data(...)`.
 
 ### Persistent manifest owner
 

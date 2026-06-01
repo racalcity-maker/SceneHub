@@ -4,23 +4,7 @@
 
 #include "hardware_io.h"
 #include "quest_device.h"
-#include "sdkconfig.h"
-
-#ifndef CONFIG_SCENEHUB_RELAY_MAX_PULSE_MS
-#define CONFIG_SCENEHUB_RELAY_MAX_PULSE_MS 60000
-#endif
-#ifndef CONFIG_SCENEHUB_MOSFET_MAX_PULSE_MS
-#define CONFIG_SCENEHUB_MOSFET_MAX_PULSE_MS 60000
-#endif
-#ifndef CONFIG_SCENEHUB_MOSFET_MAX_FADE_MS
-#define CONFIG_SCENEHUB_MOSFET_MAX_FADE_MS 60000
-#endif
-#ifndef CONFIG_SCENEHUB_GPIO_MAX_PULSE_MS
-#define CONFIG_SCENEHUB_GPIO_MAX_PULSE_MS 60000
-#endif
-#ifndef CONFIG_SCENEHUB_HARDWARE_MAX_EFFECT_MS
-#define CONFIG_SCENEHUB_HARDWARE_MAX_EFFECT_MS 600000
-#endif
+#include "scenehub_config.h"
 
 static esp_err_t hardware_get_channel(const command_executor_request_t *request,
                                       char *error,

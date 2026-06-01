@@ -23,6 +23,7 @@ idf_component_register(
         esp_timer
         freertos
         gm_core
+        gm_profile_store
         json
         quest_common
         quest_device

@@ -2,7 +2,7 @@
 function gmMarkEditorDirtyFromEvent(e){
 markControlDirty(e.target);
 const profileField=e.target.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
 const questDeviceField=e.target.closest('[data-quest-device-field],[data-quest-command-field],[data-quest-event-field]');
 if(profileField)markProfileDirty();
 if(scenarioField)markScenarioDirty();
@@ -79,7 +79,7 @@ const editorRoom=e.target.closest('select[data-profile-room-select]');
 const scenarioRoom=e.target.closest('select[data-scenario-room-select]');
 const deviceRoom=e.target.closest('select[data-device-room-filter]');
 const observed=e.target.closest('select[data-observed-filter]');
-const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const scenarioField=e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
 const sidebarPresetField=e.target.closest('[data-sidebar-preset-field],[data-field]');
 const profile=e.target.closest('select[data-room-profile-room]');
 const scenario=e.target.closest('select[data-room-scenario-room]');
@@ -115,7 +115,7 @@ initGMEditorFocusAndDetails(content);
 content.oninput=e=>{
 gmMarkEditorDirtyFromEvent(e);
 if(gmHandleScenarioEditorInput(e))return;
-if(e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]'))return;
+if(e.target.closest('#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]'))return;
 handleSidebarPresetFieldInput(e.target.closest('[data-sidebar-preset-field],[data-field]'));
 };
 content.onchange=gmHandleEditorChange;

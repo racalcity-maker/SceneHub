@@ -9,9 +9,6 @@
 const char *g_web_ui_auth_tag = "web_ui_auth";
 SemaphoreHandle_t g_web_ui_auth_session_mutex = NULL;
 web_session_entry_t g_web_ui_auth_sessions[WEB_SESSION_MAX];
-#if CONFIG_SCENEHUB_WEB_AUTH_RESET_GPIO >= 0
-TaskHandle_t g_web_ui_auth_reset_task = NULL;
-#endif
 
 esp_err_t web_http_check(esp_err_t err, const char *context)
 {

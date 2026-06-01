@@ -83,6 +83,7 @@ if((currentView!=='room'||currentRoomId!==nextRoomId)&&!confirmDiscardEditorChan
 currentRoomId=nextRoomId;
 currentView='room';
 roomTab='control';
+roomProgressTab='flow';
 await loadGMViewData(false);
 await loadGMRuntimeOnly(currentRoomId,false);
 });
@@ -112,6 +113,11 @@ gmRegisterAction('room.tab',async el=>{
 if(!confirmDiscardEditorChanges())return;
 if((el.dataset.scope||'')==='room')roomTab=el.dataset.tab||'overview';
 render();
+});
+
+gmRegisterAction('room.progress.tab',async el=>{
+roomProgressTab=el.dataset.tab||'flow';
+if(!refreshCurrentRoomProgressTab())render();
 });
 
 gmRegisterAction('room.scenario.runtime',async el=>{
@@ -213,7 +219,7 @@ applyScenarioBranchAction(el.dataset.op||'',Number.isFinite(index)?index:0);
 });
 
 gmRegisterAction('scenario.reactive_v2',async el=>{
-applyReactiveV2Action(el.dataset.op||'',el.dataset.variantIndex,el.dataset.actionIndex||el.dataset.guardIndex,el.dataset.actionType||'');
+applyReactiveV2Action(el.dataset.op||'',el.dataset.variantIndex,el.dataset.actionIndex||el.dataset.guardIndex,el.dataset.actionType||el.dataset.triggerEventIndex||el.dataset.eventIndex||el.dataset.flagIndex||'');
 });
 
 gmRegisterAction('scenario.step.help',async el=>{
@@ -223,7 +229,7 @@ alert(scenarioStepHelpText(el.dataset.stepType||''));
 gmRegisterAction('scenario.step',async el=>{
 const v2ActionEl=el.closest('[data-v2-action]');
 if(v2ActionEl){
-applyReactiveV2Action(el.dataset.op||'',v2ActionEl.dataset.variantIndex,v2ActionEl.dataset.v2Action,el.dataset.commandIndex||'');
+applyReactiveV2Action(el.dataset.op||'',v2ActionEl.dataset.variantIndex,v2ActionEl.dataset.v2Action,el.dataset.commandIndex||el.dataset.eventIndex||el.dataset.flagIndex||'');
 return;
 }
 const stepEl=el.closest('[data-scenario-step]');

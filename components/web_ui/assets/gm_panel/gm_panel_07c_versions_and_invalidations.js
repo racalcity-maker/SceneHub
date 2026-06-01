@@ -15,8 +15,10 @@ return;
 }
 let shouldRender=false;
 let shouldPatchSidebar=false;
-	if(gmVersionChanged(prev,versions,['devices','ingest'])){
-		gmStatTag('versions.change','devices_or_ingest');
+	const devicesChanged=gmVersionChanged(prev,versions,['devices']);
+	const ingestChanged=gmVersionChanged(prev,versions,['ingest']);
+	if(devicesChanged){
+		gmStatTag('versions.change','devices');
 		if(currentView==='room'||currentView==='rooms'){
 			gmStatTag('render.full.request','versions.devices_room_snapshot');
 			await loadGMFullSnapshot(true,false,{forceStatic:true,reason:'versions.devices_room_snapshot'});
@@ -29,6 +31,22 @@ shouldPatchSidebar=true;
 shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 if(currentView==='scenarios'&&isAdmin())shouldRender=true;
 }
+	if(ingestChanged){
+		gmStatTag('versions.change','ingest');
+		await loadObserved(true);
+		shouldPatchSidebar=true;
+		if(currentView==='room'&&roomTab==='control'&&currentRoomId){
+			await loadGMRuntimeOnly(currentRoomId,false);
+			if(shouldDeferAutoRender())gmQueueDeferredRender('sidebar','',true);
+			else renderRightSidebar(false);
+			return;
+		}
+		if(currentView==='rooms'){
+			await loadGMRoomsRuntimeOnly([],false);
+			return;
+		}
+		shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
+	}
 if(gmVersionChanged(prev,versions,['scenarios'])){
 gmStatTag('versions.change','scenarios');
 await loadRoomScenarios(true);
@@ -110,12 +128,17 @@ shouldPatchSidebar=true;
 shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 }
 	if(needsDeviceRuntime){
-		if(currentView==='room'||currentView==='rooms'){
-			gmStatTag('render.full.request','invalidate.devices_runtime_room_snapshot');
-			await loadGMFullSnapshot(true,false,{forceStatic:true,reason:'invalidate.devices_runtime_room_snapshot'});
+		await loadObserved(true);
+		if(currentView==='room'&&roomTab==='control'&&currentRoomId){
+			await loadGMRuntimeOnly(currentRoomId,false);
+			if(shouldDeferAutoRender())gmQueueDeferredRender('sidebar','',true);
+			else renderRightSidebar(false);
 			return;
 		}
-		await loadObserved(true);
+		if(currentView==='rooms'){
+			await loadGMRoomsRuntimeOnly([],false);
+			return;
+		}
 		shouldPatchSidebar=true;
 		shouldRender=shouldRender||gmCurrentViewNeedsQuestDeviceFullRender();
 }

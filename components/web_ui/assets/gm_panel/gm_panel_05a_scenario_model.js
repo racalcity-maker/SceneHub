@@ -11,6 +11,8 @@ if(low==='operator_approval')return 'OPERATOR_APPROVAL';
 if(low==='show_operator_message'||low==='operator_message')return 'SHOW_OPERATOR_MESSAGE';
 if(low==='set_flag')return 'SET_FLAG';
 if(low==='wait_flags')return 'WAIT_FLAGS';
+if(low==='fail_reaction')return 'FAIL_REACTION';
+if(low==='reset_reaction')return 'RESET_REACTION';
 if(low==='end_game'||low==='finish_game')return 'END_GAME';
 if(step&&step.device_id&&step.event_id)return 'WAIT_DEVICE_EVENT';
 if(step&&Array.isArray(step.events)&&step.events.length)return 'WAIT_ANY_DEVICE_EVENT';
@@ -24,12 +26,26 @@ if(low==='wait_time')return 'WAIT_TIME';
 return 'WAIT_TIME';
 }
 
+function normalizeScenarioEventIdValue(eventId){
+return String(eventId||'').trim();
+}
+
+function normalizeScenarioDeviceEventIdValue(deviceId,eventId){
+const raw=normalizeScenarioEventIdValue(eventId);
+if(!raw||raw.indexOf('@')<0||typeof scenarioDeviceById!=='function')return raw;
+const device=scenarioDeviceById(deviceId);
+const events=device&&Array.isArray(device.events)?device.events:[];
+if(!events.length||events.some(ev=>String(ev&&ev.id||'')===raw))return raw;
+const base=raw.slice(0,raw.indexOf('@'));
+return events.some(ev=>String(ev&&ev.id||'')===base)?base:raw;
+}
+
 function normalizeScenarioEditorStep(step){
 step=step||{};
 const type=inferScenarioEditorStepType(step);
 const out={
 id:step.id||'',label:step.label||'',enabled:step.enabled!==false,type}
-;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=step.event_id;if(step.params)out.params=step.params;if(step.duration_ms!==undefined&&step.duration_ms!==null)out.duration_ms=Number(step.duration_ms)||0;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:scenarioHydrateCommandParams(cmd.device_id||'',cmd.command_id||'',cmd.params&&typeof cmd.params==='object'?cmd.params:null)}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:ev.event_id||''}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;if(type==='WAIT_TIME'&&(!Number.isFinite(Number(out.duration_ms))||Number(out.duration_ms)<=0))out.duration_ms=1000;if(out.device_id&&out.command_id)out.params=scenarioHydrateCommandParams(out.device_id,out.command_id,out.params&&typeof out.params==='object'?out.params:null);return out;}
+;if(step.allow_operator_skip)out.allow_operator_skip=true;if(step.operator_skip_label)out.operator_skip_label=step.operator_skip_label;if(step.device_id)out.device_id=step.device_id;if(step.scenario_id)out.scenario_id=step.scenario_id;if(step.command_id)out.command_id=step.command_id;if(step.event_id)out.event_id=normalizeScenarioDeviceEventIdValue(out.device_id,step.event_id);if(step.params)out.params=step.params;if(step.duration_ms!==undefined&&step.duration_ms!==null)out.duration_ms=Number(step.duration_ms)||0;if(step.timeout_ms!==undefined&&step.timeout_ms!==null)out.timeout_ms=Number(step.timeout_ms)||0;if(step.timeout_action)out.timeout_action=String(step.timeout_action||'');if(step.timeout_message)out.timeout_message=step.timeout_message;if(step.event_type)out.event_type=step.event_type;if(step.source_id)out.source_id=step.source_id;if(step.operator_prompt)out.prompt=step.operator_prompt;if(step.operator_approve_label)out.approve_label=step.operator_approve_label;if(step.prompt)out.prompt=step.prompt;if(step.approve_label)out.approve_label=step.approve_label;if(Array.isArray(step.commands))out.commands=step.commands.map(cmd=>({device_id:cmd.device_id||'',command_id:cmd.command_id||'',params:scenarioHydrateCommandParams(cmd.device_id||'',cmd.command_id||'',cmd.params&&typeof cmd.params==='object'?cmd.params:null)}));if(Array.isArray(step.events))out.events=step.events.map(ev=>({device_id:ev.device_id||'',event_id:normalizeScenarioDeviceEventIdValue(ev.device_id||'',ev.event_id||'')}));if(Array.isArray(step.flags))out.flags=step.flags.map(flag=>({flag_name:flag.flag_name||flag.name||'',value:flag.value!==false}));if(step.message)out.message=step.message;if(step.operator_message)out.message=step.operator_message;if(step.flag_name)out.flag_name=step.flag_name;if(step.flag_value!==undefined)out.value=!!step.flag_value;if(step.value!==undefined)out.value=!!step.value;if(type==='WAIT_TIME'&&(!Number.isFinite(Number(out.duration_ms))||Number(out.duration_ms)<=0))out.duration_ms=1000;if(scenarioStepIsWaitType(type)&&!out.timeout_action)out.timeout_action='continue';if(out.device_id&&out.command_id)out.params=scenarioHydrateCommandParams(out.device_id,out.command_id,out.params&&typeof out.params==='object'?out.params:null);return out;}
 function scenarioBranchTypeValue(branch){
 const raw=String(branch&&branch.type||'normal').toLowerCase();
 return raw==='reactive'||raw==='reaction'?'reactive':'normal';
@@ -226,6 +242,8 @@ if(low==='operator_approval')return 'OPERATOR_APPROVAL';
 if(low==='show_operator_message'||low==='operator_message')return 'SHOW_OPERATOR_MESSAGE';
 if(low==='set_flag')return 'SET_FLAG';
 if(low==='wait_flags')return 'WAIT_FLAGS';
+if(low==='fail_reaction')return 'FAIL_REACTION';
+if(low==='reset_reaction')return 'RESET_REACTION';
 return 'WAIT_TIME';
 }
 
@@ -241,11 +259,11 @@ return schemas;
 }
 
 function scenarioReactiveTriggerTypes(){
-return ['WAIT_DEVICE_EVENT','WAIT_ANY_DEVICE_EVENT','WAIT_ALL_DEVICE_EVENTS','WAIT_FLAGS'];
+return [];
 }
 
 function scenarioReactiveActionTypes(){
-return ['DEVICE_COMMAND','DEVICE_COMMAND_GROUP','WAIT_TIME','SHOW_OPERATOR_MESSAGE','SET_FLAG'];
+return ['DEVICE_COMMAND','DEVICE_COMMAND_GROUP','WAIT_TIME','WAIT_DEVICE_EVENT','WAIT_ANY_DEVICE_EVENT','WAIT_ALL_DEVICE_EVENTS','WAIT_FLAGS','SHOW_OPERATOR_MESSAGE','SET_FLAG','FAIL_REACTION','RESET_REACTION'];
 }
 
 function scenarioAllowedStepTypesForBranch(branch){
@@ -336,6 +354,20 @@ Example: wait until puzzle_done is true and door_ready is true.
 Setup: add one or more flag names and the expected value for each.
 
 During game: all listed flags must match. Operator Next can still force the step.`;
+if(normalized==='FAIL_REACTION')return `Fail reaction
+
+Use when this reactive branch must immediately stop with an error state.
+
+Setup: no fields are required.
+
+During game: the reaction switches to ERROR and stops waiting for more triggers until reset externally.`;
+if(normalized==='RESET_REACTION')return `Reset reaction
+
+Use when this reactive branch must drop its current progress and return to the initial waiting state.
+
+Setup: no fields are required.
+
+During game: the reaction clears its current level, counters, pending trigger, and cooldown, then waits again from the beginning.`;
 if(normalized==='END_GAME')return `End game
 
 Use when this branch reaches the real quest finish.
@@ -348,6 +380,9 @@ return 'This step type does not have a help text yet.';
 
 function scenarioStepTypeLabel(type){
 const schema=scenarioStepSchema(type);
+const normalized=scenarioStepTypeValue({type});
+if(normalized==='FAIL_REACTION')return 'Fail reaction';
+if(normalized==='RESET_REACTION')return 'Reset reaction';
 return schema&&(schema.label||schema.type)||type;
 }
 
@@ -381,11 +416,41 @@ setTimeout(()=>loadHardwareIoStatus(false),0);
 }
 const catalog=scenarioEditorCatalog(scenarioEditor.room_id);
 const catalogDevices=Array.isArray(catalog.quest_devices)?catalog.quest_devices:[];
-const useCatalogOnly=currentView==='scenarios'&&isAdmin();
-const base=useCatalogOnly?catalogDevices:(catalogDevices.length?catalogDevices:questDevices().map(device=>({
-id:device.id||'',name:device.name||device.id||'',room_id:device.room_id||'',device_description:device.device_description,commands:Array.isArray(device.commands)?device.commands:[],events:Array.isArray(device.events)?device.events:[]}
-)).filter(device=>device.id));
-return base.map(scenarioNormalizeHardwareDevice).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
+const liveDevices=questDevices().map(device=>({
+id:device.id||'',
+name:device.name||device.id||'',
+room_id:device.room_id||'',
+device_description:device.device_description,
+commands:Array.isArray(device.commands)?device.commands:[],
+events:Array.isArray(device.events)?device.events:[]
+})).filter(device=>device.id);
+const merged=new Map();
+[...catalogDevices,...liveDevices].forEach(device=>{
+if(!(device&&device.id))return;
+const normalized=scenarioNormalizeHardwareDevice(device);
+if(!normalized||!normalized.id)return;
+const previous=merged.get(normalized.id);
+if(!previous){
+merged.set(normalized.id,normalized);
+return;
+}
+const previousScore=(Array.isArray(previous.commands)?previous.commands.length:0)+
+  (Array.isArray(previous.events)?previous.events.length:0);
+const nextScore=(Array.isArray(normalized.commands)?normalized.commands.length:0)+
+  (Array.isArray(normalized.events)?normalized.events.length:0);
+if(nextScore>previousScore){
+merged.set(normalized.id,normalized);
+return;
+}
+if(nextScore===previousScore){
+merged.set(normalized.id,{
+...previous,
+...normalized,
+name:(previous.name&&previous.name!==previous.id)?previous.name:(normalized.name||normalized.id)
+});
+}
+});
+return Array.from(merged.values()).filter(device=>device.id&&(Array.isArray(device.commands)&&device.commands.length||Array.isArray(device.events)&&device.events.length||device.id!=='system_io'));
 }
 
 function compactManifest(device){
@@ -393,14 +458,21 @@ const manifest=device&&device.device_description;
 return manifest&&Number(manifest.manifest_version)===2&&manifest.format==='compact_resources'&&manifest.node_kind&&manifest.capability_contract==='scenehub.node.compact.v1'?manifest:null;
 }
 
+function compactResourceKey(item,target){
+const preferred=target==='led_strips'?'strip':'channel';
+const keys=target==='led_strips'?['strip','channel','reader','uid_reader','reader_id','index','id']:['channel','strip','reader','uid_reader','reader_id','index','id'];
+if(item&&item[preferred]!==undefined&&item[preferred]!==null&&String(item[preferred]).trim()!=='')return preferred;
+return keys.find(key=>item&&item[key]!==undefined&&item[key]!==null&&String(item[key]).trim()!=='')||preferred;
+}
+
 function compactResourceId(item,target){
-if(target==='led_strips')return String(item&&item.strip!==undefined?item.strip:'');
-return String(item&&item.channel!==undefined?item.channel:'');
+const key=compactResourceKey(item,target);
+return String(item&&item[key]!==undefined&&item[key]!==null?item[key]:'');
 }
 
 function compactResourceLabel(item,target){
 const id=compactResourceId(item,target);
-const fallback=target==='led_strips'?`LED Strip ${id}`:target==='mosfets'?`MOSFET ${id}`:target==='outputs'?`Output ${id}`:target==='inputs'?`Input ${id}`:`Relay ${id}`;
+const fallback=target==='led_strips'?`LED Strip ${id}`:target==='mosfets'?`MOSFET ${id}`:target==='outputs'?`Output ${id}`:target==='inputs'?`Input ${id}`:target.indexOf('reader')>=0?`Reader ${id}`:`Relay ${id}`;
 return item&&(item.label||fallback)||fallback;
 }
 
@@ -410,15 +482,22 @@ return (Array.isArray(resources[target])?resources[target]:[]).map(item=>({id:co
 }
 
 function compactEventMatchKey(target){
-return target==='led_strips'?'strip':'channel';
+return compactResourceKey(null,target);
 }
 
 function compactEventMatchForResource(item,target){
-const key=compactEventMatchKey(target);
+const key=compactResourceKey(item,target);
 const raw=item&&item[key]!==undefined&&item[key]!==null?item[key]:'';
 if(raw==='')return null;
 const num=Number(raw);
 return {[key]:Number.isFinite(num)?num:raw};
+}
+
+function compactEventTemplateUsesResourceMatch(template){
+const match=template&&template.match&&typeof template.match==='object'?template.match:null;
+if(match&&Object.keys(match).length)return true;
+const ref=String(template&&template.args_schema_ref||'');
+return !!ref&&ref!=='empty';
 }
 
 function compactSchemaForTemplate(manifest,template){
@@ -473,35 +552,27 @@ function compactEventsForDevice(device){
 const manifest=compactManifest(device);
 if(!manifest)return Array.isArray(device&&device.events)?device.events:[];
 const resources=manifest&&manifest.resources&&typeof manifest.resources==='object'?manifest.resources:{};
-return (Array.isArray(manifest.event_templates)?manifest.event_templates:[]).flatMap(template=>{
+const dedup=new Map();
+const addEvent=(id,label,capability,eventName,source)=>{
+if(!id||dedup.has(id))return;
+dedup.set(id,{id,label,capability,event:eventName,source});
+};
+(Array.isArray(manifest.event_templates)?manifest.event_templates:[]).forEach(template=>{
 const eventName=String(template&&template.event||'');
 const baseId=String(template&&template.id||eventName);
 const label=String(template&&template.label||template&&template.id||eventName);
 const capability=String(template&&template.capability||template&&template.source||eventName.split('.')[0]||'node');
 const source=String(template&&template.source||'');
 const resourceItems=(Array.isArray(resources[source])?resources[source]:[]).filter(item=>String(item&&item.event||'').trim()===eventName);
-const expanded=resourceItems.map(item=>{
+if(resourceItems.length&&compactEventTemplateUsesResourceMatch(template)){
+resourceItems.forEach(item=>{
 const resourceId=compactResourceId(item,source);
-const match=compactEventMatchForResource(item,source);
-if(!resourceId||!match)return null;
-return {
-id:`${baseId}@${resourceId}`,
-label:`${compactResourceLabel(item,source)} - ${label}`,
-capability,
-event:eventName,
-source,
-match
-};
-}).filter(Boolean);
-if(expanded.length)return expanded;
-return [{
-id:baseId,
-label,
-capability,
-event:eventName,
-source
-}];
-}).filter(event=>event.id&&event.event);
+if(resourceId)addEvent(`${baseId}@${resourceId}`,`${compactResourceLabel(item,source)} - ${label}`,capability,eventName,source);
+});
+}
+else addEvent(baseId,label,capability,eventName,source);
+});
+return Array.from(dedup.values()).filter(event=>event.id&&event.event);
 }
 
 function scenarioIoModeText(mode){
@@ -666,6 +737,8 @@ if(type==='OPERATOR_APPROVAL')return `Operator approval: ${step&&step.prompt||st
 if(type==='SHOW_OPERATOR_MESSAGE')return `Show operator: ${step&&step.message||'message'}`;
 if(type==='SET_FLAG')return `Set ${(step&&step.flag_name)||'flag'} = ${(step&&step.value)===false?'false':'true'}`;
 if(type==='WAIT_FLAGS')return `Wait flags (${(Array.isArray(step&&step.flags)?step.flags:[]).length||1})`;
+if(type==='FAIL_REACTION')return 'Fail reaction';
+if(type==='RESET_REACTION')return 'Reset reaction';
 if(type==='END_GAME')return 'End game';
 return step&&step.label||type;
 }
@@ -706,10 +779,10 @@ const eventName=event&&(event.label||event.id)||'event';
 return {id:`step_${n}`,label:`${room}: wait ${devName} - ${eventName}`,enabled:true,type:'WAIT_DEVICE_EVENT',device_id:device&&device.id||'',event_id:event&&event.id||''};
 }
 if(kind==='wait_any_device_event'){
-return {id:`step_${n}`,label:'Wait any device event',enabled:true,type:'WAIT_ANY_DEVICE_EVENT',events:[defaultScenarioEventItem()]};
+return {id:`step_${n}`,label:'Wait any device event',enabled:true,type:'WAIT_ANY_DEVICE_EVENT',events:[defaultScenarioEventItem()],timeout_ms:0,timeout_action:'continue'};
 }
 if(kind==='wait_all_device_events'){
-return {id:`step_${n}`,label:'Wait all device events',enabled:true,type:'WAIT_ALL_DEVICE_EVENTS',events:[defaultScenarioEventItem()]};
+return {id:`step_${n}`,label:'Wait all device events',enabled:true,type:'WAIT_ALL_DEVICE_EVENTS',events:[defaultScenarioEventItem()],timeout_ms:0,timeout_action:'continue'};
 }
 if(kind==='operator'){
 return {id:`step_${n}`,label:'Operator approval',enabled:true,type:'OPERATOR_APPROVAL',prompt:'Continue?',approve_label:'Continue'};
@@ -721,12 +794,18 @@ if(kind==='set_flag'){
 return {id:`step_${n}`,label:'Set flag',enabled:true,type:'SET_FLAG',flag_name:'puzzle_done',value:true};
 }
 if(kind==='wait_flags'){
-return {id:`step_${n}`,label:'Wait flags',enabled:true,type:'WAIT_FLAGS',flags:[{flag_name:'puzzle_done',value:true}]};
+return {id:`step_${n}`,label:'Wait flags',enabled:true,type:'WAIT_FLAGS',flags:[{flag_name:'puzzle_done',value:true}],timeout_ms:0,timeout_action:'continue'};
+}
+if(kind==='fail_reaction'){
+return {id:`step_${n}`,label:'Fail reaction',enabled:true,type:'FAIL_REACTION'};
+}
+if(kind==='reset_reaction'){
+return {id:`step_${n}`,label:'Reset reaction',enabled:true,type:'RESET_REACTION'};
 }
 if(kind==='end_game'){
 return {id:`step_${n}`,label:'End game',enabled:true,type:'END_GAME'};
 }
-return {id:`step_${n}`,label:waitTimeLabel(1000),enabled:true,type:'WAIT_TIME',duration_ms:1000};
+return {id:`step_${n}`,label:waitTimeLabel(1000),enabled:true,type:'WAIT_TIME',duration_ms:1000,timeout_action:'continue'};
 }
 
 function newScenarioStepForType(index,type){
@@ -740,6 +819,8 @@ if(normalized==='OPERATOR_APPROVAL')return newScenarioStep(index,'operator');
 if(normalized==='SHOW_OPERATOR_MESSAGE')return newScenarioStep(index,'operator_message');
 if(normalized==='SET_FLAG')return newScenarioStep(index,'set_flag');
 if(normalized==='WAIT_FLAGS')return newScenarioStep(index,'wait_flags');
+if(normalized==='FAIL_REACTION')return newScenarioStep(index,'fail_reaction');
+if(normalized==='RESET_REACTION')return newScenarioStep(index,'reset_reaction');
 if(normalized==='END_GAME')return newScenarioStep(index,'end_game');
 return newScenarioStep(index,'wait_time');
 }

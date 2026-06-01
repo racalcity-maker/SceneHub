@@ -111,6 +111,50 @@ else if(type==='DEVICE_COMMAND_GROUP'){
 else if(type==='WAIT_TIME'){
 	const field=actionEl.querySelector('[data-step-field="duration_ms"]');
 	action.duration_ms=field?durationSecondsToMs(field.value||1):Number(action.duration_ms)||1000;
+	const timeoutField=actionEl.querySelector('[data-step-field="timeout_action"]');
+	action.timeout_action=timeoutField?String(timeoutField.value||'continue'):'continue';
+}
+else if(type==='WAIT_DEVICE_EVENT'){
+	const deviceField=actionEl.querySelector('[data-step-field="device_id"]');
+	const eventField=actionEl.querySelector('[data-step-field="event_id"]');
+	const timeoutMsField=actionEl.querySelector('[data-step-field="timeout_ms"]');
+	const timeoutField=actionEl.querySelector('[data-step-field="timeout_action"]');
+	action.device_id=deviceField?String(deviceField.value||''):'';
+	action.event_id=eventField?normalizeScenarioEventIdValue(String(eventField.value||'')):'';
+	action.timeout_ms=timeoutMsField&&timeoutMsField.value!==''?durationSecondsToMs(timeoutMsField.value):0;
+	action.timeout_action=timeoutField?String(timeoutField.value||'continue'):'continue';
+}
+else if(type==='WAIT_ANY_DEVICE_EVENT'||type==='WAIT_ALL_DEVICE_EVENTS'){
+	const timeoutMsField=actionEl.querySelector('[data-step-field="timeout_ms"]');
+	const timeoutField=actionEl.querySelector('[data-step-field="timeout_action"]');
+	action.events=[];
+	actionEl.querySelectorAll('[data-event-group-item]').forEach(itemEl=>{
+		const deviceField=itemEl.querySelector('[data-event-group-field="device_id"]');
+		const eventField=itemEl.querySelector('[data-event-group-field="event_id"]');
+		action.events.push({
+			device_id:deviceField?String(deviceField.value||''):'',
+			event_id:eventField?normalizeScenarioEventIdValue(String(eventField.value||'')):''
+		});
+	});
+	if(!action.events.length)action.events=[defaultScenarioEventItem()];
+	action.timeout_ms=timeoutMsField&&timeoutMsField.value!==''?durationSecondsToMs(timeoutMsField.value):0;
+	action.timeout_action=timeoutField?String(timeoutField.value||'continue'):'continue';
+}
+else if(type==='WAIT_FLAGS'){
+	const timeoutMsField=actionEl.querySelector('[data-step-field="timeout_ms"]');
+	const timeoutField=actionEl.querySelector('[data-step-field="timeout_action"]');
+	action.flags=[];
+	actionEl.querySelectorAll('[data-flag-list-item]').forEach(itemEl=>{
+		const flagField=itemEl.querySelector('[data-flag-list-field="flag_name"]');
+		const valueField=itemEl.querySelector('[data-flag-list-field="value"]');
+		action.flags.push({
+			flag_name:flagField?String(flagField.value||''):'',
+			value:valueField?String(valueField.value)!=='false':true
+		});
+	});
+	if(!action.flags.length)action.flags=[defaultScenarioFlagItem()];
+	action.timeout_ms=timeoutMsField&&timeoutMsField.value!==''?durationSecondsToMs(timeoutMsField.value):0;
+	action.timeout_action=timeoutField?String(timeoutField.value||'continue'):'continue';
 }
 else if(type==='SHOW_OPERATOR_MESSAGE'){
 	const field=actionEl.querySelector('[data-step-field="message"]');
@@ -135,6 +179,9 @@ if(kind==='device_event'){
 ctx.branch.trigger.device_id='';
 ctx.branch.trigger.event_id='';
 }
+else if(kind==='any_device_events'||kind==='all_device_events'){
+ctx.branch.trigger.events=[defaultScenarioEventItem()];
+}
 }
 else if(key==='device_id'){
 ctx.branch.trigger.device_id=field.value||'';
@@ -142,7 +189,7 @@ const device=scenarioDeviceById(ctx.branch.trigger.device_id);
 ctx.branch.trigger.event_id=scenarioValidEventId(device,'');
 }
 else if(key==='event_id'){
-ctx.branch.trigger.event_id=field.value||'';
+ctx.branch.trigger.event_id=normalizeScenarioEventIdValue(field.value||'');
 if(ctx.branch.trigger.kind==='operator_event')ctx.branch.trigger.operator_event=ctx.branch.trigger.event_id;
 else if(ctx.branch.trigger.kind==='runtime_event')ctx.branch.trigger.runtime_event=ctx.branch.trigger.event_id;
 }
@@ -159,12 +206,33 @@ else return false;
 return true;
 }
 
+function gmHandleReactiveV2TriggerEventField(field,ctx){
+const itemEl=field.closest('[data-v2-trigger-event-item]');
+const itemIndex=Number(itemEl&&itemEl.dataset.v2TriggerEventItem);
+if(!Number.isFinite(itemIndex))return false;
+ctx.branch.trigger=ctx.branch.trigger&&typeof ctx.branch.trigger==='object'?ctx.branch.trigger:defaultReactiveV2Trigger();
+ctx.branch.trigger.events=Array.isArray(ctx.branch.trigger.events)?ctx.branch.trigger.events:[];
+const item=ctx.branch.trigger.events[itemIndex]||defaultScenarioEventItem();
+if(field.matches('select[data-v2-trigger-event-field="device_id"],input[data-v2-trigger-event-field="device_id"]')){
+const device=scenarioDeviceById(field.value||'');
+item.device_id=field.value||'';
+item.event_id=scenarioValidEventId(device,'');
+}
+else if(field.matches('select[data-v2-trigger-event-field="event_id"],input[data-v2-trigger-event-field="event_id"]')){
+item.event_id=normalizeScenarioEventIdValue(field.value||'');
+}
+else return false;
+ctx.branch.trigger.events[itemIndex]=item;
+return true;
+}
+
 function gmHandleReactiveV2PolicyField(field,ctx){
 const key=field.dataset.v2PolicyField||'';
 ctx.branch.policy=ctx.branch.policy&&typeof ctx.branch.policy==='object'?ctx.branch.policy:{};
 if(key==='mode'){
+const previousMode=String(ctx.branch.policy.mode||'single');
 ctx.branch.policy.mode=field.value||'single';
-normalizeReactiveV2RepeatPolicy(ctx.branch);
+normalizeReactiveV2RepeatPolicy(ctx.branch,previousMode);
 }
 else if(key==='max_fire_count'){
 ctx.branch.policy.max_fire_count=Math.max(0,Math.round(Number(field.value)||0));
@@ -252,6 +320,9 @@ if(type==='DEVICE_COMMAND'){
 action.command_id=scenarioValidCommandId(device,'');
 action.params=defaultParamsForCommand(device,scenarioCommandById(action.device_id,action.command_id));
 }
+else if(type==='WAIT_DEVICE_EVENT'){
+action.event_id=scenarioValidEventId(device,'');
+}
 action=normalizeScenarioEditorStep(action);
 ctx.variant.actions[ctx.actionIndex]=action;
 scenarioRefreshAutoLabel(action,previous);
@@ -265,6 +336,9 @@ const type=scenarioStepTypeValue(action);
 if(type==='DEVICE_COMMAND'&&field.matches('select[data-step-field="command_id"]')){
 action.command_id=field.value||'';
 action.params=defaultParamsForCommand(scenarioDeviceById(action.device_id),scenarioCommandById(action.device_id,action.command_id));
+}
+else if(type==='WAIT_DEVICE_EVENT'&&field.matches('select[data-step-field="event_id"],input[data-step-field=\"event_id\"]')){
+action.event_id=normalizeScenarioEventIdValue(field.value||'');
 }
 else return false;
 action=normalizeScenarioEditorStep(action);
@@ -331,11 +405,58 @@ scenarioRefreshAutoLabel(action,previous);
 return true;
 }
 
+function gmHandleReactiveV2ActionEventGroupField(field,ctx){
+const itemEl=field.closest('[data-event-group-item]');
+const itemIndex=Number(itemEl&&itemEl.dataset.eventGroupItem);
+if(!Number.isFinite(itemIndex))return false;
+let action=ctx.action;
+const previous=scenarioClone(action);
+action.events=Array.isArray(action.events)?action.events:[];
+const item=action.events[itemIndex]||defaultScenarioEventItem();
+if(field.matches('select[data-event-group-field="device_id"],input[data-event-group-field="device_id"]')){
+const device=scenarioDeviceById(field.value||'');
+item.device_id=field.value||'';
+item.event_id=scenarioValidEventId(device,'');
+}
+else if(field.matches('select[data-event-group-field="event_id"],input[data-event-group-field="event_id"]')){
+item.event_id=normalizeScenarioEventIdValue(field.value||'');
+}
+else return false;
+action.events[itemIndex]=item;
+action=normalizeScenarioEditorStep(action);
+ctx.variant.actions[ctx.actionIndex]=action;
+scenarioRefreshAutoLabel(action,previous);
+return true;
+}
+
+function gmHandleReactiveV2ActionFlagField(field,ctx){
+const itemEl=field.closest('[data-flag-list-item]');
+const itemIndex=Number(itemEl&&itemEl.dataset.flagListItem);
+if(!Number.isFinite(itemIndex))return false;
+let action=ctx.action;
+const previous=scenarioClone(action);
+action.flags=Array.isArray(action.flags)?action.flags:[];
+const item=action.flags[itemIndex]||defaultScenarioFlagItem();
+if(field.matches('[data-flag-list-field="flag_name"]')){
+item.flag_name=field.value||'';
+}
+else if(field.matches('select[data-flag-list-field="value"]')){
+item.value=String(field.value)!=='false';
+}
+else return false;
+action.flags[itemIndex]=item;
+action=normalizeScenarioEditorStep(action);
+ctx.variant.actions[ctx.actionIndex]=action;
+scenarioRefreshAutoLabel(action,previous);
+return true;
+}
+
 function gmHandleReactiveV2Change(control,deferRender){
 const ctx=reactiveV2DraftContext(control);
 if(!ctx)return false;
 const branchField=control.closest('[data-v2-branch-field]');
 const triggerField=control.closest('[data-v2-trigger-field]');
+const triggerEventField=control.closest('[data-v2-trigger-event-field]');
 const policyField=control.closest('[data-v2-policy-field]');
 const reentryField=control.closest('[data-v2-reentry-field]');
 const resultField=control.closest('[data-v2-result-field]');
@@ -343,6 +464,7 @@ const guardField=control.closest('[data-v2-guard-field]');
 const variantField=control.closest('[data-v2-variant-field]');
 if(branchField&&gmHandleReactiveV2BranchField(branchField,ctx)){}
 else if(triggerField&&gmHandleReactiveV2TriggerField(triggerField,ctx)){}
+else if(triggerEventField&&gmHandleReactiveV2TriggerEventField(triggerEventField,ctx)){}
 else if(policyField&&gmHandleReactiveV2PolicyField(policyField,ctx)){}
 else if(reentryField&&gmHandleReactiveV2ReentryField(reentryField,ctx)){}
 else if(resultField&&gmHandleReactiveV2ResultField(resultField,ctx)){}
@@ -354,13 +476,17 @@ if(!actionCtx)return false;
 const stepType=control.closest('select[data-step-field="type"]');
 const stepDevice=control.closest('select[data-step-field="device_id"]');
 const stepCommand=control.closest('select[data-step-field="command_id"]');
-const stepField=control.closest('[data-v2-action] [data-step-field]');
-const stepParam=control.closest('[data-v2-action] [data-step-param]');
-const groupField=control.closest('[data-v2-action] [data-group-command-field], [data-v2-action] [data-command-group-item] [data-step-param]');
+	const stepField=control.closest('[data-v2-action] [data-step-field]');
+	const stepParam=control.closest('[data-v2-action] [data-step-param]');
+	const groupField=control.closest('[data-v2-action] [data-group-command-field], [data-v2-action] [data-command-group-item] [data-step-param]');
+	const eventGroupField=control.closest('[data-v2-action] [data-event-group-field]');
+	const flagListField=control.closest('[data-v2-action] [data-flag-list-field]');
 	if(stepType&&gmHandleReactiveV2ActionTypeField(stepType,actionCtx)){}
 	else if(stepDevice&&gmHandleReactiveV2ActionDeviceField(stepDevice,actionCtx)){}
 	else if(stepCommand&&gmHandleReactiveV2ActionCommandOrEventField(stepCommand,actionCtx)){}
 	else if(groupField&&gmHandleReactiveV2ActionGroupField(groupField,actionCtx)){}
+	else if(eventGroupField&&gmHandleReactiveV2ActionEventGroupField(eventGroupField,actionCtx)){}
+	else if(flagListField&&gmHandleReactiveV2ActionFlagField(flagListField,actionCtx)){}
 	else if(stepParam&&gmHandleReactiveV2ActionParamField(stepParam,actionCtx)){}
 	else if(stepField&&gmHandleReactiveV2ActionStepField(stepField,actionCtx)){}
 	else return false;
@@ -418,7 +544,7 @@ step.command_id=field.value||'';
 step.params=defaultParamsForCommand(scenarioDeviceById(step.device_id),scenarioCommandById(step.device_id,step.command_id));
 }
 else if(type==='WAIT_DEVICE_EVENT'&&field.matches('select[data-step-field="event_id"]')){
-step.event_id=field.value||'';
+step.event_id=normalizeScenarioEventIdValue(field.value||'');
 }
 scenarioRefreshAutoLabel(step,previous);
 }
@@ -493,7 +619,7 @@ item.device_id=eventGroupDevice.value||'';
 item.event_id=scenarioValidEventId(device,'');
 }
 else{
-item.event_id=eventGroupEvent.value||'';
+item.event_id=normalizeScenarioEventIdValue(eventGroupEvent.value||'');
 }
 step.events[itemIndex]=item;
 }
@@ -652,7 +778,7 @@ const stepField=e.target.closest('[data-scenario-step] [data-step-field]');
 const stepParam=e.target.closest('[data-scenario-step] [data-step-param]');
 const flagField=e.target.closest('[data-flag-list-field]');
 const groupParam=e.target.closest('[data-command-group-item] [data-step-param]');
-const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field],[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field]');
+const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field],[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field],[data-v2-action] [data-event-group-field],[data-v2-action] [data-flag-list-field]');
 if(reactiveV2Field&&String(reactiveV2Field.tagName||'').toLowerCase()==='select')return false;
 if(reactiveV2Field)return gmHandleReactiveV2Change(reactiveV2Field,true);
 if(groupParam)return gmHandleScenarioGroupParamInput(groupParam,true);
@@ -681,8 +807,8 @@ const flagField=e.target.closest('[data-flag-list-field]');
 const branchField=e.target.closest('[data-scenario-branch-field]');
 const meta=e.target.closest('#scenario_id,#scenario_name');
 const branchType=e.target.closest('select[data-scenario-branch-field="type"]');
-const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
-const reactiveV2ActionField=e.target.closest('[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field]');
+const reactiveV2Field=e.target.closest('[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field]');
+const reactiveV2ActionField=e.target.closest('[data-v2-action] [data-step-field],[data-v2-action] [data-step-param],[data-v2-action] [data-group-command-field],[data-v2-action] [data-event-group-field],[data-v2-action] [data-flag-list-field]');
 if(branchType)return gmHandleScenarioBranchTypeChange(branchType);
 if(reactiveV2Field||reactiveV2ActionField)return gmHandleReactiveV2Change(reactiveV2Field||reactiveV2ActionField);
 if(stepDevice)return gmHandleScenarioStepDeviceChange(stepDevice);

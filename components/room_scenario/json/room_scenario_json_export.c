@@ -29,6 +29,10 @@ static const char *reactive_trigger_kind_to_str(room_scenario_reactive_trigger_k
     switch (kind) {
     case ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT:
         return "device_event";
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS:
+        return "any_device_events";
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS:
+        return "all_device_events";
     case ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED:
         return "flag_changed";
     case ROOM_SCENARIO_REACTIVE_TRIGGER_OPERATOR_EVENT:
@@ -160,6 +164,12 @@ static esp_err_t room_scenario_export_step_json(const room_scenario_step_t *step
         if (step->data.wait_device_event.timeout_ms > 0) {
             cJSON_AddNumberToObject(obj, "timeout_ms", step->data.wait_device_event.timeout_ms);
         }
+        if (step->data.wait_device_event.timeout_action != ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE) {
+            cJSON_AddStringToObject(obj,
+                                    "timeout_action",
+                                    room_scenario_wait_timeout_action_to_str(
+                                        step->data.wait_device_event.timeout_action));
+        }
         if (step->data.wait_device_event.timeout_message[0]) {
             cJSON_AddStringToObject(obj,
                                     "timeout_message",
@@ -200,6 +210,12 @@ static esp_err_t room_scenario_export_step_json(const room_scenario_step_t *step
         if (step->data.wait_flags.timeout_ms > 0) {
             cJSON_AddNumberToObject(obj, "timeout_ms", step->data.wait_flags.timeout_ms);
         }
+        if (step->data.wait_flags.timeout_action != ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE) {
+            cJSON_AddStringToObject(obj,
+                                    "timeout_action",
+                                    room_scenario_wait_timeout_action_to_str(
+                                        step->data.wait_flags.timeout_action));
+        }
         if (step->data.wait_flags.timeout_message[0]) {
             cJSON_AddStringToObject(obj,
                                     "timeout_message",
@@ -231,6 +247,15 @@ static esp_err_t room_scenario_export_step_json(const room_scenario_step_t *step
                 return ESP_ERR_NO_MEM;
             }
         }
+        if (step->data.wait_any_device_event.timeout_ms > 0) {
+            cJSON_AddNumberToObject(obj, "timeout_ms", step->data.wait_any_device_event.timeout_ms);
+        }
+        if (step->data.wait_any_device_event.timeout_action != ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE) {
+            cJSON_AddStringToObject(obj,
+                                    "timeout_action",
+                                    room_scenario_wait_timeout_action_to_str(
+                                        step->data.wait_any_device_event.timeout_action));
+        }
         break;
     }
     case ROOM_SCENARIO_STEP_WAIT_ALL_DEVICE_EVENTS: {
@@ -256,6 +281,15 @@ static esp_err_t room_scenario_export_step_json(const room_scenario_step_t *step
                 cJSON_Delete(obj);
                 return ESP_ERR_NO_MEM;
             }
+        }
+        if (step->data.wait_all_device_events.timeout_ms > 0) {
+            cJSON_AddNumberToObject(obj, "timeout_ms", step->data.wait_all_device_events.timeout_ms);
+        }
+        if (step->data.wait_all_device_events.timeout_action != ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE) {
+            cJSON_AddStringToObject(obj,
+                                    "timeout_action",
+                                    room_scenario_wait_timeout_action_to_str(
+                                        step->data.wait_all_device_events.timeout_action));
         }
         break;
     }
@@ -326,6 +360,12 @@ static esp_err_t room_scenario_export_reactive_action_json(
     }
     case ROOM_SCENARIO_STEP_WAIT_TIME:
         cJSON_AddNumberToObject(obj, "duration_ms", action->data.wait_time.duration_ms);
+        if (action->data.wait_time.timeout_action != ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE) {
+            cJSON_AddStringToObject(obj,
+                                    "timeout_action",
+                                    room_scenario_wait_timeout_action_to_str(
+                                        action->data.wait_time.timeout_action));
+        }
         break;
     case ROOM_SCENARIO_STEP_SET_FLAG:
         cJSON_AddStringToObject(obj, "flag", action->data.set_flag.name);
@@ -333,6 +373,9 @@ static esp_err_t room_scenario_export_reactive_action_json(
         break;
     case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
         cJSON_AddStringToObject(obj, "message", action->data.operator_message.message);
+        break;
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
         break;
     default:
         cJSON_Delete(obj);
@@ -369,6 +412,24 @@ static esp_err_t room_scenario_export_reactive_branch_v2_json(
     }
     if (branch->trigger.event_id[0]) {
         cJSON_AddStringToObject(trigger, "event_id", branch->trigger.event_id);
+    }
+    if (branch->trigger.event_count > 0) {
+        cJSON *events = cJSON_AddArrayToObject(trigger, "events");
+        if (!events) {
+            return ESP_ERR_NO_MEM;
+        }
+        for (uint8_t i = 0; i < branch->trigger.event_count; ++i) {
+            cJSON *event = cJSON_CreateObject();
+            if (!event) {
+                return ESP_ERR_NO_MEM;
+            }
+            cJSON_AddStringToObject(event, "device_id", branch->trigger.events[i].device_id);
+            cJSON_AddStringToObject(event, "event_id", branch->trigger.events[i].event_id);
+            if (!cJSON_AddItemToArray(events, event)) {
+                cJSON_Delete(event);
+                return ESP_ERR_NO_MEM;
+            }
+        }
     }
     if (branch->trigger.flag_name[0]) {
         cJSON_AddStringToObject(trigger, "flag_name", branch->trigger.flag_name);

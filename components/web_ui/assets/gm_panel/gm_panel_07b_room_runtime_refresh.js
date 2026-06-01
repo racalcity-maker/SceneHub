@@ -479,18 +479,40 @@ const scenario=roomSelectedScenarioObject(room);
 const wrap=container.querySelector('[data-room-scenario-progress-wrap]');
 const overview=wrap&&wrap.querySelector('[data-room-scenario-progress-overview]');
 const waits=wrap&&wrap.querySelector('[data-room-scenario-progress-waits]');
+const tabsHost=wrap&&wrap.querySelector('[data-room-scenario-progress-tabs-host]');
 const flow=wrap&&wrap.querySelector('[data-room-scenario-progress-flow]');
 const reactions=wrap&&wrap.querySelector('[data-room-scenario-progress-reactions]');
-if(!wrap||!overview||!waits||!flow||!reactions){
+if(!wrap||!overview||!waits||!tabsHost||!flow||!reactions){
 patchRoomRuntimeContainer(container,renderScenarioProgress(room,scenario));
 return;
 }
+const activeTab=scenarioProgressActiveTab(renderState.progressData);
+if(String(wrap.dataset.roomScenarioProgressTab||'')!==String(activeTab||'flow')){
+wrap.dataset.roomScenarioProgressTab=activeTab||'flow';
+}
+gmPatchRuntimeSection(tabsHost,renderScenarioProgressTabsHtml(renderState.progressData));
 if(renderState.progressFlowChanged){
 patchRoomScenarioProgressSection(flow,renderState.progressFlowHtml,scenarioProgressSectionItems(renderState.progressData,'flow'),'flow');
 }
 if(renderState.progressReactionsChanged){
 patchRoomScenarioProgressSection(reactions,renderState.progressReactionsHtml,scenarioProgressSectionItems(renderState.progressData,'reactions'),'reactions');
 }
+}
+
+function refreshCurrentRoomProgressTab(){
+if(currentView!=='room'||roomTab!=='control'||!currentRoomId)return false;
+const room=roomById(currentRoomId);
+if(!room)return false;
+const container=document.querySelector(`[data-room-scenario-progress="${currentRoomId}"]`);
+if(!container)return false;
+const wrap=container.querySelector('[data-room-scenario-progress-wrap]');
+const tabsHost=wrap&&wrap.querySelector('[data-room-scenario-progress-tabs-host]');
+if(!wrap||!tabsHost)return false;
+const progressData=scenarioProgressData(room,roomSelectedScenarioObject(room));
+const activeTab=scenarioProgressActiveTab(progressData);
+wrap.dataset.roomScenarioProgressTab=activeTab||'flow';
+gmPatchRuntimeSection(tabsHost,renderScenarioProgressTabsHtml(progressData));
+return true;
 }
 
 function patchRoomScenarioProgressSection(container,html,items,mode){
@@ -516,7 +538,7 @@ expectedItems.forEach((item,index)=>{
 if(fallbackToSectionPatch)return;
 const branchId=scenarioProgressBranchDomId(item.room,item);
 const branchKey=scenarioProgressBranchRenderKey(item);
-const branchHtml=renderScenarioProgressBranch(item.room,item);
+const branchHtml=renderScenarioProgressBranch(item.room,item,mode);
 expectedIds.add(branchId);
 let node=existingCards.get(branchId)||null;
 if(!node){

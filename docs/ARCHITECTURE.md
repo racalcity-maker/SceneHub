@@ -49,6 +49,8 @@ Product-aware scenario environment checks are owned by
 | Component | Responsibility |
 | --- | --- |
 | `network` | Wi-Fi and orchestrator network lifecycle |
+| `scenehub_config` | Compile-time Kconfig defaults shared by reduced builds and firmware components |
+| `config_store` | Mutable runtime/NVS configuration such as network, auth and broker settings |
 | `mqtt_core` | Local MQTT broker: client sessions, publish/subscribe and MQTT packet limits |
 | `event_bus` | In-process events for runtime services |
 | `quest_common` | Shared current-model string limits and utility helpers |
@@ -58,7 +60,7 @@ Product-aware scenario environment checks are owned by
 | `room_scenario` | Scenario model, static/runtime-semantic validation, JSON import/export |
 | `scenehub_scenario_validation` | SceneHub-specific scenario environment validation against Quest Device and local hardware capabilities |
 | `command_executor` | Command dispatch boundary for MQTT devices, system audio and local hardware IO |
-| `gm_game_profile` | Game Mode model, validation, JSON import/export |
+| `gm_profile_store` | Game Mode profile store, validation, JSON import/export. Public model name: `gm_game_profile_t` |
 | `gm_core` | Room session runtime, timer, game start/stop/reset, scenario execution |
 | `scenehub_control` | Write-side application facade for GM/scenario/profile/device actions |
 | `scenehub_read_model` | Read-side room/runtime/profile/scenario projections for APIs and UI |
@@ -68,6 +70,24 @@ Product-aware scenario environment checks are owned by
 | `web_ui` | HTTP API, auth, GM panel assets and UI endpoints |
 | `error_monitor` | Fault collection for dashboard/room health |
 | `status_led` | Device status indication |
+
+## Network Recovery Policy
+
+Normal provisioned hub boot is STA-only when saved Wi-Fi config exists. Setup AP
+is not an automatic transient Wi-Fi failure fallback.
+
+Setup AP may start only through explicit recovery paths:
+
+- the configured reset/setup pin is held during boot;
+- Wi-Fi config is empty, so factory-default recovery needs setup mode.
+
+Runtime reset/setup pin long-hold restores defaults and reboots. The reset/setup
+GPIO is owned by `system_reset_policy`, not by Web UI auth code.
+
+When setup AP is requested, it starts as pure AP. STA connect is enabled only by
+the normal saved-config path or after applying Wi-Fi settings from setup mode.
+ESP-IDF Wi-Fi driver storage is RAM-only so stale driver-owned credentials
+cannot bypass `config_store` policy.
 
 ## Layering Contract
 
@@ -83,7 +103,7 @@ Target dependency direction:
 
 ```text
 web_ui
-  -> scenehub_control / gm_control / scenehub_read_model
+  -> scenehub_control / scenehub_read_model
   -> gm_core / room_scenario / quest_device / device_control_ingest
   -> event_bus / mqtt_core / hardware_io / audio_player / storage
 ```
@@ -101,7 +121,9 @@ Allowed dependency shapes:
 - `web_ui -> scenehub_read_model` for read-side projections.
 - `scenehub_control -> gm_core / room_scenario / quest_device` for domain
   writes.
-- `gm_core -> command_executor` for external command dispatch.
+- `gm_core -> registered command-plan dispatch hook` for external command
+  dispatch after session-lock release.
+- `scenehub_control -> command_executor` for product command execution.
 - `command_executor -> mqtt_core / hardware_io / audio_player` for side
   effects.
 - `device_control_ingest -> event_bus` for normalized telemetry/result events.
@@ -114,6 +136,10 @@ Dependencies that require extra scrutiny:
 - `web_ui` using low-level domain DTOs directly instead of view/control DTOs.
 - `scenehub_read_model` depending on session internals, assets, or storage-heavy
   helpers beyond projection needs.
+- `scenehub_control` becoming a new god-module after absorbing orchestration
+  moved out of `gm_core`.
+- `gm_room_session.h` exposing too much runtime shape to control/read/UI
+  layers through one broad public header.
 - `gm_core` depending on Quest Device metadata beyond planned command/runtime
   semantics.
 - `event_bus` bridges that can reflect inbound transport messages back to the
@@ -146,11 +172,14 @@ Game start:
 
 1. Operator selects a Game Mode.
 2. `gm_room_session_game_start(room_id)` validates the selected mode.
-3. The selected Room Scenario is copied into the session runtime snapshot.
-4. The game timer starts.
-5. Enabled normal scenario branches start running.
-6. Enabled reactive branches start listening for their trigger events.
-7. Runtime state is exposed through GM APIs and rendered in Room Control.
+3. `scenehub_control` resolves the complete Room Scenario event-ref catalog
+   from Quest Device metadata.
+4. The selected Room Scenario and prepared event-ref catalog are copied into
+   the session runtime snapshot.
+5. The game timer starts.
+6. Enabled normal scenario branches start running.
+7. Enabled reactive branches start listening for their trigger events.
+8. Runtime state is exposed through GM APIs and rendered in Room Control.
 
 Scenario execution:
 
@@ -352,6 +381,77 @@ Command side effects are separated from scenario state progression by
 resolves the backend, creates request ids, tracks pending result-required
 commands and emits normalized command-result events.
 
+## GM Core Boundary
+
+The GM decomposition baseline is complete. `gm_core` is now the runtime-domain
+owner for room-session state, timers, scenario progression, waits, flags,
+operator approval, hints, reactive state and command plans.
+
+`gm_core` must not own product/application orchestration:
+
+- profile, scenario and sidebar persistence live outside `gm_core`;
+- game start/stop/reset orchestration enters through `scenehub_control`;
+- external command execution enters through a registered command-plan dispatch
+  hook and runs after the session lock is released;
+- Quest Device metadata is resolved before runtime start, not during wait or
+  reactive matching;
+- the old `gm_api` / `gm_control` write facades and unsupported compatibility
+  wrappers are retired.
+
+Prepared runtime inputs are the supported boundary. `scenehub_control` loads and
+validates product data, builds the prepared event-ref catalog, converts storage
+profile data into the runtime profile DTO, then calls the prepared GM session
+entrypoints. Runtime matching uses only the copied session snapshot. Accidental
+compact/event id variants such as `@1` remain invalid data; runtime does not
+add tolerant matching for them.
+
+The current public `gm_room_session.h` is still a broad umbrella over session
+control entrypoints, view DTOs, command-plan port types, prepared-start DTOs and
+some runtime-shaped structs. That is acceptable for the completed cleanup
+baseline, but future boundary work should split it before adding more public
+surface:
+
+- `gm_room_session.h` for public control/session entrypoints;
+- `gm_room_session_views.h` for projection/read DTOs;
+- `gm_room_session_command_plan.h` for the command-plan dispatch port;
+- `gm_room_session_types.h` for shared enums and narrow common types.
+
+External layers should prefer view/control/port headers over learning the full
+runtime shape.
+
+## SceneHub Control Boundary
+
+`scenehub_control` is the write-side application facade. It is allowed to
+orchestrate profile/scenario loading, validation, prepared runtime inputs,
+command dispatch and persistence calls, but it must not become a second runtime
+engine or a new owner for every domain DTO.
+
+The current broad public `scenehub_control.h` umbrella is acceptable while the
+API is still stabilizing. Future growth should split public entrypoints by
+family before adding more unrelated surface:
+
+- GM/session/timer/hint actions;
+- scenarios;
+- devices;
+- profiles;
+- sidebar presets;
+- hardware IO.
+
+Internal source files should continue to stay family-oriented. New behavior
+should prefer a narrow family helper over adding more unrelated logic to the
+main facade file.
+
+## Configuration Boundary
+
+`scenehub_config` owns compile-time firmware/Kconfig defaults only: GPIO pins,
+audio/SD defaults, MQTT limits, auth bootstrap defaults and other build-time
+constants. It is a header-only dependency used to keep reduced builds and full
+firmware builds on the same default contract.
+
+`config_store` owns mutable runtime settings persisted in NVS. Do not move
+runtime state, prepared scenario snapshots, catalogs or operator-edited data
+into `scenehub_config`.
+
 ## Device Health
 
 Physical clients report control-contract telemetry:
@@ -375,4 +475,6 @@ an unseen client is degraded/warning until it sends the first valid telemetry.
   domain logic.
 - UI should show names first and hide ids behind advanced/debug sections.
 - Scenario step editors should be schema-driven where practical.
-- HTTP APIs should remain documented in `gm_api_contract.md`.
+- HTTP API behavior should follow `API_HTTP_POLICY.md`; route-level reference
+  docs must be regenerated from current Web UI handlers instead of maintained
+  as stale hand-written snapshots.

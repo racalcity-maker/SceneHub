@@ -8,16 +8,17 @@
 #include "device_control_ingest.h"
 #include "event_bus.h"
 #include "esp_attr.h"
-#include "gm_api.h"
 #include "gm_game_profile.h"
+#include "gm_room_session.h"
 #include "orchestrator_registry.h"
 #include "quest_device.h"
 #include "room_catalog.h"
 #include "room_scenario.h"
+#include "scenehub_control.h"
 #include "service_status.h"
 
 EXT_RAM_BSS_ATTR static room_scenario_t s_flow_scenario;
-EXT_RAM_BSS_ATTR static gm_room_state_view_t s_flow_state;
+EXT_RAM_BSS_ATTR static gm_room_session_projection_view_t s_flow_state;
 EXT_RAM_BSS_ATTR static gm_room_session_t s_flow_session;
 EXT_RAM_BSS_ATTR static orch_registry_snapshot_t s_flow_snapshot;
 
@@ -42,7 +43,7 @@ static void flow_bootstrap(void)
     TEST_ASSERT_EQUAL(ESP_OK, room_scenario_clear());
     TEST_ASSERT_EQUAL(ESP_OK, gm_game_profile_init());
     TEST_ASSERT_EQUAL(ESP_OK, gm_game_profile_clear());
-    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_init());
+    TEST_ASSERT_EQUAL(ESP_OK, scenehub_control_init());
     gm_room_session_reset_all();
     TEST_ASSERT_EQUAL(ESP_OK, orchestrator_registry_init());
     orchestrator_registry_invalidate();
@@ -263,6 +264,27 @@ static int flow_find_flag(const gm_room_session_t *session, const char *name)
     return -1;
 }
 
+static void flow_select_profile_and_start_game(const char *profile_id)
+{
+    scenehub_control_result_t result = {0};
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      scenehub_control_select_profile("test",
+                                                      "room_flow",
+                                                      profile_id,
+                                                      &result));
+    TEST_ASSERT_EQUAL(SCENEHUB_CONTROL_STATUS_DONE, result.status);
+    TEST_ASSERT_EQUAL(ESP_OK, result.err);
+    memset(&result, 0, sizeof(result));
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      scenehub_control_execute_room_action("test",
+                                                           "room_flow",
+                                                           "start_game",
+                                                           &result));
+    TEST_ASSERT_EQUAL(SCENEHUB_CONTROL_STATUS_DONE, result.status);
+    TEST_ASSERT_EQUAL(ESP_OK, result.err);
+}
+
 static void test_integration_quest_flow_runs_profile_scenario_from_device_event(void)
 {
     int flag_index = -1;
@@ -270,30 +292,29 @@ static void test_integration_quest_flow_runs_profile_scenario_from_device_event(
     flow_bootstrap();
     flow_add_pack();
 
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_select_profile("room_flow", "profile_flow"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_game_start("room_flow"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_get_room_state("room_flow", &s_flow_state));
-    TEST_ASSERT_TRUE(s_flow_state.session_present);
-    TEST_ASSERT_EQUAL(GM_SESSION_RUNNING, s_flow_state.session_state);
-    TEST_ASSERT_EQUAL(GM_TIMER_RUNNING, s_flow_state.timer_state);
-    TEST_ASSERT_EQUAL_STRING("profile_flow", s_flow_state.selected_profile_id);
-    TEST_ASSERT_EQUAL_STRING("scenario_flow", s_flow_state.running_scenario_id);
-    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_flow_state.scenario_runtime_state);
-    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT, s_flow_state.scenario_wait_type);
-    TEST_ASSERT_EQUAL_STRING("door_opened", s_flow_state.scenario_wait_event_type);
+    flow_select_profile_and_start_game("profile_flow");
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get_projection_view("room_flow", 0, &s_flow_state));
+    TEST_ASSERT_TRUE(s_flow_state.present);
+    TEST_ASSERT_EQUAL(GM_SESSION_RUNNING, s_flow_state.timer.session_state);
+    TEST_ASSERT_EQUAL(GM_TIMER_RUNNING, s_flow_state.timer.timer_state);
+    TEST_ASSERT_EQUAL_STRING("profile_flow", s_flow_state.selected.selected_profile_id);
+    TEST_ASSERT_EQUAL_STRING("scenario_flow", s_flow_state.selected.running_scenario_id);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_flow_state.runtime.scenario_state);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT, s_flow_state.runtime.wait_type);
+    TEST_ASSERT_EQUAL_STRING("door_opened", s_flow_state.runtime.wait_event_type);
 
     TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, flow_post_text_event_expect_err("drawer_opened"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_get_room_state("room_flow", &s_flow_state));
-    TEST_ASSERT_EQUAL(GM_SESSION_RUNNING, s_flow_state.session_state);
-    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_flow_state.scenario_runtime_state);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get_projection_view("room_flow", 0, &s_flow_state));
+    TEST_ASSERT_EQUAL(GM_SESSION_RUNNING, s_flow_state.timer.session_state);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_flow_state.runtime.scenario_state);
 
     flow_post_text_event("door_opened");
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_get_room_state("room_flow", &s_flow_state));
-    TEST_ASSERT_EQUAL(GM_SESSION_FINISHED, s_flow_state.session_state);
-    TEST_ASSERT_EQUAL(GM_TIMER_FINISHED, s_flow_state.timer_state);
-    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_DONE, s_flow_state.scenario_runtime_state);
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get_projection_view("room_flow", 0, &s_flow_state));
+    TEST_ASSERT_EQUAL(GM_SESSION_FINISHED, s_flow_state.timer.session_state);
+    TEST_ASSERT_EQUAL(GM_TIMER_FINISHED, s_flow_state.timer.timer_state);
+    TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_DONE, s_flow_state.runtime.scenario_state);
 
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_room_session_get("room_flow", &s_flow_session));
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get("room_flow", &s_flow_session));
     flag_index = flow_find_flag(&s_flow_session, "door_opened_seen");
     TEST_ASSERT_TRUE(flag_index >= 0);
     TEST_ASSERT_TRUE(s_flow_session.scenario_flags[flag_index].value);
@@ -343,11 +364,10 @@ static void test_integration_persistence_round_trip_builds_orchestrator_snapshot
     TEST_ASSERT_EQUAL_UINT(1, s_flow_snapshot.room_scenario_count);
     TEST_ASSERT_EQUAL_STRING("scenario_flow", s_flow_snapshot.room_scenarios[0].id);
 
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_select_profile("room_flow", "profile_flow"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_game_start("room_flow"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_get_room_state("room_flow", &s_flow_state));
-    TEST_ASSERT_EQUAL_STRING("profile_flow", s_flow_state.selected_profile_id);
-    TEST_ASSERT_EQUAL_STRING("scenario_flow", s_flow_state.running_scenario_id);
+    flow_select_profile_and_start_game("profile_flow");
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get_projection_view("room_flow", 0, &s_flow_state));
+    TEST_ASSERT_EQUAL_STRING("profile_flow", s_flow_state.selected.selected_profile_id);
+    TEST_ASSERT_EQUAL_STRING("scenario_flow", s_flow_state.selected.running_scenario_id);
 }
 
 static void test_integration_reactive_branch_fires_from_device_event_without_finishing_main(void)
@@ -360,9 +380,8 @@ static void test_integration_reactive_branch_fires_from_device_event_without_fin
     flow_add_reactive_scenario();
     flow_add_profile_for_scenario("profile_reactive", "scenario_reactive_flow");
 
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_select_profile("room_flow", "profile_reactive"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_game_start("room_flow"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_room_session_get("room_flow", &s_flow_session));
+    flow_select_profile_and_start_game("profile_reactive");
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get("room_flow", &s_flow_session));
     TEST_ASSERT_EQUAL_UINT(2, s_flow_session.branch_runtime_count);
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_flow_session.branch_runtimes[0].scenario_state);
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_flow_session.branch_runtimes[1].scenario_state);
@@ -370,11 +389,11 @@ static void test_integration_reactive_branch_fires_from_device_event_without_fin
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAIT_DEVICE_EVENT, s_flow_session.branch_runtimes[1].wait_type);
 
     TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, flow_post_text_event_expect_err("drawer_opened"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_room_session_get("room_flow", &s_flow_session));
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get("room_flow", &s_flow_session));
     TEST_ASSERT_EQUAL(-1, flow_find_flag(&s_flow_session, "reactive_door_seen"));
 
     flow_post_text_event("door_opened");
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_room_session_get("room_flow", &s_flow_session));
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get("room_flow", &s_flow_session));
     TEST_ASSERT_EQUAL(GM_SESSION_RUNNING, s_flow_session.state);
     TEST_ASSERT_EQUAL(GM_TIMER_RUNNING, s_flow_session.timer.state);
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_WAITING, s_flow_session.branch_runtimes[0].scenario_state);
@@ -385,7 +404,7 @@ static void test_integration_reactive_branch_fires_from_device_event_without_fin
     TEST_ASSERT_TRUE(s_flow_session.scenario_flags[flag_index].value);
 
     TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, flow_post_text_event_expect_err("door_opened"));
-    TEST_ASSERT_EQUAL(ESP_OK, gm_api_room_session_get("room_flow", &s_flow_session));
+    TEST_ASSERT_EQUAL(ESP_OK, gm_room_session_get("room_flow", &s_flow_session));
     TEST_ASSERT_EQUAL(GM_ROOM_SCENARIO_DONE, s_flow_session.branch_runtimes[1].scenario_state);
 }
 

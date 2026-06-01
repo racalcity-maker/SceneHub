@@ -123,9 +123,22 @@ const summary=gmState&&gmState.summary?gmState.summary:{};
 setStatus(summary.has_fault?'fault':(summary.has_degraded?'degraded':'ok'),summary.has_fault?'state-fault':(summary.has_degraded?'state-degraded':'state-ok'));
 }
 
+function captureScenarioModalRenderState(){
+const card=document.querySelector('[data-scenario-editor-modal] .scenario-modal-card');
+if(!card)return null;
+return {scrollTop:card.scrollTop||0};
+}
+
+function restoreScenarioModalRenderState(state){
+if(!state)return;
+const card=document.querySelector('[data-scenario-editor-modal] .scenario-modal-card');
+if(card)card.scrollTop=state.scrollTop||0;
+}
+
 function renderMainContent(){
 const root=document.getElementById('gm_content');
 if(!root)return 'none';
+const scenarioModalState=captureScenarioModalRenderState();
 if(gmSkipScenarioDomSync)gmSkipScenarioDomSync=false;
 applyGMRoleLayout();
 syncGMSummaryStatus();
@@ -151,6 +164,7 @@ else if(currentView==='storage')html=renderStorageAdminView();
 else html=renderRoomsView();
 root.innerHTML=html;
 injectRoomScenarios();
+restoreScenarioModalRenderState(scenarioModalState);
 const navView=currentView==='room'?'rooms':currentView;
 
 document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.view===navView));

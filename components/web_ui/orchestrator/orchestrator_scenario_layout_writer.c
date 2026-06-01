@@ -15,6 +15,10 @@ static const char *orch_layout_reactive_trigger_kind_to_str(room_scenario_reacti
     switch (kind) {
     case ROOM_SCENARIO_REACTIVE_TRIGGER_DEVICE_EVENT:
         return "device_event";
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ANY_DEVICE_EVENTS:
+        return "any_device_events";
+    case ROOM_SCENARIO_REACTIVE_TRIGGER_ALL_DEVICE_EVENTS:
+        return "all_device_events";
     case ROOM_SCENARIO_REACTIVE_TRIGGER_FLAG_CHANGED:
         return "flag_changed";
     case ROOM_SCENARIO_REACTIVE_TRIGGER_OPERATOR_EVENT:
@@ -163,6 +167,30 @@ static esp_err_t orch_write_layout_reactive_trigger(gm_runtime_json_writer_t *wr
     if (trigger->event_id[0] &&
         (err = gm_runtime_json_write_string_field(writer, &first, "event_id", trigger->event_id)) != ESP_OK) {
         return err;
+    }
+    if (trigger->event_count > 0) {
+        err = gm_runtime_json_begin_field(writer, &first, "events");
+        if (err != ESP_OK || (err = gm_runtime_json_write_raw(writer, "[")) != ESP_OK) {
+            return err;
+        }
+        for (uint8_t i = 0; i < trigger->event_count; ++i) {
+            bool event_first = true;
+            if (i > 0 && (err = gm_runtime_json_write_raw(writer, ",")) != ESP_OK) {
+                return err;
+            }
+            err = gm_runtime_json_write_raw(writer, "{");
+            if (err != ESP_OK ||
+                (err = gm_runtime_json_write_string_field(
+                     writer, &event_first, "device_id", trigger->events[i].device_id)) != ESP_OK ||
+                (err = gm_runtime_json_write_string_field(
+                     writer, &event_first, "event_id", trigger->events[i].event_id)) != ESP_OK ||
+                (err = gm_runtime_json_write_raw(writer, "}")) != ESP_OK) {
+                return err;
+            }
+        }
+        if ((err = gm_runtime_json_write_raw(writer, "]")) != ESP_OK) {
+            return err;
+        }
     }
     if (trigger->flag_name[0] &&
         (err = gm_runtime_json_write_string_field(writer, &first, "flag_name", trigger->flag_name)) != ESP_OK) {
@@ -451,6 +479,14 @@ static esp_err_t orch_write_scenario_layout_action(gm_runtime_json_writer_t *wri
     }
     case ROOM_SCENARIO_STEP_WAIT_TIME:
         err = gm_runtime_json_write_uint64_field(writer, &first, "duration_ms", action->data.wait_time.duration_ms);
+        if (err == ESP_OK &&
+            action->data.wait_time.timeout_action != ROOM_SCENARIO_WAIT_TIMEOUT_CONTINUE) {
+            err = gm_runtime_json_write_string_field(
+                writer,
+                &first,
+                "timeout_action",
+                room_scenario_wait_timeout_action_to_str(action->data.wait_time.timeout_action));
+        }
         break;
     case ROOM_SCENARIO_STEP_SET_FLAG:
         err = gm_runtime_json_write_string_field(writer, &first, "flag_name", action->data.set_flag.name);
@@ -460,6 +496,10 @@ static esp_err_t orch_write_scenario_layout_action(gm_runtime_json_writer_t *wri
         break;
     case ROOM_SCENARIO_STEP_SHOW_OPERATOR_MESSAGE:
         err = gm_runtime_json_write_string_field(writer, &first, "message", action->data.operator_message.message);
+        break;
+    case ROOM_SCENARIO_STEP_FAIL_REACTION:
+    case ROOM_SCENARIO_STEP_RESET_REACTION:
+        err = ESP_OK;
         break;
     default:
         err = ESP_OK;

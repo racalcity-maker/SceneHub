@@ -113,7 +113,7 @@ void retain_store(const char *topic, const char *payload, uint8_t qos)
     slot->qos = qos;
 }
 
-void deliver_retain(mqtt_session_t *sess, const char *filter)
+void deliver_retain(mqtt_session_t *sess, const char *filter, uint8_t subscription_qos)
 {
     size_t slot = session_index(sess);
     int sock = sess ? sess->sock : -1;
@@ -144,14 +144,17 @@ void deliver_retain(mqtt_session_t *sess, const char *filter)
         if (!matched) {
             continue;
         }
+        uint8_t delivery_qos = mqtt_effective_delivery_qos(s_retain_delivery.qos,
+                                                           subscription_qos);
+        uint16_t pid = delivery_qos ? mqtt_next_packet_id() : 0;
         if (send_publish_packet_to_session_slot(slot,
                                                 sock,
                                                 client_id,
                                                 s_retain_delivery.topic,
                                                 s_retain_delivery.payload,
-                                                0,
+                                                delivery_qos,
                                                 true,
-                                                0) < 0) {
+                                                pid) < 0) {
             retain_delivery_unlock();
             return;
         }

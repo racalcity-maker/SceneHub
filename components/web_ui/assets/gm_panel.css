@@ -185,6 +185,10 @@ body.role-admin .admin-only{display:flex}
 .step-item{border:1px solid var(--line);background:#0f1217;border-radius:8px;padding:10px}
 .step-item:before{counter-increment:step;content:counter(step)'. ';color:var(--muted);font-weight:800}
 .scenario-progress-wrap{display:flex;flex-direction:column;gap:8px}
+.scenario-progress-tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.scenario-progress-tabs .ui-btn.active{border-color:#7a5a1e;background:#2a2113;color:#f2dfb0}
+.scenario-progress-wrap[data-room-scenario-progress-tab="flow"] [data-room-scenario-progress-reactions='1']{display:none}
+.scenario-progress-wrap[data-room-scenario-progress-tab="reactive"] [data-room-scenario-progress-flow='1']{display:none}
 .scenario-progress-overview{display:grid;grid-template-columns:minmax(220px,320px) minmax(260px,1fr);align-items:center;gap:16px;border:1px solid var(--line);background:linear-gradient(180deg,#13171d,#0f1217);border-radius:12px;padding:12px 14px}
 .scenario-progress-overview.compact{grid-template-columns:minmax(180px,240px) minmax(180px,1fr);gap:12px;padding:8px 10px;margin-top:10px}
 .scenario-progress-overview.compact .scenario-progress-overview-title{font-size:13px}
@@ -209,12 +213,16 @@ body.role-admin .admin-only{display:flex}
 .scenario-progress-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .scenario-progress-branch-headside{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:0 0 auto;min-width:0}
 .scenario-progress-branch-title{font-weight:950;color:#e5eef8;overflow-wrap:anywhere;letter-spacing:-.01em}
+.scenario-reactive-trigger-head{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.scenario-reactive-trigger-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:6px;border:1px solid #313946;background:#131820;color:#d6e3ef;font-size:11px;flex:0 0 auto}
 .scenario-progress-count{font-size:11px;font-weight:900;color:#b8c6d4;white-space:nowrap}
 .scenario-progress-current{font-size:12px;color:#d7e4f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .scenario-progress-branch.compact-reaction{height:auto}
-.scenario-progress-branch.compact-reaction .scenario-progress-branch-main{gap:0}
+.scenario-progress-branch.compact-reaction .scenario-progress-branch-main{gap:3px}
 .scenario-progress-branch.compact-reaction .scenario-progress-branch-title{font-size:13px}
-.scenario-progress-branch.compact-reaction .scenario-progress-current,.scenario-progress-branch.compact-reaction .row-meta,.scenario-progress-branch.compact-reaction .scenario-progress-step-details,.scenario-progress-branch.compact-reaction .scenario-progress-step-details-static{display:none}
+.scenario-progress-branch.compact-reaction .row-meta{font-size:11px;line-height:1.2;color:#98a8b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scenario-progress-branch.compact-reaction .scenario-progress-current{font-size:12px;line-height:1.2;color:#d7e4f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scenario-progress-branch.compact-reaction .scenario-progress-step-details,.scenario-progress-branch.compact-reaction .scenario-progress-step-details-static{display:none}
 .scenario-progress-step-details{border-top:1px solid rgba(33,55,81,.7);padding:7px 12px 10px}
 .scenario-progress-step-details summary{list-style:none;cursor:pointer;color:#9fb1c5;font-size:12px;font-weight:800}
 .scenario-progress-step-details summary::-webkit-details-marker{display:none}
@@ -222,6 +230,13 @@ body.role-admin .admin-only{display:flex}
 .scenario-progress-step-details[open] summary:before{content:'-'}
 .scenario-progress-step-details-static{border-top:0;padding:8px 12px 12px;flex:1 1 auto;min-height:0;display:flex}
 .scenario-progress-step-details-static .scenario-progress{margin-top:0;flex:1 1 auto;min-height:0;max-height:calc(20 * 31px);overflow:auto;padding-right:4px;scrollbar-width:thin;scrollbar-color:#303844 #0d1016}
+.scenario-reactive-levels{display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0;max-height:calc(20 * 31px);overflow:auto;padding-right:4px;scrollbar-width:thin;scrollbar-color:#303844 #0d1016}
+.scenario-reactive-level{border:1px solid #28313b;background:#0e1218;border-radius:9px;padding:8px}
+.scenario-reactive-level.current{border-color:#7a5a1e;background:linear-gradient(180deg,#17140f,#111318)}
+.scenario-reactive-level-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.scenario-reactive-level-title{font-size:12px;font-weight:900;color:#dbe6f2;text-transform:uppercase;letter-spacing:.03em}
+.scenario-reactive-level.pending .scenario-progress-step.current,.scenario-reactive-level.pending .scenario-progress-step.done{border-color:var(--line);background:#0f1217;color:var(--muted)}
+.scenario-reactive-level.pending .scenario-progress-step .scenario-progress-type-icon{border-color:#313946;background:#131820;color:#9fb6c8}
 .branch-runtime-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
 .branch-runtime-actions button{padding:5px 8px;min-height:26px}
 .scenario-progress-step{display:grid;grid-template-columns:24px 22px minmax(0,1fr) auto;align-items:center;gap:6px;border:1px solid var(--line);background:#0f1217;border-radius:6px;padding:4px 7px;color:var(--muted)}
@@ -393,6 +408,8 @@ body.role-admin .admin-only{display:flex}
 .scenario-step-command:before{background:#38bdf8}
 .scenario-step-command-group:before{background:#06b6d4}
 .scenario-step-audio:before{background:#a78bfa}
+.scenario-step-audio-bg:before{background:#a78bfa}
+.scenario-step-audio-sfx:before{background:#f87171}
 .scenario-step-wait-time:before{background:#f59e0b}
 .scenario-step-wait-event:before{background:#22c55e}
 .scenario-step-operator:before{background:#f472b6}
@@ -400,6 +417,8 @@ body.role-admin .admin-only{display:flex}
 .scenario-step-command .scenario-step-icon{background:#0c2a3a;color:#7dd3fc}
 .scenario-step-command-group .scenario-step-icon{background:#07313a;color:#67e8f9}
 .scenario-step-audio .scenario-step-icon{background:#24173f;color:#c4b5fd}
+.scenario-step-audio-bg .scenario-step-icon{background:#24173f;color:#c4b5fd}
+.scenario-step-audio-sfx .scenario-step-icon{background:#3a1518;color:#fda4af}
 .scenario-step-wait-time .scenario-step-icon{background:#33240d;color:#fbbf24}
 .scenario-step-wait-event .scenario-step-icon{background:#0f2d1c;color:#86efac}
 .scenario-step-operator .scenario-step-icon{background:#3b1230;color:#f9a8d4}
@@ -449,15 +468,13 @@ body.role-admin .admin-only{display:flex}
 .scenario-v2-max-fire input{width:70px;min-width:70px;padding:6px 8px;border-radius:7px}
 .scenario-v2-variant{border:1px solid #3a3428;background:#0f1217;border-radius:8px;padding:10px}
 .scenario-v2-variant-head{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:8px;align-items:center;margin-bottom:6px}
-.scenario-v2-variant-head input{width:100%;font-weight:800}
-.scenario-v2-variant-id{margin:0 0 8px}
+.scenario-v2-variant-title{font-size:13px;font-weight:900;color:#d7e4f0}
 .scenario-v2-action-list{display:flex;flex-direction:column;gap:7px}
 .scenario-v2-action-add{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
 .scenario-v2-action-add button{padding:6px 9px;border-radius:7px;font-size:12px}
 .scenario-v2-action{margin-bottom:0}
 .scenario-v2-action-fields{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,280px);gap:8px;align-items:center;margin-bottom:8px}
 .scenario-v2-action-fields input,.scenario-v2-action-fields select{width:100%;min-width:0}
-.scenario-v2-settings{margin-top:0}
 .scenario-v2-settings-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
 .scenario-v2-settings-grid .field-stack{min-width:0}
 .scenario-v2-settings-grid .field-stack input,.scenario-v2-settings-grid .field-stack select{width:100%;min-width:0}

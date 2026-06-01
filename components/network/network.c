@@ -13,14 +13,10 @@
 #include "esp_wifi.h"
 #include "mdns.h"
 #include "lwip/apps/sntp.h"
-#include "sdkconfig.h"
 
 #include "config_store.h"
 #include "error_monitor.h"
-
-#ifndef CONFIG_SCENEHUB_SETUP_AP_PASSWORD
-#define CONFIG_SCENEHUB_SETUP_AP_PASSWORD "12345678"
-#endif
+#include "scenehub_config.h"
 
 #define HOSTNAME_MAX_LEN (sizeof(((app_wifi_config_t *)0)->hostname))
 
@@ -34,6 +30,7 @@ static const int64_t RUNTIME_RECONNECT_DELAY_US = 30000000LL;
 static bool s_ap_mode = false;
 static bool s_connected_once = false;
 static bool s_force_ap_setup_boot = false;
+static bool s_sta_connect_enabled = false;
 static SemaphoreHandle_t s_state_mutex = NULL;
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static TaskHandle_t s_ap_stop_task = NULL;
@@ -69,6 +66,22 @@ static void ap_mode_set(bool on)
 {
     state_lock();
     s_ap_mode = on;
+    state_unlock();
+}
+
+static bool sta_connect_enabled_value(void)
+{
+    bool enabled = false;
+    state_lock();
+    enabled = s_sta_connect_enabled;
+    state_unlock();
+    return enabled;
+}
+
+static void sta_connect_enabled_set(bool enabled)
+{
+    state_lock();
+    s_sta_connect_enabled = enabled;
     state_unlock();
 }
 
@@ -262,9 +275,15 @@ static void on_ip_event(void *arg, esp_event_base_t event_base, int32_t event_id
 static void on_wifi_event(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (sta_connect_enabled_value()) {
+            esp_wifi_connect();
+        }
         error_monitor_set_wifi_connected(false);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (!sta_connect_enabled_value()) {
+            error_monitor_set_wifi_connected(false);
+            return;
+        }
         if (s_connected_once) {
             schedule_runtime_reconnect();
         } else if (s_retry_count < MAX_RETRY) {
@@ -301,7 +320,7 @@ static void start_ap_mode(const char *hostname)
     if (strlen((char *)ap_cfg.ap.password) == 0) {
         ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
     }
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
     s_ap_mode = true;
@@ -364,6 +383,7 @@ esp_err_t network_init(void)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &on_wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_ip_event, NULL));
@@ -397,6 +417,7 @@ esp_err_t network_start(void)
 
     if (s_force_ap_setup_boot) {
         ESP_LOGW(TAG, "boot setup request active; starting setup AP");
+        sta_connect_enabled_set(false);
         start_ap_mode(cfg->wifi.hostname);
     } else if (have_sta) {
         wifi_config_t wifi_cfg;
@@ -412,12 +433,14 @@ esp_err_t network_start(void)
         s_retry_count = 0;
         s_connected_once = false;
         cancel_runtime_reconnect();
+        sta_connect_enabled_set(true);
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
         ESP_ERROR_CHECK(esp_wifi_start());
         error_monitor_set_wifi_connected(false);
     } else {
         ESP_LOGW(TAG, "Wi-Fi SSID empty; starting setup AP");
+        sta_connect_enabled_set(false);
         start_ap_mode(cfg->wifi.hostname);
     }
     return ESP_OK;
@@ -451,10 +474,11 @@ esp_err_t network_apply_wifi_config(void)
     s_retry_count = 0;
     s_connected_once = false;
     cancel_runtime_reconnect();
+    sta_connect_enabled_set(false);
 
     wifi_mode_t mode = WIFI_MODE_NULL;
     esp_wifi_get_mode(&mode);
-    bool keep_ap = ap_mode_value() || mode == WIFI_MODE_APSTA;
+    bool keep_ap = ap_mode_value() || mode == WIFI_MODE_APSTA || mode == WIFI_MODE_AP;
     esp_err_t err = esp_wifi_set_mode(keep_ap ? WIFI_MODE_APSTA : WIFI_MODE_STA);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
@@ -465,6 +489,7 @@ esp_err_t network_apply_wifi_config(void)
         ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(err));
         return err;
     }
+    sta_connect_enabled_set(true);
 
     ESP_LOGI(TAG, "applying Wi-Fi config, connecting to SSID=%s", cfg->wifi.ssid);
     err = esp_wifi_disconnect();
