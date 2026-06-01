@@ -1,6 +1,12 @@
 # SceneHub
 
-SceneHub is an ESP32-S3 based local orchestration hub for quest rooms, interactive exhibits and show-control installations.
+SceneHub is an ESP32-S3 based local orchestration hub for quest rooms,
+interactive exhibits and show-control installations.
+
+Earlier internal docs and UI labels used the name "Quest Orchestrator" for the
+firmware/game-control layer. The project name is now SceneHub; legacy wording
+should be treated as historical naming unless a device protocol field still
+uses `quest` terminology.
 
 The firmware includes:
 
@@ -22,9 +28,22 @@ Recent operational changes worth knowing:
   async remote work returns `accepted` plus `request_id`, not fake terminal
   `done`.
 - State-changing hub endpoints are being converged to `POST` plus request body
-  under [docs/API_HTTP_POLICY.md](/d:/Projects/SceneHub/docs/API_HTTP_POLICY.md).
+  under [docs/API_HTTP_POLICY.md](docs/API_HTTP_POLICY.md).
 
 The firmware is designed for stand-alone escape room and interactive exhibit setups where the controller acts as both the game control plane and the local integration point for field devices. MQTT broker functionality is one module inside the product, not the product identity.
+
+## Deployment / Field Use
+
+A reduced SceneHub core has been running for about six months in a real cafe /
+family venue with children as the primary guests. That deployed build is not the
+full current repository feature set; it is a simplified production branch of the
+same local-orchestration idea.
+
+The field system is used as the local control point for interactive room
+behavior: operator control, timed scenario flow, device-triggered events,
+audio/light/relay-style effects and safe local hardware control. The current
+repository is the expanded firmware line that folds those lessons into a more
+general room/scenario/device architecture.
 
 ## Main Capabilities
 
@@ -46,28 +65,44 @@ The firmware is designed for stand-alone escape room and interactive exhibit set
 
 ## Current Architecture
 
-The codebase is now split into clear modules:
+The current codebase is split by ownership boundary rather than by UI page.
+The important components are:
 
+- `audio_player` - local playback, background/effect mixer and I2S output
+- `command_executor` - dispatch boundary for MQTT, local hardware and system commands
+- `config_store` - mutable runtime/NVS configuration
+- `device_control_ingest` - parses physical-client heartbeat/status/diag/result/event telemetry
+- `error_monitor` - service and device fault aggregation
+- `event_bus` - internal typed event transport
+- `gm_core` - room session runtime, timers, waits, flags, reactive state and command plans
+- `gm_profile_store` - Game Mode profile storage, validation and JSON import/export
+- `gm_sidebar_store` - GM quick-action preset storage
+- `hardware_io` - local relay/MOSFET/universal IO control and safe-off
+- `mqtt_core` - embedded local MQTT broker
+- `network` - Wi-Fi, setup AP and network lifecycle
+- `orchestrator_core` - audit, timeline and health aggregation support
+- `ota_manager` - OTA lifecycle and rollback confirmation
 - `quest_common` - shared current-model limits and safe string helpers
-- `quest_device` - capability-device store for physical quest devices and built-in system devices
-- `room_scenario` - room-level scenario definitions, schema-backed JSON, validation and runtime storage
-- `game_profile` - game mode/profile storage, validation and persistence
-- `gm_core` - room session/timer/hint state
-- `room_catalog` - canonical room list from active config
-- `gm_control` - canonical room action model and execution facade
-- `orchestrator_core` - orchestrator read model, device control facade, audit and event timeline
-- `device_control_ingest` - parses `cp/v1/dev/{id}/{heartbeat|status|diag|result}` into orchestrator-side device control state
-- `hardware_io` - local relay/MOSFET/input/GPIO control, safe-off handling and status snapshots
-- `audio_player` - playback service
+- `quest_device` - Quest Device capability store for physical clients and system devices
+- `room_catalog` - file-backed room list
+- `room_scenario` - scenario model, validation, JSON import/export and runtime semantics
+- `scenehub_config` - compile-time Kconfig defaults shared by firmware components
+- `scenehub_control` - write-side application facade for GM/scenario/profile/device actions
+- `scenehub_device_command_resolver` - compact device-command resolution helper
+- `scenehub_events` - shared event definitions/adapters
+- `scenehub_read_model` - read-side projections for APIs and UI
+- `scenehub_scenario_validation` - product-aware scenario environment validation
+- `scenehub_state` - cross-component state invalidation/versioning
 - `sd_storage` - SD card ownership
-- `web_ui` - HTTP/API layer, including stable `orchestrator_api_view` JSON mapping
-- `mqtt_core` - MQTT broker
-- `event_bus` - internal typed event transport with PSRAM-backed message pool and job queue
+- `service_status` - service health state
+- `status_led` - device status indication
+- `system_reset_policy` - boot setup-AP request and runtime reset/defaults policy
+- `web_ui` - HTTP API, auth, GM panel assets and UI endpoints
+- `ws_runtime` - WebSocket runtime refresh transport
 
 Detailed architecture notes are in:
 
 - `docs/ARCHITECTURE.md`
-- `docs/gm_api_contract.md`
 - `docs/COMMAND_RESULT_SEMANTICS.md`
 - `docs/API_HTTP_POLICY.md`
 - `docs/QUEST_DEVICE_SETUP_RUS.md`
@@ -81,34 +116,21 @@ The firmware uses three practical boot classes:
 - `BOOT_DEFERRED_FATAL` - product services that may start in a later bootstrap stage but are still mandatory for a usable device
 - `BOOT_OPTIONAL` - services that may fail without blocking the rest of the product
 
-Current mapping:
+Current implementation shape:
 
-- `BOOT_FATAL`
-  - `nvs_flash`
-  - `ota_manager`
-  - `config_store`
-  - `service_status`
-  - `event_bus`
-  - `device_control_ingest`
-  - `error_monitor`
-- `BOOT_DEFERRED_FATAL`
-  - `network`
-  - `mqtt_core`
-  - `web_ui`
-  - `room_catalog`
-  - `quest_device`
-  - `room_scenario`
-  - `game_profile`
-  - `gm_core`
-- `BOOT_OPTIONAL`
-  - `audio_player`
-  - `hardware_io`
+- platform-critical startup is synchronous in `main/main.c`: NVS, OTA boot
+  notification, `config_store`, reset/setup policy, `service_status`,
+  `event_bus`, `device_control_ingest`, `error_monitor`, `scenehub_control`
+  and `scenehub_state`;
+- product stores are initialized and loaded before the Web UI comes up:
+  Quest Devices, rooms, room scenarios and Game Mode profiles;
+- network, MQTT and Web UI startup run in the deferred bootstrap task and are
+  still treated as fatal for a usable hub;
+- `audio_player` and `hardware_io` are optional services. Failures are exposed
+  as faults, but the hub can still boot far enough for diagnostics and setup.
 
-Current implementation note:
-
-- the policy is explicit and documented
-- deferred-fatal startup still runs through a dedicated bootstrap task in `main/main.c`
-- this is a working startup scheme, but not yet a fully unified startup orchestrator
+This is a working startup scheme, but not yet a fully unified startup
+orchestrator.
 
 ## Requirements
 
@@ -329,9 +351,11 @@ Room scenario branches have two product roles:
   branch can continue from `WAIT_FLAGS`.
 
 Reactive Branch v2 actions currently support device commands, command groups,
-wait-time, set-flag and operator messages. Result-required commands go through
-the command executor: `accepted` keeps the action pending, `done` advances it,
-and `failed`/`rejected`/`timeout` follow the reaction result policy.
+wait-time, device-event waits, wait-any/wait-all, wait-flags, set-flag,
+operator messages, explicit fail and explicit reset. Result-required commands
+go through the command executor: `accepted` keeps the action pending, `done`
+advances it, and `failed`/`rejected`/`timeout` follow the reaction result
+policy.
 
 For `Same actions` reactions, `Can repeat` keeps `max_fire_count=0`; `Run once`
 sets `max_fire_count=1`.
@@ -484,28 +508,36 @@ It can run multiple sample clients, publish heartbeat/status/diag/result, answer
 ```text
 components/
   audio_player/
+  command_executor/
   config_store/
   device_control_ingest/
-  quest_common/
-  gm_control/
-  gm_core/
-  hardware_io/
   error_monitor/
   event_bus/
+  gm_core/
+  gm_profile_store/
+  gm_sidebar_store/
+  hardware_io/
   mqtt_core/
   network/
   orchestrator_core/
-    audit/
-    control/
-    registry/
-    timeline/
-  quest_device/
   ota_manager/
+  quest_common/
+  quest_device/
   room_catalog/
   room_scenario/
+  scenehub_config/
+  scenehub_control/
+  scenehub_device_command_resolver/
+  scenehub_events/
+  scenehub_read_model/
+  scenehub_scenario_validation/
+  scenehub_state/
   sd_storage/
+  service_status/
   status_led/
+  system_reset_policy/
   web_ui/
+  ws_runtime/
 docs/
   ARCHITECTURE.md
 main/
@@ -516,7 +548,6 @@ main/
 
 - `docs/README.md` - index of current firmware and desktop documentation
 - `docs/ARCHITECTURE.md` - module boundaries and layered design
-- `docs/gm_api_contract.md` - GM/orchestrator HTTP contracts and JSON formats
 - `docs/COMMAND_RESULT_SEMANTICS.md` - command lifecycle and dispatch-envelope semantics
 - `docs/API_HTTP_POLICY.md` - HTTP method/payload hygiene policy
 - `docs/device_control_contract_v1.md` - MQTT control contract and interface discovery
