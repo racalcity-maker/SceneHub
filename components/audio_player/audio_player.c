@@ -216,6 +216,16 @@ void audio_player_stop_all(void)
     audio_player_stop();
 }
 
+esp_err_t audio_player_stop_all_wait(uint32_t timeout_ms)
+{
+    audio_cmd_t cmd = {
+        .type = AUDIO_CMD_STOP,
+        .volume = -1,
+        .seek_ratio = -1.0f,
+    };
+    return audio_player_runtime_enqueue_wait(&cmd, timeout_ms);
+}
+
 void audio_player_pause(void)
 {
     enqueue_control_cmd(AUDIO_CMD_PAUSE, "pause");

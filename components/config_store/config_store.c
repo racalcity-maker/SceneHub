@@ -20,6 +20,7 @@
 static const char *TAG = "config_store";
 static const char *NVS_NS = "cfg";
 static const uint32_t CONFIG_VERSION = 2;
+static const uint32_t CONFIG_VERSION_V1 = 1;
 static const char *SCENEHUB_DEFAULT_HOSTNAME = "scenehub";
 static const char *SCENEHUB_DEFAULT_MQTT_ID = "scenehub";
 static const char *LEGACY_BROKER_NAME = "broker";
@@ -29,6 +30,21 @@ static EXT_RAM_BSS_ATTR app_config_t s_config_scratch;
 static SemaphoreHandle_t s_config_scratch_mutex = NULL;
 static StaticSemaphore_t s_config_scratch_mutex_storage;
 static portMUX_TYPE s_config_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
+
+typedef struct {
+    char username[CONFIG_STORE_USERNAME_MAX];
+    uint8_t password_hash[CONFIG_STORE_AUTH_HASH_LEN];
+} app_web_auth_v1_t;
+
+typedef struct {
+    app_wifi_config_t wifi;
+    app_mqtt_config_t mqtt;
+    app_time_config_t time;
+    app_web_auth_v1_t web;
+    app_web_auth_v1_t web_user;
+    bool web_user_enabled;
+    bool verbose_logging;
+} app_config_v1_t;
 
 static void config_lock(void)
 {
@@ -393,7 +409,27 @@ static esp_err_t config_commit(const app_config_t *next, bool log_result)
     return err;
 }
 
-static esp_err_t load_from_nvs(app_config_t *cfg)
+static esp_err_t migrate_config_v1(const app_config_v1_t *old_cfg, app_config_t *cfg)
+{
+    if (!old_cfg || !cfg) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    load_defaults(cfg);
+    cfg->wifi = old_cfg->wifi;
+    cfg->mqtt = old_cfg->mqtt;
+    cfg->time = old_cfg->time;
+    cfg->verbose_logging = old_cfg->verbose_logging;
+
+    // v1 auth hashes were unsalted and cannot be safely reused in the v2 model.
+    apply_default_web_auth(&cfg->web);
+    memset(&cfg->web_user, 0, sizeof(cfg->web_user));
+    cfg->web_user_enabled = false;
+
+    return validate_config(cfg) ? ESP_OK : ESP_ERR_INVALID_ARG;
+}
+
+static esp_err_t load_from_nvs(app_config_t *cfg, bool *needs_persist)
 {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NS, NVS_READONLY, &handle);
@@ -401,20 +437,60 @@ static esp_err_t load_from_nvs(app_config_t *cfg)
         return err;
     }
 
+    if (needs_persist) {
+        *needs_persist = false;
+    }
+
     uint32_t ver = 0;
-    size_t size = sizeof(*cfg);
     err = nvs_get_u32(handle, "ver", &ver);
-    if (err != ESP_OK || ver != CONFIG_VERSION) {
+    if (err != ESP_OK) {
         nvs_close(handle);
-        return ESP_ERR_INVALID_VERSION;
+        return err;
     }
+
+    size_t size = 0;
+    err = nvs_get_blob(handle, "cfg", NULL, &size);
+    if (err != ESP_OK) {
+        nvs_close(handle);
+        return err;
+    }
+
     memset(cfg, 0, sizeof(*cfg));
-    err = nvs_get_blob(handle, "cfg", cfg, &size);
-    nvs_close(handle);
-    if (err == ESP_OK && size > sizeof(*cfg)) {
-        return ESP_ERR_INVALID_SIZE;
+    if (ver == CONFIG_VERSION) {
+        if (size != sizeof(*cfg)) {
+            nvs_close(handle);
+            ESP_LOGW(TAG, "NVS config size mismatch: version=%lu size=%u expected=%u",
+                     (unsigned long)ver, (unsigned)size, (unsigned)sizeof(*cfg));
+            return ESP_ERR_INVALID_SIZE;
+        }
+        err = nvs_get_blob(handle, "cfg", cfg, &size);
+        nvs_close(handle);
+        return err;
     }
-    return err;
+
+    if (ver == CONFIG_VERSION_V1) {
+        if (size != sizeof(app_config_v1_t)) {
+            nvs_close(handle);
+            ESP_LOGW(TAG, "legacy NVS config size mismatch: version=%lu size=%u expected=%u",
+                     (unsigned long)ver, (unsigned)size, (unsigned)sizeof(app_config_v1_t));
+            return ESP_ERR_INVALID_SIZE;
+        }
+        app_config_v1_t legacy_cfg = {0};
+        err = nvs_get_blob(handle, "cfg", &legacy_cfg, &size);
+        nvs_close(handle);
+        if (err != ESP_OK) {
+            return err;
+        }
+        err = migrate_config_v1(&legacy_cfg, cfg);
+        if (err == ESP_OK && needs_persist) {
+            *needs_persist = true;
+        }
+        return err;
+    }
+
+    nvs_close(handle);
+    ESP_LOGW(TAG, "unsupported NVS config version: %lu", (unsigned long)ver);
+    return ESP_ERR_INVALID_VERSION;
 }
 
 esp_err_t config_store_init(void)
@@ -429,17 +505,21 @@ esp_err_t config_store_init(void)
     config_unlock();
 
     memset(&s_config_scratch, 0, sizeof(s_config_scratch));
-    if (load_from_nvs(&s_config_scratch) == ESP_OK && validate_config(&s_config_scratch)) {
+    bool config_migrated = false;
+    if (load_from_nvs(&s_config_scratch, &config_migrated) == ESP_OK && validate_config(&s_config_scratch)) {
         bool migrated = apply_legacy_scenehub_migration(&s_config_scratch);
         bool bootstrap_normalized = normalize_bootstrap_admin_policy(&s_config_scratch);
         config_lock();
         g_config = s_config_scratch;
         config_unlock();
-        if (migrated || bootstrap_normalized) {
+        if (config_migrated || migrated || bootstrap_normalized) {
             err = save_to_nvs(&s_config_scratch);
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "failed to persist config migration: %s", esp_err_to_name(err));
             } else {
+                if (config_migrated) {
+                    ESP_LOGI(TAG, "NVS config migrated to version %lu", (unsigned long)CONFIG_VERSION);
+                }
                 if (migrated) {
                     ESP_LOGI(TAG, "legacy broker naming migrated to scenehub");
                 }
@@ -450,7 +530,9 @@ esp_err_t config_store_init(void)
             }
         }
         config_scratch_unlock();
-        ESP_LOGI(TAG, "config loaded from NVS");
+        ESP_LOGI(TAG, "config loaded from NVS: wifi_ssid_set=%d host=%s",
+                 s_config_scratch.wifi.ssid[0] != '\0',
+                 s_config_scratch.wifi.hostname);
         return ESP_OK;
     }
 

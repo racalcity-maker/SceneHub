@@ -6,6 +6,8 @@
 
 #include "audio_player.h"
 
+#define COMMAND_EXECUTOR_AUDIO_STOP_WAIT_MS 7000
+
 static bool audio_path_has_ext(const char *path, const char *ext)
 {
     size_t path_len = 0;
@@ -90,13 +92,22 @@ esp_err_t command_executor_execute_audio(const command_executor_request_t *reque
     }
     if (strcmp(command->id, "stop") == 0 || command_executor_command_name_is(command, "audio.stop")) {
         char channel[24] = {0};
+        bool wait = false;
         (void)command_executor_params_get_string(request->params_json,
                                                  "channel",
                                                  channel,
                                                  sizeof(channel),
                                                  false);
+        (void)command_executor_params_get_bool(request->params_json, "wait", &wait, false);
         if (!channel[0] || strcasecmp(channel, "all") == 0) {
-            audio_player_stop_all();
+            if (wait) {
+                esp_err_t err = audio_player_stop_all_wait(COMMAND_EXECUTOR_AUDIO_STOP_WAIT_MS);
+                if (err != ESP_OK) {
+                    return command_executor_fail(error, error_size, err, "audio_stop_wait_failed");
+                }
+            } else {
+                audio_player_stop_all();
+            }
         } else if (audio_channel_is_background(channel)) {
             audio_player_stop_background();
         } else if (audio_channel_is_effect(channel)) {

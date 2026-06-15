@@ -16,8 +16,8 @@
 
 #define AUDIO_SAMPLE_RATE 44100
 #define AUDIO_CHANNELS    2
-#define AUDIO_WAV_EDGE_FADE_MS 24
-#define AUDIO_WAV_EDGE_FADE_FRAMES ((AUDIO_SAMPLE_RATE * AUDIO_WAV_EDGE_FADE_MS) / 1000)
+#define AUDIO_WAV_LOOP_EDGE_FADE_MS 24
+#define AUDIO_WAV_LOOP_EDGE_FADE_FRAMES ((AUDIO_SAMPLE_RATE * AUDIO_WAV_LOOP_EDGE_FADE_MS) / 1000)
 #define AUDIO_WAV_DECODE_FRAMES 4096
 #define AUDIO_WAV_FILE_BUFFER_BYTES (16 * 1024)
 #define AUDIO_WAV_READ_WARN_MS 40
@@ -56,7 +56,8 @@ static size_t mp3_i2s_write_cb(const uint8_t *data, size_t len, void *user)
     }
     audio_player_reader_wait_while_paused(ctx);
 
-    return audio_player_mixer_write(AUDIO_MIXER_CHANNEL_EFFECT, data, len);
+    audio_mixer_channel_t channel = ctx ? (audio_mixer_channel_t)ctx->mixer_channel : AUDIO_MIXER_CHANNEL_EFFECT;
+    return audio_player_mixer_write(channel, data, len);
 }
 
 static void mp3_progress_cb(size_t bytes_read, size_t total_bytes, uint32_t elapsed_ms, uint32_t est_total_ms, void *user)
@@ -205,6 +206,19 @@ static size_t convert_pcm_to_output(const int16_t *in, size_t frames_in, const a
     return out_frames;
 }
 
+static size_t estimate_output_frames(size_t input_frames, const audio_info_t *info)
+{
+    if (!info || info->sample_rate == 0) {
+        return input_frames;
+    }
+
+    if (info->sample_rate == AUDIO_SAMPLE_RATE) {
+        return input_frames;
+    }
+
+    return (input_frames * AUDIO_SAMPLE_RATE) / info->sample_rate;
+}
+
 static void apply_output_fade_in_at(int16_t *out,
                                     size_t frames,
                                     size_t fade_frames,
@@ -266,19 +280,6 @@ static void apply_output_fade_out_at(int16_t *out,
     }
 }
 
-static size_t estimate_output_frames(size_t input_frames, const audio_info_t *info)
-{
-    if (!info || info->sample_rate == 0) {
-        return input_frames;
-    }
-
-    if (info->sample_rate == AUDIO_SAMPLE_RATE) {
-        return input_frames;
-    }
-
-    return (input_frames * AUDIO_SAMPLE_RATE) / info->sample_rate;
-}
-
 size_t audio_player_wav_decode_chunk_frames(const audio_info_t *info)
 {
     size_t frames = AUDIO_WAV_DECODE_FRAMES;
@@ -294,25 +295,16 @@ size_t audio_player_wav_decode_chunk_frames(const audio_info_t *info)
     return frames;
 }
 
-static bool wav_edge_fade_enabled(const audio_reader_ctx_t *ctx)
-{
-    if (!ctx) {
-        return false;
-    }
-    return ctx->cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ||
-           ctx->cmd.type == AUDIO_CMD_PLAY ||
-           ctx->cmd.type == AUDIO_CMD_SEEK;
-}
-
 static bool decode_wav_to_output(FILE *f,
                                  audio_reader_ctx_t *ctx,
                                  const audio_info_t *info,
                                  uint32_t data_size,
-                                 size_t initial_bytes_done)
+                                 size_t initial_bytes_done,
+                                 bool fade_loop_start,
+                                 bool fade_loop_end)
 {
     const size_t in_buf_frames = audio_player_wav_decode_chunk_frames(info);
-    audio_mixer_channel_t mixer_ch = ctx && ctx->cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
-        AUDIO_MIXER_CHANNEL_BACKGROUND : AUDIO_MIXER_CHANNEL_EFFECT;
+    audio_mixer_channel_t mixer_ch = ctx ? (audio_mixer_channel_t)ctx->mixer_channel : AUDIO_MIXER_CHANNEL_EFFECT;
     int16_t *in_buf = s_wav_in_buf[mixer_ch];
     int16_t *out_buf = s_wav_out_buf[mixer_ch];
     if (!info || info->channels == 0 || info->channels > AUDIO_CHANNELS) {
@@ -331,12 +323,12 @@ static bool decode_wav_to_output(FILE *f,
     }
 
     size_t bytes_done = initial_bytes_done;
-    size_t output_frames_done = 0;
     const uint32_t byte_rate = info->sample_rate * info->channels * (info->bits_per_sample / 8);
     const size_t block_align = (size_t)info->channels * ((size_t)info->bits_per_sample / 8U);
     const size_t remaining_data_bytes = data_size > initial_bytes_done ? data_size - initial_bytes_done : data_size;
     const size_t total_input_frames = block_align > 0 ? remaining_data_bytes / block_align : 0;
     const size_t total_output_frames = estimate_output_frames(total_input_frames, info);
+    size_t output_frames_done = 0;
     uint64_t prev_iter_finished_us = 0;
     while (true) {
         uint64_t iter_started_us = (uint64_t)esp_timer_get_time();
@@ -366,7 +358,7 @@ static bool decode_wav_to_output(FILE *f,
                      ctx ? (int)ctx->cmd.channel : -1,
                      (unsigned)bytes_read,
                      (unsigned long)read_elapsed_ms);
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "slow wav read detail: path=%s offset=%ld request=%u got=%u rate=%luHz channels=%u chunk_frames=%u",
                      ctx ? ctx->cmd.path : "",
                      read_offset,
@@ -391,23 +383,22 @@ static bool decode_wav_to_output(FILE *f,
 
         size_t frames = bytes_read / (info->channels * sizeof(int16_t));
         size_t out_frames = convert_pcm_to_output(in_buf, frames, info, out_buf, gain);
-        bool edge_fade = wav_edge_fade_enabled(ctx);
         size_t chunk_start_frame = output_frames_done;
 
-        if (edge_fade && initial_bytes_done == 0) {
+        if (fade_loop_start && initial_bytes_done == 0) {
             apply_output_fade_in_at(
                 out_buf,
                 out_frames,
-                AUDIO_WAV_EDGE_FADE_FRAMES,
+                AUDIO_WAV_LOOP_EDGE_FADE_FRAMES,
                 chunk_start_frame
             );
         }
 
-        if (edge_fade) {
+        if (fade_loop_end) {
             apply_output_fade_out_at(
                 out_buf,
                 out_frames,
-                AUDIO_WAV_EDGE_FADE_FRAMES,
+                AUDIO_WAV_LOOP_EDGE_FADE_FRAMES,
                 chunk_start_frame,
                 total_output_frames
             );
@@ -478,7 +469,7 @@ void audio_player_reader_task(void *param)
     uint8_t head[32] = {0};
     fread(head, 1, sizeof(head), f);
     fseek(f, 0, SEEK_SET);
-    ESP_LOGI(TAG, "file %s size=%ld head=%02X %02X %02X %02X %02X %02X %02X %02X",
+    ESP_LOGD(TAG, "file %s size=%ld head=%02X %02X %02X %02X %02X %02X %02X %02X",
              cmd.path,
              fsize,
              head[0],
@@ -514,7 +505,7 @@ void audio_player_reader_task(void *param)
             size_t decode_chunk_frames = audio_player_wav_decode_chunk_frames(&info);
             uint32_t byte_rate = info.sample_rate * info.channels * (info.bits_per_sample / 8);
             size_t skip_bytes = 0;
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "wav open: path=%s channel=%d rate=%luHz channels=%u bits=%u data=%lu chunk_frames=%u repeat=%d",
                      cmd.path,
                      (int)cmd.channel,
@@ -557,6 +548,9 @@ void audio_player_reader_task(void *param)
                 audio_player_status_set_message("Unsupported WAV format");
             } else {
                 bool decode_ok = true;
+                bool first_pass = true;
+                bool repeat_background = cmd.repeat &&
+                                         cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND;
                 do {
                     fseek(f, data_off + (long)skip_bytes, SEEK_SET);
                     if (skip_bytes > 0 && byte_rate > 0) {
@@ -566,7 +560,14 @@ void audio_player_reader_task(void *param)
                     } else {
                         audio_player_status_update_progress(0, data_size, 0, byte_rate > 0 ? (uint32_t)((data_size * 1000ULL) / byte_rate) : 0);
                     }
-                    decode_ok = decode_wav_to_output(f, ctx, &info, data_size, skip_bytes);
+                    decode_ok = decode_wav_to_output(f,
+                                                     ctx,
+                                                     &info,
+                                                     data_size,
+                                                     skip_bytes,
+                                                     repeat_background && !first_pass,
+                                                     repeat_background);
+                    first_pass = false;
                     skip_bytes = 0;
                 } while (cmd.repeat &&
                          cmd.channel == AUDIO_PLAYER_CHANNEL_BACKGROUND &&
@@ -584,19 +585,19 @@ void audio_player_reader_task(void *param)
             audio_player_status_set_message("Background requires WAV");
             error_monitor_report_audio_fault();
         } else {
-        fclose(f);
-        f = NULL;
-        int *bitrate_kbps = audio_player_reader_bitrate_ptr(ctx);
-        if (bitrate_kbps) {
-            *bitrate_kbps = 0;
-        }
-        helix_mp3_decode_file(cmd.path,
-                              audio_player_reader_volume(ctx),
-                              mp3_i2s_write_cb,
-                              ctx,
-                              mp3_progress_cb,
-                              ctx,
-                              cmd.seek_ratio);
+            fclose(f);
+            f = NULL;
+            int *bitrate_kbps = audio_player_reader_bitrate_ptr(ctx);
+            if (bitrate_kbps) {
+                *bitrate_kbps = 0;
+            }
+            helix_mp3_decode_file(cmd.path,
+                                  audio_player_reader_volume(ctx),
+                                  mp3_i2s_write_cb,
+                                  ctx,
+                                  mp3_progress_cb,
+                                  ctx,
+                                  cmd.seek_ratio);
         }
     } else if (fmt == AUDIO_FMT_OGG) {
         ESP_LOGW(TAG, "OGG decode not implemented yet");

@@ -13,7 +13,7 @@ configuration:
 - target is `esp32s3`;
 - PSRAM is enabled;
 - large static/runtime buffers are allowed to live in PSRAM;
-- production limits such as `CONFIG_SCENEHUB_MQTT_MAX_CLIENTS=20` should not be
+- production limits such as `CONFIG_SCENEHUB_MQTT_MAX_CLIENTS=24` should not be
   silently lowered just to make a test link.
 
 If a test cannot link or pass under those constraints, treat that as a real

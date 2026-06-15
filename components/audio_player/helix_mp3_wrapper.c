@@ -4,6 +4,7 @@
 #include <string.h>
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -66,6 +67,14 @@ bool helix_mp3_decode_file(const char *path,
         ESP_LOGE(TAG, "cannot open %s", path);
         return false;
     }
+    uint64_t started_us = (uint64_t)esp_timer_get_time();
+    bool first_frame_logged = false;
+    bool first_write_logged = false;
+    ESP_LOGD(TAG,
+             "mp3 open: path=%s volume=%d start_ratio=%.3f",
+             path,
+             volume_percent,
+             (double)start_ratio);
     // total size for progress
     long total_bytes = 0;
     fseek(f, 0, SEEK_END);
@@ -157,6 +166,19 @@ bool helix_mp3_decode_file(const char *path,
         if (samples <= 0 || chans <= 0) {
             continue;
         }
+        if (!first_frame_logged) {
+            uint32_t elapsed_ms =
+                (uint32_t)(((uint64_t)esp_timer_get_time() - started_us) / 1000ULL);
+            ESP_LOGD(TAG,
+                     "mp3 first frame decoded: path=%s elapsed_ms=%lu rate=%d channels=%d bitrate=%d samples=%d",
+                     path,
+                     (unsigned long)elapsed_ms,
+                     rate,
+                     chans,
+                     info.bitrate,
+                     samples);
+            first_frame_logged = true;
+        }
         last_rate = rate;
         // samples is samples * channels; frames_per_chan = samples / chans
         uint64_t frame_samples = (uint64_t)(samples / chans);
@@ -177,9 +199,20 @@ bool helix_mp3_decode_file(const char *path,
             --seek_discard_frames;
             continue;
         }
-        if (convert_and_write(s_mp3_pcm, samples, chans, rate, volume_percent, writer, user) == 0) {
+        size_t written = convert_and_write(s_mp3_pcm, samples, chans, rate, volume_percent, writer, user);
+        if (written == 0) {
             ok = false;
             break;
+        }
+        if (!first_write_logged) {
+            uint32_t elapsed_ms =
+                (uint32_t)(((uint64_t)esp_timer_get_time() - started_us) / 1000ULL);
+            ESP_LOGD(TAG,
+                     "mp3 first pcm written: path=%s elapsed_ms=%lu bytes=%u",
+                     path,
+                     (unsigned long)elapsed_ms,
+                     (unsigned)written);
+            first_write_logged = true;
         }
         if (progress_cb) {
             // estimate elapsed/duration using running bitrate

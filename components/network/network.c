@@ -376,6 +376,55 @@ static void build_sta_config(const app_config_t *cfg, wifi_config_t *wifi_cfg)
     strncpy((char *)wifi_cfg->sta.password, cfg->wifi.password, sizeof(wifi_cfg->sta.password) - 1);
 }
 
+static void copy_wifi_nvs_string(char *dst, size_t dst_len, const uint8_t *src, size_t src_len)
+{
+    if (!dst || dst_len == 0 || !src || src_len == 0) {
+        return;
+    }
+    size_t len = strnlen((const char *)src, src_len);
+    if (len >= dst_len) {
+        len = dst_len - 1;
+    }
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
+static esp_err_t migrate_legacy_driver_wifi_config(void)
+{
+    const app_config_t *current = config_store_get();
+    if (!current || current->wifi.ssid[0] != '\0') {
+        return ESP_OK;
+    }
+
+    wifi_config_t legacy_cfg = {0};
+    esp_err_t err = esp_wifi_get_config(WIFI_IF_STA, &legacy_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "legacy Wi-Fi config read skipped: %s", esp_err_to_name(err));
+        return ESP_OK;
+    }
+    if (legacy_cfg.sta.ssid[0] == '\0') {
+        return ESP_OK;
+    }
+
+    app_config_t next = *current;
+    copy_wifi_nvs_string(next.wifi.ssid,
+                         sizeof(next.wifi.ssid),
+                         legacy_cfg.sta.ssid,
+                         sizeof(legacy_cfg.sta.ssid));
+    copy_wifi_nvs_string(next.wifi.password,
+                         sizeof(next.wifi.password),
+                         legacy_cfg.sta.password,
+                         sizeof(legacy_cfg.sta.password));
+    err = config_store_set(&next);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "failed to migrate legacy Wi-Fi config: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGW(TAG, "migrated legacy Wi-Fi STA config from driver NVS to config_store: SSID=%s", next.wifi.ssid);
+    return ESP_OK;
+}
+
 esp_err_t network_init(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
@@ -383,7 +432,12 @@ esp_err_t network_init(void)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_err_t migrate_err = migrate_legacy_driver_wifi_config();
+    if (migrate_err != ESP_OK) {
+        ESP_LOGW(TAG, "legacy Wi-Fi migration failed; continuing with app config");
+    }
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    ESP_LOGI(TAG, "Wi-Fi driver storage set to RAM-only");
 
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &on_wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_ip_event, NULL));
@@ -408,6 +462,11 @@ esp_err_t network_start(void)
 {
     const app_config_t *cfg = config_store_get();
     bool have_sta = cfg->wifi.ssid[0] != '\0';
+    ESP_LOGI(TAG,
+             "network start: config_store_wifi_ssid_set=%d host=%s force_setup_ap=%d",
+             have_sta,
+             cfg->wifi.hostname,
+             s_force_ap_setup_boot);
 
     state_lock();
     if (!s_netif) {
@@ -439,7 +498,7 @@ esp_err_t network_start(void)
         ESP_ERROR_CHECK(esp_wifi_start());
         error_monitor_set_wifi_connected(false);
     } else {
-        ESP_LOGW(TAG, "Wi-Fi SSID empty; starting setup AP");
+        ESP_LOGW(TAG, "Wi-Fi SSID empty in config_store; starting setup AP");
         sta_connect_enabled_set(false);
         start_ap_mode(cfg->wifi.hostname);
     }

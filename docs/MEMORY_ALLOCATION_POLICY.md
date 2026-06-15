@@ -127,10 +127,12 @@ Notes:
   It should still avoid large heap churn where practical.
 - Prepared event-ref storage is bounded static PSRAM, not heap allocation:
   `GM_ROOM_SESSION_PREPARED_EVENT_REF_MAX` is currently `320`. One catalog is
-  approximately `104 KB`; two room slots plus one reusable control-layer build
-  scratch reserve approximately `313 KB`. Catalog bytes are zeroed on scenario
-  stop/reset, full session reset and fresh room-slot allocation. There is no
-  runtime alloc/free lifecycle.
+  approximately `104 KB`. `CONFIG_SCENEHUB_MAX_ROOMS` now defaults to `1`, so
+  the default build reserves one room-slot catalog plus one reusable
+  control-layer build scratch, approximately `208 KB`. Raising the room limit
+  adds approximately one catalog-sized PSRAM reservation per extra room slot.
+  Catalog bytes are zeroed on scenario stop/reset, full session reset and fresh
+  room-slot allocation. There is no runtime alloc/free lifecycle.
 - Command dispatch is a control path and should remain allocation-light even
   when multiple devices are triggered.
 - `command_executor.c` reads flat params with a bounded scanner instead of
@@ -152,8 +154,10 @@ Notes:
   naive `StackType_t[stack_size]` conversion can reserve much more internal RAM
   than the dynamic task path.
 - Audio output/tone/silence buffers are static DMA-capable storage.
-- WAV decode uses fixed PSRAM buffers per mixer channel.
-- Audio reader contexts use fixed background/effect slots.
+- WAV decode uses fixed PSRAM buffers per mixer channel. The mixer keeps two
+  fixed background slots plus one effect slot so background switches can prime
+  the next track before stopping the current one.
+- Audio reader contexts use fixed background A/background B/effect slots.
 - MP3 wrapper buffers are static PSRAM storage, and Helix decoder allocation is
   served from a bounded 96 KB PSRAM pool.
 - MP3 effect playback budget is bounded by the 96 KB Helix pool plus static
@@ -213,7 +217,8 @@ Recommended audio memory model:
   - if Helix requires allocation through the shim, route it to a bounded
     allocator and document max usage.
 - Reader context:
-  - use a static slot for background and one for effect, or a small fixed pool.
+  - use static slots for background A, background B and effect, or a small
+    fixed pool.
 
 Current allocation points:
 

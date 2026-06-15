@@ -16,13 +16,25 @@
 #define AUDIO_QUEUE_LEN 4
 #define AUDIO_READER_STOP_TIMEOUT_MS 500
 #define AUDIO_BACKGROUND_FADE_OUT_MS 2500
+#define AUDIO_EFFECT_STOP_FADE_OUT_MS 96
+#define AUDIO_STOP_FADE_OUT_POLL_MS 10
+#define AUDIO_STOP_FADE_OUT_SLACK_MS 250
 #define AUDIO_RUNTIME_TASK_STACK 8192
 #define AUDIO_READER_BG_STACK 8192
 #define AUDIO_READER_FX_STACK 8192
 #define AUDIO_READER_TASK_PRIORITY 5
 #define AUDIO_FLAG_PAUSED BIT0
-#define AUDIO_FLAG_BG_STOP_REQUESTED BIT1
-#define AUDIO_FLAG_FX_STOP_REQUESTED BIT2
+#define AUDIO_FLAG_BG_A_STOP_REQUESTED BIT1
+#define AUDIO_FLAG_BG_B_STOP_REQUESTED BIT2
+#define AUDIO_FLAG_FX_STOP_REQUESTED BIT3
+#define AUDIO_BACKGROUND_PRIME_TIMEOUT_MS 1500
+
+typedef enum {
+    AUDIO_RUNTIME_SLOT_BG_A = 0,
+    AUDIO_RUNTIME_SLOT_BG_B,
+    AUDIO_RUNTIME_SLOT_EFFECT,
+    AUDIO_RUNTIME_SLOT_COUNT,
+} audio_runtime_slot_t;
 
 typedef struct {
     TaskHandle_t task;
@@ -38,9 +50,10 @@ static QueueHandle_t s_queue = NULL;
 static TaskHandle_t s_task = NULL;
 static SemaphoreHandle_t s_runtime_lock = NULL;
 static EventGroupHandle_t s_audio_flags = NULL;
-static audio_channel_runtime_t s_channels[AUDIO_PLAYER_CHANNEL_BACKGROUND + 1];
-static EXT_RAM_BSS_ATTR audio_reader_ctx_t s_reader_ctxs[AUDIO_PLAYER_CHANNEL_BACKGROUND + 1];
-static bool s_reader_ctx_in_use[AUDIO_PLAYER_CHANNEL_BACKGROUND + 1];
+static audio_channel_runtime_t s_channels[AUDIO_RUNTIME_SLOT_COUNT];
+static EXT_RAM_BSS_ATTR audio_reader_ctx_t s_reader_ctxs[AUDIO_RUNTIME_SLOT_COUNT];
+static bool s_reader_ctx_in_use[AUDIO_RUNTIME_SLOT_COUNT];
+static audio_runtime_slot_t s_active_background_slot = AUDIO_RUNTIME_SLOT_BG_A;
 static audio_runtime_state_t s_runtime_state = AUDIO_RUNTIME_IDLE;
 
 static audio_player_channel_t normalize_channel(audio_player_channel_t channel)
@@ -48,16 +61,41 @@ static audio_player_channel_t normalize_channel(audio_player_channel_t channel)
     return channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ? AUDIO_PLAYER_CHANNEL_BACKGROUND : AUDIO_PLAYER_CHANNEL_EFFECT;
 }
 
-static EventBits_t channel_stop_bit(audio_player_channel_t channel)
+static bool runtime_slot_is_background(audio_runtime_slot_t slot)
 {
-    return normalize_channel(channel) == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
-        AUDIO_FLAG_BG_STOP_REQUESTED : AUDIO_FLAG_FX_STOP_REQUESTED;
+    return slot == AUDIO_RUNTIME_SLOT_BG_A || slot == AUDIO_RUNTIME_SLOT_BG_B;
 }
 
-static audio_mixer_channel_t mixer_channel(audio_player_channel_t channel)
+static audio_runtime_slot_t alternate_background_slot(void)
 {
-    return normalize_channel(channel) == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
-        AUDIO_MIXER_CHANNEL_BACKGROUND : AUDIO_MIXER_CHANNEL_EFFECT;
+    return s_active_background_slot == AUDIO_RUNTIME_SLOT_BG_A ?
+        AUDIO_RUNTIME_SLOT_BG_B : AUDIO_RUNTIME_SLOT_BG_A;
+}
+
+static EventBits_t slot_stop_bit(audio_runtime_slot_t slot)
+{
+    switch (slot) {
+    case AUDIO_RUNTIME_SLOT_BG_A:
+        return AUDIO_FLAG_BG_A_STOP_REQUESTED;
+    case AUDIO_RUNTIME_SLOT_BG_B:
+        return AUDIO_FLAG_BG_B_STOP_REQUESTED;
+    case AUDIO_RUNTIME_SLOT_EFFECT:
+    default:
+        return AUDIO_FLAG_FX_STOP_REQUESTED;
+    }
+}
+
+static audio_mixer_channel_t mixer_channel_for_slot(audio_runtime_slot_t slot)
+{
+    switch (slot) {
+    case AUDIO_RUNTIME_SLOT_BG_A:
+        return AUDIO_MIXER_CHANNEL_BACKGROUND_A;
+    case AUDIO_RUNTIME_SLOT_BG_B:
+        return AUDIO_MIXER_CHANNEL_BACKGROUND_B;
+    case AUDIO_RUNTIME_SLOT_EFFECT:
+    default:
+        return AUDIO_MIXER_CHANNEL_EFFECT;
+    }
 }
 
 static void audio_flags_set(EventBits_t flags)
@@ -101,34 +139,83 @@ static void runtime_set_state(audio_runtime_state_t state)
 static bool channel_has_reader(audio_player_channel_t channel)
 {
     bool has_reader = false;
+    bool bg_a_reader = false;
+    bool bg_b_reader = false;
 
     channel = normalize_channel(channel);
 
     if (runtime_lock()) {
-        has_reader = s_channels[channel].task != NULL && !s_channels[channel].done;
+        if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND) {
+            bg_a_reader = s_channels[AUDIO_RUNTIME_SLOT_BG_A].task != NULL &&
+                          !s_channels[AUDIO_RUNTIME_SLOT_BG_A].done;
+            bg_b_reader = s_channels[AUDIO_RUNTIME_SLOT_BG_B].task != NULL &&
+                          !s_channels[AUDIO_RUNTIME_SLOT_BG_B].done;
+        } else {
+            has_reader = s_channels[AUDIO_RUNTIME_SLOT_EFFECT].task != NULL &&
+                         !s_channels[AUDIO_RUNTIME_SLOT_EFFECT].done;
+        }
         runtime_unlock();
+    }
+
+    if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND) {
+        bool bg_a_mixer = audio_player_mixer_stream_active(AUDIO_MIXER_CHANNEL_BACKGROUND_A);
+        bool bg_b_mixer = audio_player_mixer_stream_active(AUDIO_MIXER_CHANNEL_BACKGROUND_B);
+        has_reader = bg_a_reader || bg_b_reader || bg_a_mixer || bg_b_mixer;
     }
 
     return has_reader;
 }
 
-static void wait_background_fade_out(void)
+static void start_slot_fade_out(audio_runtime_slot_t slot, int duration_ms)
+{
+    audio_player_mixer_fade_out_stream(
+        mixer_channel_for_slot(slot),
+        duration_ms
+    );
+}
+
+static void wait_slot_fade_out_complete(audio_runtime_slot_t slot, int duration_ms)
 {
     TickType_t start = xTaskGetTickCount();
-    TickType_t timeout = pdMS_TO_TICKS(AUDIO_BACKGROUND_FADE_OUT_MS + 250);
+    TickType_t timeout = pdMS_TO_TICKS(duration_ms + AUDIO_STOP_FADE_OUT_SLACK_MS);
+    audio_mixer_channel_t mixer_channel = mixer_channel_for_slot(slot);
 
-    audio_player_mixer_fade_out_stream(
-        AUDIO_MIXER_CHANNEL_BACKGROUND,
-        AUDIO_BACKGROUND_FADE_OUT_MS
-    );
-
-    while (audio_player_mixer_fade_out_active(AUDIO_MIXER_CHANNEL_BACKGROUND)) {
+    while (audio_player_mixer_fade_out_active(mixer_channel)) {
         if ((xTaskGetTickCount() - start) > timeout) {
             break;
         }
 
+        vTaskDelay(pdMS_TO_TICKS(AUDIO_STOP_FADE_OUT_POLL_MS));
+    }
+}
+
+static void wait_slot_fade_out(audio_runtime_slot_t slot, int duration_ms)
+{
+    start_slot_fade_out(slot, duration_ms);
+    wait_slot_fade_out_complete(slot, duration_ms);
+}
+
+static void wait_background_fade_out(audio_runtime_slot_t slot)
+{
+    wait_slot_fade_out(slot, AUDIO_BACKGROUND_FADE_OUT_MS);
+}
+
+static void wait_effect_fade_out(void)
+{
+    wait_slot_fade_out(AUDIO_RUNTIME_SLOT_EFFECT, AUDIO_EFFECT_STOP_FADE_OUT_MS);
+}
+
+static bool wait_mixer_primed(audio_mixer_channel_t channel, int timeout_ms)
+{
+    TickType_t start = xTaskGetTickCount();
+    TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+    while (!audio_player_mixer_stream_primed(channel)) {
+        if ((xTaskGetTickCount() - start) > timeout) {
+            return false;
+        }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+    return true;
 }
 
 static audio_runtime_state_t runtime_get_state(void)
@@ -143,7 +230,7 @@ static audio_runtime_state_t runtime_get_state(void)
 
 static void runtime_set_effect_active_path(const char *path)
 {
-    audio_channel_runtime_t *ch = &s_channels[AUDIO_PLAYER_CHANNEL_EFFECT];
+    audio_channel_runtime_t *ch = &s_channels[AUDIO_RUNTIME_SLOT_EFFECT];
     if (runtime_lock()) {
         if (path && path[0]) {
             strncpy(ch->active_path, path, sizeof(ch->active_path) - 1);
@@ -162,10 +249,9 @@ static void runtime_set_effect_active_path(const char *path)
     }
 }
 
-static void runtime_clear_active_path_if_matches(audio_player_channel_t channel, const char *path)
+static void runtime_clear_active_path_if_matches(audio_runtime_slot_t slot, const char *path)
 {
-    channel = normalize_channel(channel);
-    audio_channel_runtime_t *ch = &s_channels[channel];
+    audio_channel_runtime_t *ch = &s_channels[slot];
     if (runtime_lock()) {
         if (!path || !path[0] || strcmp(ch->active_path, path) == 0) {
             ch->active_path[0] = 0;
@@ -178,15 +264,14 @@ static void runtime_clear_active_path_if_matches(audio_player_channel_t channel,
     }
 }
 
-static bool stop_reader(audio_player_channel_t channel)
+static bool stop_reader_slot(audio_runtime_slot_t slot)
 {
-    channel = normalize_channel(channel);
-    audio_channel_runtime_t *ch = &s_channels[channel];
+    audio_channel_runtime_t *ch = &s_channels[slot];
     TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
     bool wait_needed = false;
 
-    audio_flags_set(channel_stop_bit(channel));
-    audio_player_mixer_stop_stream(mixer_channel(channel));
+    audio_flags_set(slot_stop_bit(slot));
+    audio_player_mixer_stop_stream(mixer_channel_for_slot(slot));
     runtime_set_state(AUDIO_RUNTIME_STOPPING);
 
     if (runtime_lock()) {
@@ -220,6 +305,17 @@ static bool stop_reader(audio_player_channel_t channel)
     return true;
 }
 
+static bool stop_reader(audio_player_channel_t channel)
+{
+    channel = normalize_channel(channel);
+    if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND) {
+        bool ok_a = stop_reader_slot(AUDIO_RUNTIME_SLOT_BG_A);
+        bool ok_b = stop_reader_slot(AUDIO_RUNTIME_SLOT_BG_B);
+        return ok_a && ok_b;
+    }
+    return stop_reader_slot(AUDIO_RUNTIME_SLOT_EFFECT);
+}
+
 static void handle_pause(void)
 {
     audio_runtime_state_t state = runtime_get_state();
@@ -227,7 +323,7 @@ static void handle_pause(void)
         return;
     }
     audio_flags_set(AUDIO_FLAG_PAUSED);
-    s_channels[AUDIO_PLAYER_CHANNEL_EFFECT].bitrate_kbps = 0;
+    s_channels[AUDIO_RUNTIME_SLOT_EFFECT].bitrate_kbps = 0;
     runtime_set_state(AUDIO_RUNTIME_PAUSED);
 }
 
@@ -244,14 +340,17 @@ static void handle_stop_channel(audio_player_channel_t channel)
 {
     channel = normalize_channel(channel);
 
-    if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND && channel_has_reader(channel)) {
-        wait_background_fade_out();
+    if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND) {
+        wait_background_fade_out(AUDIO_RUNTIME_SLOT_BG_A);
+        wait_background_fade_out(AUDIO_RUNTIME_SLOT_BG_B);
+    } else if (channel == AUDIO_PLAYER_CHANNEL_EFFECT) {
+        wait_effect_fade_out();
     }
 
     (void)stop_reader(channel);
     if (channel == AUDIO_PLAYER_CHANNEL_EFFECT) {
         runtime_set_effect_active_path(NULL);
-        s_channels[channel].bitrate_kbps = 0;
+        s_channels[AUDIO_RUNTIME_SLOT_EFFECT].bitrate_kbps = 0;
     }
     runtime_set_state(AUDIO_RUNTIME_IDLE);
 }
@@ -259,13 +358,83 @@ static void handle_stop_channel(audio_player_channel_t channel)
 static void handle_stop(void)
 {
     audio_flags_clear(AUDIO_FLAG_PAUSED);
+    start_slot_fade_out(AUDIO_RUNTIME_SLOT_BG_A, AUDIO_BACKGROUND_FADE_OUT_MS);
+    start_slot_fade_out(AUDIO_RUNTIME_SLOT_BG_B, AUDIO_BACKGROUND_FADE_OUT_MS);
+    start_slot_fade_out(AUDIO_RUNTIME_SLOT_EFFECT, AUDIO_EFFECT_STOP_FADE_OUT_MS);
+    wait_slot_fade_out_complete(AUDIO_RUNTIME_SLOT_BG_A, AUDIO_BACKGROUND_FADE_OUT_MS);
+    wait_slot_fade_out_complete(AUDIO_RUNTIME_SLOT_BG_B, AUDIO_BACKGROUND_FADE_OUT_MS);
+    wait_slot_fade_out_complete(AUDIO_RUNTIME_SLOT_EFFECT, AUDIO_EFFECT_STOP_FADE_OUT_MS);
     (void)stop_reader(AUDIO_PLAYER_CHANNEL_BACKGROUND);
     (void)stop_reader(AUDIO_PLAYER_CHANNEL_EFFECT);
-    audio_player_mixer_stop_all();
-    audio_player_output_reset();
     runtime_set_effect_active_path(NULL);
-    s_channels[AUDIO_PLAYER_CHANNEL_EFFECT].bitrate_kbps = 0;
+    s_channels[AUDIO_RUNTIME_SLOT_EFFECT].bitrate_kbps = 0;
     runtime_set_state(AUDIO_RUNTIME_IDLE);
+}
+
+static bool start_reader_slot(const audio_cmd_t *cmd, audio_runtime_slot_t slot, bool audible)
+{
+    audio_player_channel_t channel = normalize_channel(cmd->channel);
+    int volume = cmd->volume >= 0 ? cmd->volume : audio_player_runtime_volume();
+    audio_reader_ctx_t *reader_ctx = audio_player_runtime_create_reader_ctx(cmd, slot);
+    if (!reader_ctx) {
+        ESP_LOGE(TAG, "reader ctx unavailable");
+        error_monitor_report_audio_fault();
+        runtime_set_state(AUDIO_RUNTIME_ERROR);
+        return false;
+    }
+
+    audio_flags_clear(AUDIO_FLAG_PAUSED | slot_stop_bit(slot));
+    if (audible) {
+        audio_player_mixer_start_stream(mixer_channel_for_slot(slot));
+    } else {
+        audio_player_mixer_start_stream_muted(mixer_channel_for_slot(slot));
+    }
+    ESP_LOGD(TAG,
+             "reader slot start: slot=%d mixer_channel=%d audible=%d path=%s",
+             (int)slot,
+             (int)mixer_channel_for_slot(slot),
+             audible ? 1 : 0,
+             cmd->path);
+
+    TaskHandle_t reader_task = NULL;
+    runtime_set_state(AUDIO_RUNTIME_STARTING);
+    if (slot == AUDIO_RUNTIME_SLOT_EFFECT) {
+        runtime_set_effect_active_path(cmd->path);
+    }
+    const uint32_t reader_stack = channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
+        AUDIO_READER_BG_STACK : AUDIO_READER_FX_STACK;
+    BaseType_t ok = xTaskCreatePinnedToCore(audio_player_reader_task,
+                                            runtime_slot_is_background(slot) ? "audio_bg" : "audio_fx",
+                                            reader_stack,
+                                            reader_ctx,
+                                            AUDIO_READER_TASK_PRIORITY,
+                                            &reader_task,
+                                            1);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "reader task create failed");
+        audio_player_runtime_destroy_reader_ctx(reader_ctx);
+        audio_player_mixer_stop_stream(mixer_channel_for_slot(slot));
+        audio_player_output_play_tone(660, 150, volume);
+        audio_player_output_play_tone(440, 150, volume);
+        error_monitor_report_audio_fault();
+        if (slot == AUDIO_RUNTIME_SLOT_EFFECT) {
+            runtime_set_effect_active_path(NULL);
+        }
+        runtime_set_state(AUDIO_RUNTIME_ERROR);
+        return false;
+    }
+
+    if (runtime_lock()) {
+        s_channels[slot].task = reader_task;
+        s_channels[slot].done = false;
+        s_channels[slot].waiter = NULL;
+        if (cmd->path[0]) {
+            strncpy(s_channels[slot].active_path, cmd->path, sizeof(s_channels[slot].active_path) - 1);
+            s_channels[slot].active_path[sizeof(s_channels[slot].active_path) - 1] = 0;
+        }
+        runtime_unlock();
+    }
+    return true;
 }
 
 static void handle_play(const audio_cmd_t *cmd)
@@ -273,7 +442,7 @@ static void handle_play(const audio_cmd_t *cmd)
     audio_player_channel_t channel = normalize_channel(cmd->channel);
     int volume = cmd->volume >= 0 ? cmd->volume : audio_player_runtime_volume();
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "play request: channel=%d path=%s volume=%d repeat=%d seek=%.3f",
              (int)channel,
              cmd->path,
@@ -290,63 +459,51 @@ static void handle_play(const audio_cmd_t *cmd)
         return;
     }
 
-    if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND && channel_has_reader(channel)) {
-        wait_background_fade_out();
-    }
+    if (channel == AUDIO_PLAYER_CHANNEL_BACKGROUND) {
+        bool switching = channel_has_reader(AUDIO_PLAYER_CHANNEL_BACKGROUND);
+        audio_runtime_slot_t old_slot = s_active_background_slot;
+        audio_runtime_slot_t next_slot = switching ? alternate_background_slot() : s_active_background_slot;
 
-    if (!stop_reader(channel)) {
-        return;
-    }
+        ESP_LOGD(TAG,
+                 "background play route: switching=%d old_slot=%d next_slot=%d old_active=%d next_active=%d",
+                 switching ? 1 : 0,
+                 (int)old_slot,
+                 (int)next_slot,
+                 audio_player_mixer_stream_active(mixer_channel_for_slot(old_slot)) ? 1 : 0,
+                 audio_player_mixer_stream_active(mixer_channel_for_slot(next_slot)) ? 1 : 0);
 
-    audio_reader_ctx_t *reader_ctx = audio_player_runtime_create_reader_ctx(cmd);
-    if (!reader_ctx) {
-        ESP_LOGE(TAG, "reader ctx unavailable");
-        error_monitor_report_audio_fault();
-        runtime_set_state(AUDIO_RUNTIME_ERROR);
-        return;
-    }
-
-    audio_flags_clear(AUDIO_FLAG_PAUSED | channel_stop_bit(channel));
-    audio_player_mixer_start_stream(mixer_channel(channel));
-
-    TaskHandle_t reader_task = NULL;
-    runtime_set_state(AUDIO_RUNTIME_STARTING);
-    if (channel == AUDIO_PLAYER_CHANNEL_EFFECT) {
-        runtime_set_effect_active_path(cmd->path);
-    }
-    const uint32_t reader_stack = channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
-        AUDIO_READER_BG_STACK : AUDIO_READER_FX_STACK;
-    BaseType_t ok = xTaskCreatePinnedToCore(audio_player_reader_task,
-                                            channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ? "audio_bg" : "audio_fx",
-                                            reader_stack,
-                                            reader_ctx,
-                                            AUDIO_READER_TASK_PRIORITY,
-                                            &reader_task,
-                                            1);
-    if (ok != pdPASS) {
-        ESP_LOGE(TAG, "reader task create failed");
-        audio_player_runtime_destroy_reader_ctx(reader_ctx);
-        audio_player_mixer_stop_stream(mixer_channel(channel));
-        audio_player_output_play_tone(660, 150, volume);
-        audio_player_output_play_tone(440, 150, volume);
-        error_monitor_report_audio_fault();
-        if (channel == AUDIO_PLAYER_CHANNEL_EFFECT) {
-            runtime_set_effect_active_path(NULL);
+        if (!switching) {
+            (void)stop_reader_slot(next_slot);
         }
-        runtime_set_state(AUDIO_RUNTIME_ERROR);
+        if (!start_reader_slot(cmd, next_slot, !switching)) {
+            return;
+        }
+        if (switching) {
+            ESP_LOGD(TAG,
+                     "background switch priming: old_slot=%d new_slot=%d",
+                     (int)old_slot,
+                     (int)next_slot);
+            if (!wait_mixer_primed(mixer_channel_for_slot(next_slot), AUDIO_BACKGROUND_PRIME_TIMEOUT_MS)) {
+                ESP_LOGW(TAG, "background switch prime timeout; keeping current background");
+                (void)stop_reader_slot(next_slot);
+                runtime_set_state(AUDIO_RUNTIME_PLAYING);
+                return;
+            }
+            wait_background_fade_out(old_slot);
+            (void)stop_reader_slot(old_slot);
+            s_active_background_slot = next_slot;
+            audio_player_mixer_set_stream_audible(mixer_channel_for_slot(next_slot), true);
+            runtime_set_state(AUDIO_RUNTIME_PLAYING);
+            ESP_LOGD(TAG, "background switch complete: active_slot=%d", (int)s_active_background_slot);
+        }
         return;
     }
 
-    if (runtime_lock()) {
-        s_channels[channel].task = reader_task;
-        s_channels[channel].done = false;
-        s_channels[channel].waiter = NULL;
-        if (cmd->path[0]) {
-            strncpy(s_channels[channel].active_path, cmd->path, sizeof(s_channels[channel].active_path) - 1);
-            s_channels[channel].active_path[sizeof(s_channels[channel].active_path) - 1] = 0;
-        }
-        runtime_unlock();
+    wait_effect_fade_out();
+    if (!stop_reader_slot(AUDIO_RUNTIME_SLOT_EFFECT)) {
+        return;
     }
+    (void)start_reader_slot(cmd, AUDIO_RUNTIME_SLOT_EFFECT, true);
 }
 
 static void audio_runtime_task(void *param)
@@ -387,6 +544,9 @@ static void audio_runtime_task(void *param)
         default:
             break;
         }
+        if (cmd.completion_task) {
+            xTaskNotifyGive(cmd.completion_task);
+        }
     }
     vTaskDelete(NULL);
 }
@@ -405,7 +565,10 @@ esp_err_t audio_player_runtime_init(void)
         s_queue = xQueueCreate(AUDIO_QUEUE_LEN, sizeof(audio_cmd_t));
     }
     ESP_RETURN_ON_FALSE(s_queue != NULL, ESP_ERR_NO_MEM, TAG, "audio queue init failed");
-    audio_flags_clear(AUDIO_FLAG_PAUSED | AUDIO_FLAG_BG_STOP_REQUESTED | AUDIO_FLAG_FX_STOP_REQUESTED);
+    audio_flags_clear(AUDIO_FLAG_PAUSED |
+                      AUDIO_FLAG_BG_A_STOP_REQUESTED |
+                      AUDIO_FLAG_BG_B_STOP_REQUESTED |
+                      AUDIO_FLAG_FX_STOP_REQUESTED);
     if (runtime_lock()) {
         memset(s_channels, 0, sizeof(s_channels));
         for (size_t i = 0; i < sizeof(s_channels) / sizeof(s_channels[0]); ++i) {
@@ -432,7 +595,7 @@ esp_err_t audio_player_runtime_start(void)
             return ESP_FAIL;
         }
     }
-    ESP_LOGI(TAG, "audio runtime started");
+    ESP_LOGD(TAG, "audio runtime started");
     return ESP_OK;
 }
 
@@ -459,32 +622,63 @@ esp_err_t audio_player_runtime_enqueue(const audio_cmd_t *cmd)
     return ESP_ERR_TIMEOUT;
 }
 
-audio_reader_ctx_t *audio_player_runtime_create_reader_ctx(const audio_cmd_t *cmd)
+esp_err_t audio_player_runtime_enqueue_wait(const audio_cmd_t *cmd, uint32_t timeout_ms)
+{
+    if (!cmd) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_queue) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    audio_cmd_t wait_cmd = *cmd;
+    wait_cmd.completion_task = xTaskGetCurrentTaskHandle();
+    if (!wait_cmd.completion_task) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    (void)ulTaskNotifyTake(pdTRUE, 0);
+    esp_err_t err = audio_player_runtime_enqueue(&wait_cmd);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    TickType_t timeout_ticks = timeout_ms == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    return ulTaskNotifyTake(pdTRUE, timeout_ticks) > 0 ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+audio_reader_ctx_t *audio_player_runtime_create_reader_ctx(const audio_cmd_t *cmd, uint8_t runtime_slot)
 {
     if (!cmd) {
         return NULL;
     }
     audio_player_channel_t channel = normalize_channel(cmd->channel);
-    audio_reader_ctx_t *ctx = &s_reader_ctxs[channel];
+    audio_runtime_slot_t slot = (audio_runtime_slot_t)runtime_slot;
+    if (slot < 0 || slot >= AUDIO_RUNTIME_SLOT_COUNT) {
+        return NULL;
+    }
+    audio_reader_ctx_t *ctx = &s_reader_ctxs[slot];
     if (runtime_lock()) {
-        if (s_reader_ctx_in_use[channel]) {
+        if (s_reader_ctx_in_use[slot]) {
             runtime_unlock();
             return NULL;
         }
-        s_reader_ctx_in_use[channel] = true;
+        s_reader_ctx_in_use[slot] = true;
         runtime_unlock();
     } else {
-        if (s_reader_ctx_in_use[channel]) {
+        if (s_reader_ctx_in_use[slot]) {
             return NULL;
         }
-        s_reader_ctx_in_use[channel] = true;
+        s_reader_ctx_in_use[slot] = true;
     }
     memset(ctx, 0, sizeof(*ctx));
     ctx->cmd = *cmd;
     ctx->cmd.channel = channel;
+    ctx->runtime_slot = (uint8_t)slot;
+    ctx->mixer_channel = (uint8_t)mixer_channel_for_slot(slot);
     ctx->flags = s_audio_flags;
-    ctx->stop_bit = channel_stop_bit(channel);
-    ctx->bitrate_kbps = &s_channels[channel].bitrate_kbps;
+    ctx->stop_bit = slot_stop_bit(slot);
+    ctx->bitrate_kbps = &s_channels[slot].bitrate_kbps;
     ctx->volume_percent = audio_player_volume_ptr();
     return ctx;
 }
@@ -494,18 +688,18 @@ void audio_player_runtime_destroy_reader_ctx(audio_reader_ctx_t *ctx)
     if (!ctx) {
         return;
     }
-    audio_player_channel_t channel = normalize_channel(ctx->cmd.channel);
-    if (ctx != &s_reader_ctxs[channel]) {
+    audio_runtime_slot_t slot = (audio_runtime_slot_t)ctx->runtime_slot;
+    if (slot < 0 || slot >= AUDIO_RUNTIME_SLOT_COUNT || ctx != &s_reader_ctxs[slot]) {
         return;
     }
     if (runtime_lock()) {
         memset(ctx, 0, sizeof(*ctx));
-        s_reader_ctx_in_use[channel] = false;
+        s_reader_ctx_in_use[slot] = false;
         runtime_unlock();
         return;
     }
     memset(ctx, 0, sizeof(*ctx));
-    s_reader_ctx_in_use[channel] = false;
+    s_reader_ctx_in_use[slot] = false;
 }
 
 esp_err_t audio_player_runtime_prepare_seek(audio_cmd_t *cmd, uint32_t pos_ms)
@@ -519,9 +713,9 @@ esp_err_t audio_player_runtime_prepare_seek(audio_cmd_t *cmd, uint32_t pos_ms)
     }
 
     if (runtime_lock()) {
-        if (s_channels[AUDIO_PLAYER_CHANNEL_EFFECT].active_path[0] != 0) {
+        if (s_channels[AUDIO_RUNTIME_SLOT_EFFECT].active_path[0] != 0) {
             strncpy(current_path,
-                    s_channels[AUDIO_PLAYER_CHANNEL_EFFECT].active_path,
+                    s_channels[AUDIO_RUNTIME_SLOT_EFFECT].active_path,
                     sizeof(current_path) - 1);
             current_path[sizeof(current_path) - 1] = 0;
         }
@@ -558,10 +752,13 @@ esp_err_t audio_player_runtime_prepare_seek(audio_cmd_t *cmd, uint32_t pos_ms)
 
 void audio_player_runtime_reader_started(const audio_reader_ctx_t *ctx)
 {
-    audio_player_channel_t channel = ctx ? normalize_channel(ctx->cmd.channel) : AUDIO_PLAYER_CHANNEL_EFFECT;
-    audio_flags_clear(channel_stop_bit(channel));
+    audio_runtime_slot_t slot = ctx ? (audio_runtime_slot_t)ctx->runtime_slot : AUDIO_RUNTIME_SLOT_EFFECT;
+    if (slot < 0 || slot >= AUDIO_RUNTIME_SLOT_COUNT) {
+        slot = AUDIO_RUNTIME_SLOT_EFFECT;
+    }
+    audio_flags_clear(slot_stop_bit(slot));
     if (runtime_lock()) {
-        audio_channel_runtime_t *ch = &s_channels[channel];
+        audio_channel_runtime_t *ch = &s_channels[slot];
         ch->done = false;
         ch->waiter = NULL;
         if (ctx && ctx->cmd.path[0]) {
@@ -580,25 +777,29 @@ void audio_player_runtime_reader_started(const audio_reader_ctx_t *ctx)
 
 void audio_player_runtime_reader_finished(audio_reader_ctx_t *ctx)
 {
-    audio_player_channel_t channel = ctx ? normalize_channel(ctx->cmd.channel) : AUDIO_PLAYER_CHANNEL_EFFECT;
+    audio_runtime_slot_t runtime_slot = ctx ? (audio_runtime_slot_t)ctx->runtime_slot : AUDIO_RUNTIME_SLOT_EFFECT;
     TaskHandle_t waiter = NULL;
-    audio_reader_ctx_t *slot = ctx;
+    audio_reader_ctx_t *ctx_slot = ctx;
 
-    runtime_clear_active_path_if_matches(channel, ctx ? ctx->cmd.path : NULL);
-    audio_player_mixer_finish_stream(mixer_channel(channel));
+    if (runtime_slot < 0 || runtime_slot >= AUDIO_RUNTIME_SLOT_COUNT) {
+        runtime_slot = AUDIO_RUNTIME_SLOT_EFFECT;
+    }
+    runtime_clear_active_path_if_matches(runtime_slot, ctx ? ctx->cmd.path : NULL);
+    audio_player_mixer_finish_stream(mixer_channel_for_slot(runtime_slot));
 
     if (runtime_lock()) {
-        audio_channel_runtime_t *ch = &s_channels[channel];
+        audio_channel_runtime_t *ch = &s_channels[runtime_slot];
         ch->done = true;
         ch->task = NULL;
         waiter = ch->waiter;
         ch->waiter = NULL;
-        if (slot == &s_reader_ctxs[channel]) {
-            memset(slot, 0, sizeof(*slot));
-            s_reader_ctx_in_use[channel] = false;
+        if (ctx_slot == &s_reader_ctxs[runtime_slot]) {
+            memset(ctx_slot, 0, sizeof(*ctx_slot));
+            s_reader_ctx_in_use[runtime_slot] = false;
         }
-        if (!s_channels[AUDIO_PLAYER_CHANNEL_BACKGROUND].task &&
-            !s_channels[AUDIO_PLAYER_CHANNEL_EFFECT].task) {
+        if (!s_channels[AUDIO_RUNTIME_SLOT_BG_A].task &&
+            !s_channels[AUDIO_RUNTIME_SLOT_BG_B].task &&
+            !s_channels[AUDIO_RUNTIME_SLOT_EFFECT].task) {
             audio_player_status_set_runtime_state(AUDIO_RUNTIME_IDLE);
             s_runtime_state = AUDIO_RUNTIME_IDLE;
         }
@@ -666,10 +867,12 @@ bool audio_player_runtime_reader_snapshot(audio_player_channel_t channel,
 {
     bool ok = false;
     channel = normalize_channel(channel);
+    audio_runtime_slot_t slot = channel == AUDIO_PLAYER_CHANNEL_BACKGROUND ?
+        s_active_background_slot : AUDIO_RUNTIME_SLOT_EFFECT;
 
     if (runtime_lock()) {
-        audio_reader_ctx_t *ctx = &s_reader_ctxs[channel];
-        if (s_reader_ctx_in_use[channel]) {
+        audio_reader_ctx_t *ctx = &s_reader_ctxs[slot];
+        if (s_reader_ctx_in_use[slot]) {
             if (path && path_len > 0) {
                 strncpy(path, ctx->cmd.path, path_len - 1);
                 path[path_len - 1] = 0;
@@ -698,8 +901,8 @@ bool audio_player_runtime_reader_snapshot(audio_player_channel_t channel,
         return ok;
     }
 
-    audio_reader_ctx_t *ctx = &s_reader_ctxs[channel];
-    if (!s_reader_ctx_in_use[channel]) {
+    audio_reader_ctx_t *ctx = &s_reader_ctxs[slot];
+    if (!s_reader_ctx_in_use[slot]) {
         return false;
     }
     if (path && path_len > 0) {

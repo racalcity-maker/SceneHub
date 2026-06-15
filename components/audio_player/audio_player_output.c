@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "driver/gpio.h"
+#include "driver/i2s_common.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_check.h"
@@ -28,6 +29,7 @@
 #define AUDIO_FRAME_BYTES (AUDIO_CHANNELS * sizeof(int16_t))
 #define AUDIO_SILENCE_DRAIN_MS 50
 #define AUDIO_SILENCE_FRAMES 256
+#define AUDIO_START_PREROLL_FRAMES 256
 #define AUDIO_I2S_WRITE_WARN_MS 80
 #define AUDIO_MAX98357A_WAKE_DELAY_MS 2
 
@@ -41,6 +43,10 @@ static portMUX_TYPE s_tone_lock_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static DMA_ATTR int16_t s_silence_buf[AUDIO_SILENCE_FRAMES * AUDIO_CHANNELS];
 static DMA_ATTR int16_t s_tone_buf[256 * AUDIO_CHANNELS];
 static bool s_max98357a_sd_mode_ready = false;
+static uint32_t s_output_enable_count = 0;
+static uint32_t s_output_disable_count = 0;
+static uint32_t s_output_reset_count = 0;
+static uint32_t s_output_start_count = 0;
 
 static const char *audio_output_driver_name(void)
 {
@@ -198,6 +204,10 @@ static esp_err_t output_enable_locked(void)
             max98357a_set_shutdown(false);
             vTaskDelay(pdMS_TO_TICKS(AUDIO_MAX98357A_WAKE_DELAY_MS));
         }
+        ESP_LOGD(TAG,
+                 "i2s output enabled: count=%lu driver=%s",
+                 (unsigned long)++s_output_enable_count,
+                 audio_output_driver_name());
         return ESP_OK;
     }
     return err;
@@ -217,6 +227,10 @@ static void output_disable_locked(void)
     esp_err_t err = i2s_channel_disable(s_tx_chan);
     if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
         s_tx_enabled = false;
+        ESP_LOGD(TAG,
+                 "i2s output disabled: count=%lu driver=%s",
+                 (unsigned long)++s_output_disable_count,
+                 audio_output_driver_name());
     } else {
         ESP_LOGW(TAG, "i2s disable failed: %s", esp_err_to_name(err));
     }
@@ -259,7 +273,7 @@ static esp_err_t audio_player_output_setup(void)
     if (audio_output_is_max98357a()) {
         max98357a_set_shutdown(true);
     }
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "audio output ready: driver=%s bclk=%d ws=%d data=%d rate=%d sd_mode_gpio=%d",
              audio_output_driver_name(),
              I2S_BCK_PIN,
@@ -296,6 +310,47 @@ esp_err_t audio_player_output_enable(void)
     return err;
 }
 
+esp_err_t audio_player_output_start(void)
+{
+    esp_err_t err = output_ensure_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!output_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (s_tx_enabled) {
+        output_unlock();
+        return ESP_OK;
+    }
+    if (!s_tx_chan) {
+        output_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memset(s_silence_buf, 0, sizeof(s_silence_buf));
+    size_t loaded = 0;
+    err = i2s_channel_preload_data(s_tx_chan,
+                                   s_silence_buf,
+                                   AUDIO_START_PREROLL_FRAMES * AUDIO_CHANNELS * sizeof(int16_t),
+                                   &loaded);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "i2s preload before start failed: %s", esp_err_to_name(err));
+        output_unlock();
+        return err;
+    }
+    err = output_enable_locked();
+    if (err == ESP_OK) {
+        ESP_LOGD(TAG,
+                 "i2s output explicit start: count=%lu preload_bytes=%u driver=%s",
+                 (unsigned long)++s_output_start_count,
+                 (unsigned)loaded,
+                 audio_output_driver_name());
+    }
+    output_unlock();
+    return err;
+}
+
 void audio_player_output_disable(void)
 {
     if (output_ensure_lock() != ESP_OK || !output_lock()) {
@@ -320,6 +375,9 @@ void audio_player_output_resume(void)
 
 void audio_player_output_reset(void)
 {
+    ESP_LOGD(TAG,
+             "i2s output reset: count=%lu",
+             (unsigned long)++s_output_reset_count);
     audio_player_output_drain_silence(AUDIO_SILENCE_DRAIN_MS);
     if (output_ensure_lock() != ESP_OK || !output_lock()) {
         return;
@@ -341,6 +399,11 @@ void audio_player_output_reset(void)
 void audio_player_output_play_tone(int freq_hz, int duration_ms, int volume_percent)
 {
     if (!s_tx_chan) {
+        return;
+    }
+    esp_err_t start_err = audio_player_output_enable();
+    if (start_err != ESP_OK) {
+        ESP_LOGW(TAG, "tone output enable failed: %s", esp_err_to_name(start_err));
         return;
     }
 
@@ -415,7 +478,10 @@ esp_err_t audio_player_output_write(const void *data, size_t len, size_t *bytes_
         return ESP_ERR_TIMEOUT;
     }
 
-    err = output_enable_locked();
+    if (!s_tx_chan || !s_tx_enabled) {
+        output_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
 
     const uint8_t *src = (const uint8_t *)data;
 

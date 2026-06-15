@@ -70,6 +70,7 @@ void audio_player_stop(void);
 void audio_player_stop_background(void);
 void audio_player_stop_effect(void);
 void audio_player_stop_all(void);
+esp_err_t audio_player_stop_all_wait(uint32_t timeout_ms);
 void audio_player_pause(void);
 void audio_player_resume(void);
 int audio_player_get_volume(void);

@@ -10,6 +10,7 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
 
 typedef enum {
     AUDIO_FMT_UNKNOWN = 0,
@@ -38,6 +39,7 @@ typedef struct {
     int volume;
     float seek_ratio;
     bool repeat;
+    TaskHandle_t completion_task;
 } audio_cmd_t;
 
 typedef enum {
@@ -58,6 +60,8 @@ typedef struct {
 
 typedef struct {
     audio_cmd_t cmd;
+    uint8_t runtime_slot;
+    uint8_t mixer_channel;
     EventGroupHandle_t flags;
     EventBits_t stop_bit;
     int *bitrate_kbps;
@@ -71,7 +75,8 @@ typedef struct {
 } audio_reader_ctx_t;
 
 typedef enum {
-    AUDIO_MIXER_CHANNEL_BACKGROUND = 0,
+    AUDIO_MIXER_CHANNEL_BACKGROUND_A = 0,
+    AUDIO_MIXER_CHANNEL_BACKGROUND_B,
     AUDIO_MIXER_CHANNEL_EFFECT,
     AUDIO_MIXER_CHANNEL_COUNT,
 } audio_mixer_channel_t;
@@ -80,6 +85,7 @@ esp_err_t audio_player_volume_init(void);
 int *audio_player_volume_ptr(void);
 esp_err_t audio_player_output_init(void);
 esp_err_t audio_player_output_enable(void);
+esp_err_t audio_player_output_start(void);
 void audio_player_output_disable(void);
 void audio_player_output_pause(void);
 void audio_player_output_resume(void);
@@ -92,12 +98,15 @@ i2s_chan_handle_t audio_player_output_channel(void);
 esp_err_t audio_player_mixer_init(void);
 esp_err_t audio_player_mixer_start(void);
 void audio_player_mixer_start_stream(audio_mixer_channel_t channel);
+void audio_player_mixer_start_stream_muted(audio_mixer_channel_t channel);
 void audio_player_mixer_finish_stream(audio_mixer_channel_t channel);
 void audio_player_mixer_stop_stream(audio_mixer_channel_t channel);
 void audio_player_mixer_fade_out_stream(audio_mixer_channel_t channel, int duration_ms);
 bool audio_player_mixer_fade_out_active(audio_mixer_channel_t channel);
+void audio_player_mixer_set_stream_audible(audio_mixer_channel_t channel, bool audible);
 void audio_player_mixer_stop_all(void);
 bool audio_player_mixer_stream_active(audio_mixer_channel_t channel);
+bool audio_player_mixer_stream_primed(audio_mixer_channel_t channel);
 size_t audio_player_mixer_write(audio_mixer_channel_t channel, const void *data, size_t len);
 
 esp_err_t audio_player_status_init(void);
@@ -118,7 +127,8 @@ int audio_player_runtime_volume(void);
 esp_err_t audio_player_runtime_init(void);
 esp_err_t audio_player_runtime_start(void);
 esp_err_t audio_player_runtime_enqueue(const audio_cmd_t *cmd);
-audio_reader_ctx_t *audio_player_runtime_create_reader_ctx(const audio_cmd_t *cmd);
+esp_err_t audio_player_runtime_enqueue_wait(const audio_cmd_t *cmd, uint32_t timeout_ms);
+audio_reader_ctx_t *audio_player_runtime_create_reader_ctx(const audio_cmd_t *cmd, uint8_t runtime_slot);
 void audio_player_runtime_destroy_reader_ctx(audio_reader_ctx_t *ctx);
 esp_err_t audio_player_runtime_prepare_seek(audio_cmd_t *cmd, uint32_t pos_ms);
 void audio_player_runtime_reader_started(const audio_reader_ctx_t *ctx);

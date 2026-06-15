@@ -22,6 +22,7 @@
 - `MEMORY_ALLOCATION_POLICY.md` - runtime/audio allocation policy, audit and cleanup checklist.
 - `LOCKING_POLICY.md` - lock ownership, ordering and external-call rules.
 - `HUB_AUDIT_P0_P1_PLAN.md` - hub-side audit status plus remaining follow-up for write boundaries, policy enforcement and result lifecycle.
+- `AUDIO_PIPELINE_REFACTOR_PLAN.md` - active audio pipeline refactor plan for pop-free background/effect playback.
 - `NODE_DESCRIBE_INTERFACE_REFACTOR_PLAN.md` - deferred node manifest size/budget refactor plan.
 
 ## Completed Plans Retired Into Durable Docs

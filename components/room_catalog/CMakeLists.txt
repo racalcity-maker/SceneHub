@@ -5,5 +5,5 @@ idf_component_register(
         "storage/room_catalog_persistence.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
-    REQUIRES json sd_storage
+    REQUIRES json sd_storage scenehub_config
 )

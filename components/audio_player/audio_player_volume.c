@@ -43,7 +43,7 @@ esp_err_t audio_player_volume_init(void)
         uint8_t v = 0;
         if (nvs_get_u8(h, "vol", &v) == ESP_OK) {
             s_volume = v;
-            ESP_LOGI(TAG, "volume loaded from NVS: %d", v);
+            ESP_LOGD(TAG, "volume loaded from NVS: %d", v);
         }
         nvs_close(h);
     }

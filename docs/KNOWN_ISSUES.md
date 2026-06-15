@@ -1,4 +1,7 @@
+добавить к нодам возможность кастомного джейсон, и при этом возможность работать автономно без хаба
+выставив настройку в интерфейсе либо кастомный джейсон на автомате либо через сценхаб
 # Known Issues
+
 
 This file is the single active backlog for open product, runtime and
 architecture issues.
@@ -29,7 +32,13 @@ ordering.
 
 ### P1 - Runtime Performance
 
-No active P1 defect is currently tracked.
+Active P1 defects:
+
+- Audio playback can pop/click when starting background audio, switching
+  background tracks, or starting MP3 effects over active background audio. This
+  is tracked in `docs/AUDIO_PIPELINE_REFACTOR_PLAN.md`. The target model is a
+  mixer-owned output lifecycle, continuous I2S writer behavior while running,
+  and source priming before a track/effect becomes audible.
 
 Remaining verification work:
 

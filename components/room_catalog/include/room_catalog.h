@@ -6,12 +6,13 @@
 
 #include "cJSON.h"
 #include "esp_err.h"
+#include "scenehub_config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define ROOM_CATALOG_MAX_ROOMS 2
+#define ROOM_CATALOG_MAX_ROOMS CONFIG_SCENEHUB_MAX_ROOMS
 #define ROOM_CATALOG_ROOM_ID_MAX_LEN 32
 #define ROOM_CATALOG_ROOM_NAME_MAX_LEN 64
 #define ROOM_CATALOG_STORAGE_PATH "/sdcard/quest/rooms.json"
