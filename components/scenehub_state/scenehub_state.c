@@ -526,6 +526,7 @@ void scenehub_state_notify_invalidation(scenehub_state_slice_t slice,
 
     payload = (ws_runtime_versions_changed_t){
         .generation = s_ws_versions_generation,
+        .snapshot_generation = s_ws_versions_generation,
         .rooms = versions.rooms,
         .devices = versions.devices,
         .scenarios = versions.scenarios,

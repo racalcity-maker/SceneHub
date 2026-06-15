@@ -56,6 +56,31 @@ static bool mqtt_authenticate_client(const char *client_id, const char *username
     return false;
 }
 
+int mqtt_parse_connect_client_id(const uint8_t *buf,
+                                 size_t len,
+                                 char *client_id,
+                                 size_t client_id_len)
+{
+    size_t off = 0;
+    char proto[8];
+
+    if (!buf || !client_id || client_id_len == 0) {
+        return -1;
+    }
+    client_id[0] = '\0';
+    if (parse_utf8_str(buf, len, &off, proto, sizeof(proto)) != 0) {
+        return -1;
+    }
+    if (strcmp(proto, "MQTT") != 0 && strcmp(proto, "MQIsdp") != 0) {
+        return -1;
+    }
+    if (off + 4 > len) {
+        return -1;
+    }
+    off += 4;
+    return parse_utf8_str(buf, len, &off, client_id, client_id_len);
+}
+
 bool mqtt_upsert_subscription(mqtt_session_t *sess,
                               const char *topic,
                               uint8_t requested_qos,
@@ -155,9 +180,10 @@ int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
     off += 2;
 
     char client_id[CONFIG_STORE_CLIENT_ID_MAX];
-    if (parse_utf8_str(buf, len, &off, client_id, sizeof(client_id)) != 0) {
+    if (mqtt_parse_connect_client_id(buf, len, client_id, sizeof(client_id)) != 0) {
         return -1;
     }
+    off += 2 + strlen(client_id);
 
     if (level != 4) {
         ESP_LOGE(TAG, "Unsupported MQTT protocol level %u. Only 3.1.1 is supported.", level);
@@ -171,7 +197,7 @@ int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
         old->suppress_will = true;
         old_sock = request_session_prepare_close_locked(old, "duplicate client_id", 0);
     }
-    strncpy(sess->client_id, client_id, sizeof(sess->client_id) - 1);  // ← сюда
+    strncpy(sess->client_id, client_id, sizeof(sess->client_id) - 1);
     unlock();
     request_session_close_socket(old_sock);
 
@@ -329,11 +355,29 @@ int handle_publish(mqtt_session_t *sess, uint8_t header, uint8_t *buf, size_t le
     buf[off + payload_len] = 0;
     char *payload = (char *)(buf + off);
 
+    if (qos == 1 && send_puback(sess, pid) < 0) {
+        return -1;
+    }
+
     mqtt_core_inject_message(topic, payload);
     publish_to_subscribers(topic, payload, qos, retain, NULL);
 
-    if (qos == 1) {
-        send_puback(sess, pid);
+    return 0;
+}
+
+int handle_puback(mqtt_session_t *sess, const uint8_t *buf, size_t len)
+{
+    if (!sess || !buf || len != 2) {
+        return -1;
+    }
+    uint16_t packet_id = ((uint16_t)buf[0] << 8) | buf[1];
+    if (packet_id == 0) {
+        return -1;
+    }
+    if (!mqtt_qos1_handle_puback(sess, packet_id)) {
+        ESP_LOGD(TAG, "PUBACK for completed/unknown packet id=%u client=%s",
+                 packet_id,
+                 sess->client_id[0] ? sess->client_id : "<unknown>");
     }
     return 0;
 }

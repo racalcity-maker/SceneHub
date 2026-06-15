@@ -41,6 +41,8 @@ esp_err_t gm_hint_send_handler(httpd_req_t *req)
     const cJSON *message_item = NULL;
     const char *room_id = NULL;
     const char *message = NULL;
+    char room_id_buf[QUEST_ROOM_ID_MAX_LEN] = {0};
+    char message_buf[513] = {0};
     int64_t t0 = gm_hint_perf_start();
     scenehub_control_result_t result = {0};
 
@@ -79,13 +81,18 @@ esp_err_t gm_hint_send_handler(httpd_req_t *req)
         cJSON_Delete(json);
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "room_id/message required");
     }
+    if (snprintf(room_id_buf, sizeof(room_id_buf), "%s", room_id) >= (int)sizeof(room_id_buf) ||
+        snprintf(message_buf, sizeof(message_buf), "%s", message) >= (int)sizeof(message_buf)) {
+        cJSON_Delete(json);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "room_id/message too long");
+    }
 
     cJSON_Delete(json);
-    esp_err_t err = scenehub_control_hint_send("http", room_id, message, &result);
+    esp_err_t err = scenehub_control_hint_send("http", room_id_buf, message_buf, &result);
     if (!web_ui_scenehub_control_is_done(err, &result)) {
         return web_ui_send_scenehub_control_error(req, err, &result, "hint send failed");
     }
-    gm_hint_perf_log("POST hint send", t0, room_id);
+    gm_hint_perf_log("POST hint send", t0, room_id_buf);
     return web_ui_send_scenehub_control_ack(req);
 }
 

@@ -2,6 +2,7 @@
 
 #include <errno.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
@@ -20,6 +21,63 @@ static void configure_session_recv_timeout(mqtt_session_t *sess)
         .tv_usec = 0,
     };
     setsockopt(sess->sock, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof(tmo));
+}
+
+static bool read_connect_client_id_for_eviction(int sock, char *client_id, size_t client_id_len)
+{
+    uint8_t header = 0;
+    int rem = 0;
+    uint8_t *pkt = NULL;
+    bool ok = false;
+
+    if (!client_id || client_id_len == 0) {
+        return false;
+    }
+    client_id[0] = '\0';
+    if (recv_all(sock, &header, 1) != 1 ||
+        (header >> 4) != 1 ||
+        read_remaining_length(sock, &rem) < 0 ||
+        rem > MQTT_MAX_PACKET) {
+        return false;
+    }
+    pkt = heap_caps_malloc((size_t)rem + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!pkt) {
+        pkt = heap_caps_malloc((size_t)rem + 1, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!pkt) {
+        return false;
+    }
+    if (recv_all(sock, pkt, (size_t)rem) == rem) {
+        pkt[rem] = 0;
+        ok = mqtt_parse_connect_client_id(pkt, (size_t)rem, client_id, client_id_len) == 0;
+    }
+    heap_caps_free(pkt);
+    return ok;
+}
+
+static bool evict_duplicate_client_from_full_pool(int sock)
+{
+    char client_id[CONFIG_STORE_CLIENT_ID_MAX] = {0};
+    int old_sock = -1;
+    bool evicted = false;
+
+    if (!read_connect_client_id_for_eviction(sock, client_id, sizeof(client_id))) {
+        return false;
+    }
+
+    lock();
+    mqtt_session_t *old = find_session_by_client_id(client_id);
+    if (old) {
+        old->suppress_will = true;
+        old_sock = request_session_prepare_close_locked(old, "duplicate client_id while full", 0);
+        evicted = true;
+    }
+    unlock();
+    request_session_close_socket(old_sock);
+    if (evicted) {
+        ESP_LOGW(TAG, "mqtt pool full; evicted duplicate client_id=%s", client_id);
+    }
+    return evicted;
 }
 
 static void handle_client(void *param)
@@ -58,6 +116,7 @@ static void handle_client(void *param)
                 break;
             }
             if (err == EAGAIN || err == EWOULDBLOCK) {
+                mqtt_qos1_retry_due(sess);
                 int64_t idle_ms = now_ms() - sess->last_rx_ms;
                 int64_t limit_ms = (sess->keepalive > 0) ? (int64_t)sess->keepalive * 1500 : 60000;
                 if (idle_ms >= limit_ms) {
@@ -86,6 +145,12 @@ static void handle_client(void *param)
                 goto cleanup;
             }
             break;
+        case 4:
+            if (handle_puback(sess, pkt, rem) < 0) {
+                ESP_LOGW(TAG, "PUBACK parse fail");
+                goto cleanup;
+            }
+            break;
         case 8:
             if (handle_subscribe(sess, pkt, rem) < 0) {
                 ESP_LOGW(TAG, "subscribe parse fail");
@@ -108,6 +173,7 @@ static void handle_client(void *param)
             ESP_LOGW(TAG, "unsupported packet type %u", type);
             goto cleanup;
         }
+        mqtt_qos1_retry_due(sess);
         if (sess->keepalive > 0) {
             int64_t idle_ms = now_ms() - sess->last_rx_ms;
             if (idle_ms >= (int64_t)(sess->keepalive * 1500)) {
@@ -119,9 +185,7 @@ static void handle_client(void *param)
 
 cleanup:
     send_will_if_needed(sess);
-    lock();
     free_session(sess);
-    unlock();
     vTaskDelete(NULL);
 }
 
@@ -147,21 +211,21 @@ static void accept_task(void *param)
 
         lock();
         mqtt_session_t *sess = alloc_session();
-        size_t slot = session_index(sess);
         unlock();
         if (!sess) {
-            ESP_LOGW(TAG, "too many clients");
+            if (!evict_duplicate_client_from_full_pool(sock)) {
+                ESP_LOGW(TAG, "too many clients");
+            }
             shutdown(sock, SHUT_RDWR);
             closesocket(sock);
             continue;
         }
+        size_t slot = session_index(sess);
         if (slot >= MQTT_MAX_CLIENTS || !ensure_session_task_storage(slot)) {
             ESP_LOGE(TAG, "no memory for client task");
             shutdown(sock, SHUT_RDWR);
             closesocket(sock);
-            lock();
             free_session(sess);
-            unlock();
             continue;
         }
 
@@ -172,9 +236,7 @@ static void accept_task(void *param)
             ESP_LOGE(TAG, "failed to start client task");
             shutdown(sock, SHUT_RDWR);
             closesocket(sock);
-            lock();
             free_session(sess);
-            unlock();
             continue;
         }
         sess->task = task;

@@ -818,7 +818,7 @@ def main():
     parser = argparse.ArgumentParser(description="ESP32 MQTT protocol semantics test")
     parser.add_argument("--host", required=True, help="IP address of ESP32 MQTT broker")
     parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--max-clients", type=int, default=20, dest="max_clients")
+    parser.add_argument("--max-clients", type=int, default=24, dest="max_clients")
     parser.add_argument("--max-subs", type=int, default=16, dest="max_subs")
     parser.add_argument("--duration", type=int, default=60,
                         help="Duration in seconds for random soak test")

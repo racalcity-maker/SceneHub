@@ -22,6 +22,12 @@
 #define MQTT_RETAIN_MAX        32
 #define MQTT_CLIENT_STACK      8192
 #define MQTT_ACCEPT_STACK      4096
+#define MQTT_QOS1_MAX_INFLIGHT 64
+#define MQTT_QOS1_RETRY_MS     2000
+#define MQTT_QOS1_MAX_SEND_ATTEMPTS 8
+#define MQTT_QOS1_MAX_PENDING_BYTES (512 * 1024)
+#define MQTT_SEND_FAILED       (-1)
+#define MQTT_SEND_PARTIAL_FAIL (-2)
 
 typedef struct {
     bool in_use;
@@ -45,19 +51,31 @@ typedef struct {
 } will_t;
 
 typedef struct {
+    bool in_use;
+    uint16_t packet_id;
+    uint8_t *packet;
+    size_t packet_len;
+    int64_t last_send_ms;
+    uint32_t send_count;
+} mqtt_qos1_pending_t;
+
+typedef struct {
     int sock;
     TaskHandle_t task;
     SemaphoreHandle_t tx_lock;
     StaticSemaphore_t tx_lock_buf;
     bool active;
     bool closing;
+    bool retiring;
     bool suppress_will;
+    int64_t reusable_after_ms;
     char client_id[CONFIG_STORE_CLIENT_ID_MAX];
     uint16_t keepalive;
     int64_t last_rx_ms;
     mqtt_subscription_t subs[MQTT_MAX_SUBS];
     size_t sub_count;
     will_t will;
+    mqtt_qos1_pending_t qos1_pending[MQTT_QOS1_MAX_INFLIGHT];
 } mqtt_session_t;
 
 extern mqtt_session_t *s_sessions;
@@ -152,7 +170,16 @@ int send_publish_packet(mqtt_session_t *sess,
                         uint8_t qos,
                         bool retain,
                         uint16_t pid);
+bool mqtt_qos1_handle_puback(mqtt_session_t *sess, uint16_t packet_id);
+void mqtt_qos1_retry_due(mqtt_session_t *sess);
+void mqtt_qos1_clear_session_locked(mqtt_session_t *sess);
+size_t mqtt_qos1_pending_count(const mqtt_session_t *sess);
 int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len);
+int mqtt_parse_connect_client_id(const uint8_t *buf,
+                                 size_t len,
+                                 char *client_id,
+                                 size_t client_id_len);
 int handle_subscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len);
 int handle_unsubscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len);
 int handle_publish(mqtt_session_t *sess, uint8_t header, uint8_t *buf, size_t len);
+int handle_puback(mqtt_session_t *sess, const uint8_t *buf, size_t len);

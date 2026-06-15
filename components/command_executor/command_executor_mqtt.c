@@ -406,7 +406,7 @@ esp_err_t command_executor_execute_mqtt(const char *client_id,
         }
     }
 
-    err = mqtt_core_publish(topic, mqtt_payload);
+    err = mqtt_core_publish_qos(topic, mqtt_payload, 1);
     if (err != ESP_OK) {
         if (command->result_required) {
             command_executor_clear_pending(request_id);

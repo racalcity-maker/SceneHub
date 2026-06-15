@@ -33,6 +33,51 @@ static bool s_command_task_started;
 static StaticQueue_t s_command_queue_storage;
 static uint8_t s_command_queue_buffer[NODE_MQTT_COMMAND_QUEUE_LEN * sizeof(node_mqtt_command_message_t)];
 static QueueHandle_t s_command_queue;
+static StaticQueue_t s_result_queue_storage;
+static uint8_t s_result_queue_buffer[NODE_MQTT_RESULT_QUEUE_LEN * sizeof(node_mqtt_deferred_result_t)];
+static QueueHandle_t s_result_queue;
+
+static void enqueue_deferred_result(const node_mqtt_command_message_t *message,
+                                    const char *status,
+                                    const char *error_code)
+{
+    node_mqtt_deferred_result_t result = {0};
+
+    if (message) {
+        snprintf(result.request_id, sizeof(result.request_id), "%s", message->request_id);
+        snprintf(result.command, sizeof(result.command), "%s", message->command);
+    }
+    snprintf(result.status, sizeof(result.status), "%s", status ? status : "failed");
+    snprintf(result.error_code, sizeof(result.error_code), "%s", error_code ? error_code : "internal_error");
+
+    if (!s_result_queue || xQueueSend(s_result_queue, &result, 0) != pdPASS) {
+        ESP_LOGW(TAG, "result queue full; dropping terminal result request_id=%s", result.request_id);
+    }
+}
+
+static void publish_deferred_result(const node_mqtt_deferred_result_t *result)
+{
+    if (!result) {
+        return;
+    }
+    esp_err_t err = node_mqtt_publish_result_fields_reliable(result->request_id,
+                                                             result->command,
+                                                             result->status,
+                                                             result->error_code,
+                                                             NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "failed to publish deferred result request_id=%s", result->request_id);
+    }
+}
+
+static void drain_deferred_results(void)
+{
+    node_mqtt_deferred_result_t result;
+
+    while (s_result_queue && xQueueReceive(s_result_queue, &result, 0) == pdPASS) {
+        publish_deferred_result(&result);
+    }
+}
 
 static void mqtt_event_handler(void *handler_args,
                                esp_event_base_t base,
@@ -76,14 +121,7 @@ static void mqtt_event_handler(void *handler_args,
 
         if (!s_command_queue || xQueueSend(s_command_queue, &message, 0) != pdPASS) {
             ESP_LOGW(TAG, "command queue full");
-            if (message.valid && node_mqtt_publish_lock(portMAX_DELAY)) {
-                node_mqtt_publish_result_fields_locked(message.request_id,
-                                                       message.command,
-                                                       "rejected",
-                                                       "busy",
-                                                       NULL);
-                node_mqtt_publish_unlock();
-            }
+            enqueue_deferred_result(&message, "rejected", message.valid ? "busy" : "invalid_request");
         }
         break;
     }
@@ -148,7 +186,8 @@ static void command_task(void *arg)
 
     (void)arg;
     while (true) {
-        if (xQueueReceive(s_command_queue, &message, portMAX_DELAY) == pdPASS) {
+        drain_deferred_results();
+        if (xQueueReceive(s_command_queue, &message, pdMS_TO_TICKS(100)) == pdPASS) {
             node_mqtt_process_command_message(&message);
         }
     }
@@ -171,6 +210,15 @@ esp_err_t node_mqtt_transport_start(const node_config_t *config)
                                              s_command_queue_buffer,
                                              &s_command_queue_storage);
         if (!s_command_queue) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    if (!s_result_queue) {
+        s_result_queue = xQueueCreateStatic(NODE_MQTT_RESULT_QUEUE_LEN,
+                                            sizeof(node_mqtt_deferred_result_t),
+                                            s_result_queue_buffer,
+                                            &s_result_queue_storage);
+        if (!s_result_queue) {
             return ESP_ERR_NO_MEM;
         }
     }

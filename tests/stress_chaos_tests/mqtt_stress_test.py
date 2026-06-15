@@ -3,12 +3,12 @@ mqtt_stress_test.py  —  stress / chaos тест для embedded MQTT брок�
 
 Запуск:
     pip install paho-mqtt
-    python mqtt_stress_test.py --host 192.168.1.XX --max-clients 20
+    python mqtt_stress_test.py --host 192.168.1.XX --max-clients 24
 
 Параметры:
     --host          IP адрес ESP32 (обязательно)
     --port          MQTT порт (default 1883)
-    --max-clients   значение SCENEHUB_MQTT_MAX_CLIENTS из sdkconfig (default 20)
+    --max-clients   значение SCENEHUB_MQTT_MAX_CLIENTS из sdkconfig (default 25)
     --rounds        сколько раз гонять churn-тест (default 5)
     --keepalive     keepalive в секундах (default 10)
     --verbose       подробный лог каждого события
@@ -905,7 +905,7 @@ def main():
     parser = argparse.ArgumentParser(description="ESP32 MQTT broker stress test")
     parser.add_argument("--host",        required=True,       help="IP адрес ESP32")
     parser.add_argument("--port",        type=int, default=1883)
-    parser.add_argument("--max-clients", type=int, default=20, dest="max_clients",
+    parser.add_argument("--max-clients", type=int, default=24, dest="max_clients",
                         help="SCENEHUB_MQTT_MAX_CLIENTS из sdkconfig")
     parser.add_argument("--rounds",      type=int, default=5,
                         help="Кол-во раундов churn-теста")

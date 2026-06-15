@@ -19,6 +19,9 @@
 #define NODE_MQTT_ARGS_MAX 1024
 #define NODE_MQTT_DUP_CACHE_SIZE 4
 #define NODE_MQTT_COMMAND_QUEUE_LEN 4
+#define NODE_MQTT_RESULT_QUEUE_LEN 8
+#define NODE_MQTT_RESULT_PUBLISH_RETRIES 4
+#define NODE_MQTT_RESULT_RETRY_DELAY_MS 100
 #define NODE_MQTT_HEARTBEAT_MS 2000
 
 typedef struct {
@@ -35,6 +38,13 @@ typedef struct {
     char command[NODE_MQTT_COMMAND_MAX];
     char args_json[NODE_MQTT_ARGS_MAX];
 } node_mqtt_command_message_t;
+
+typedef struct {
+    char request_id[NODE_MQTT_REQUEST_ID_MAX];
+    char command[NODE_MQTT_COMMAND_MAX];
+    char status[16];
+    char error_code[32];
+} node_mqtt_deferred_result_t;
 
 extern node_config_t g_node_mqtt_config;
 extern esp_mqtt_client_handle_t g_node_mqtt_client;
@@ -58,9 +68,17 @@ esp_err_t node_mqtt_publish_result_fields_locked(const char *request_id,
                                                  const char *status,
                                                  const char *error_code,
                                                  const char *data_json);
+esp_err_t node_mqtt_publish_result_fields_reliable(const char *request_id,
+                                                   const char *command,
+                                                   const char *status,
+                                                   const char *error_code,
+                                                   const char *data_json);
 esp_err_t node_mqtt_publish_result_locked(const char *request_id,
                                           const char *command,
                                           const node_control_result_t *result);
+esp_err_t node_mqtt_publish_result_reliable(const char *request_id,
+                                            const char *command,
+                                            const node_control_result_t *result);
 esp_err_t node_mqtt_publish_status_locked(void);
 esp_err_t node_mqtt_publish_event_locked(const char *event_name, const char *args_json);
 void node_mqtt_publish_heartbeat_and_status(bool include_status);

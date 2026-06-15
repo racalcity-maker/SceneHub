@@ -11,6 +11,7 @@ esp_err_t mqtt_core_start(void);
 
 // Публикация наружу (клиенты MQTT получат сообщение).
 esp_err_t mqtt_core_publish(const char *topic, const char *payload);
+esp_err_t mqtt_core_publish_qos(const char *topic, const char *payload, uint8_t qos);
 
 // Инъекция входящего MQTT сообщения в шину событий (парсинг топика -> event type).
 esp_err_t mqtt_core_inject_message(const char *topic, const char *payload);

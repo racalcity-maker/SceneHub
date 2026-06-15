@@ -1,0 +1,46 @@
+# SceneHub Node stress-test interactive commands
+#
+# Paste one line at a time after the prompt:
+#   scenehub-nodes>
+#
+# Node selector:
+#   1                 -> scenehubnode_1
+#   scenehubnode_1    -> scenehubnode_1
+#   all               -> all connected emulated nodes
+#
+# Input values accept:
+#   1 / on / true / high
+#   0 / off / false / low
+
+# Set one input on one node.
+input 1 1 1
+input 1 1 0
+input scenehubnode_2 4 on
+input scenehubnode_2 4 off
+
+# Set one input on all 20 nodes.
+input all 1 1
+input all 1 0
+input all 4 high
+input all 4 low
+
+# Generate a rising edge followed by a falling edge.
+# Default duration is 100 ms.
+pulse 1 1
+pulse 1 2 500
+pulse all 3 100
+
+# Set all four inputs on one node.
+inputs 1 1 0 0 0
+inputs 1 0 1 0 1
+
+# Set all four inputs on every node.
+inputs all 0 0 0 0
+inputs all 1 1 1 1
+
+# Show connections and available commands.
+status
+help
+
+# Disconnect clients and exit.
+quit

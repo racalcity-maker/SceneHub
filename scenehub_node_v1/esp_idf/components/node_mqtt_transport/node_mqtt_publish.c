@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "esp_timer.h"
+#include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "node_protocol.h"
 
@@ -91,7 +92,34 @@ esp_err_t node_mqtt_publish_result_fields_locked(const char *request_id,
     if (n < 0 || (size_t)n >= sizeof(s_tx_payload) - len) {
         return ESP_ERR_NO_MEM;
     }
-    return publish_locked(s_topic, s_tx_payload, 0, false);
+    return publish_locked(s_topic, s_tx_payload, 1, false);
+}
+
+esp_err_t node_mqtt_publish_result_fields_reliable(const char *request_id,
+                                                   const char *command,
+                                                   const char *status,
+                                                   const char *error_code,
+                                                   const char *data_json)
+{
+    esp_err_t last_err = ESP_FAIL;
+
+    for (uint8_t attempt = 0; attempt < NODE_MQTT_RESULT_PUBLISH_RETRIES; ++attempt) {
+        if (node_mqtt_publish_lock(pdMS_TO_TICKS(500))) {
+            last_err = node_mqtt_publish_result_fields_locked(request_id,
+                                                             command,
+                                                             status,
+                                                             error_code,
+                                                             data_json);
+            node_mqtt_publish_unlock();
+            if (last_err == ESP_OK) {
+                return ESP_OK;
+            }
+        } else {
+            last_err = ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(NODE_MQTT_RESULT_RETRY_DELAY_MS));
+    }
+    return last_err;
 }
 
 esp_err_t node_mqtt_publish_result_locked(const char *request_id,
@@ -103,6 +131,17 @@ esp_err_t node_mqtt_publish_result_locked(const char *request_id,
                                                   result ? result->status : "failed",
                                                   result ? result->error_code : "internal_error",
                                                   result ? result->data_json : NULL);
+}
+
+esp_err_t node_mqtt_publish_result_reliable(const char *request_id,
+                                            const char *command,
+                                            const node_control_result_t *result)
+{
+    return node_mqtt_publish_result_fields_reliable(request_id,
+                                                   command,
+                                                   result ? result->status : "failed",
+                                                   result ? result->error_code : "internal_error",
+                                                   result ? result->data_json : NULL);
 }
 
 esp_err_t node_mqtt_publish_status_locked(void)

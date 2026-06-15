@@ -75,11 +75,21 @@ config SCENEHUB_SD_CS_PIN
 
 config SCENEHUB_MQTT_MAX_CLIENTS
     int "Maximum simultaneous MQTT clients"
-    default 20
+    default 25
     range 1 64
     help
         Number of concurrent MQTT sessions the embedded broker accepts.
         Higher values increase PSRAM usage.
+
+config SCENEHUB_MAX_ROOMS
+    int "Maximum room slots"
+    default 1
+    range 1 4
+    help
+        Maximum number of room catalog/session slots compiled into the hub.
+        Higher values increase static PSRAM usage because GM runtime state,
+        prepared event references and read-model room projections scale with
+        this value.
 
 config SCENEHUB_EVENT_BUS_SKIP_EVENT_VALIDATION
     bool "Skip event bus event validation"

@@ -355,7 +355,7 @@ static void scenehub_control_stop_audio(void)
 {
     (void)command_executor_execute_device_command(QUEST_DEVICE_SYSTEM_AUDIO_ID,
                                                   "stop",
-                                                  "{\"channel\":\"all\"}");
+                                                  "{\"channel\":\"all\",\"wait\":true}");
 }
 
 esp_err_t scenehub_control_init(void)

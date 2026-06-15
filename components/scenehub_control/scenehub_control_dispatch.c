@@ -79,7 +79,7 @@ static esp_err_t scenehub_control_dispatch_publish_describe_interface(const char
              "{\"request_id\":\"%s\",\"command\":\"describe_interface\",\"args\":{},\"ts_ms\":%llu}",
              request_id,
              (unsigned long long)now_ms);
-    return mqtt_core_publish(topic, payload);
+    return mqtt_core_publish_qos(topic, payload, 1);
 }
 
 static cJSON *scenehub_control_dispatch_extract_device_description(const char *data_json)

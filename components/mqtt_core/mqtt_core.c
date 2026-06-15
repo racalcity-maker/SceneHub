@@ -196,6 +196,7 @@ int request_session_prepare_close_locked(mqtt_session_t *sess,
     const char *cid = sess->client_id[0] ? sess->client_id : "<unknown>";
     ESP_LOGW(TAG, "%s for %s (err=%d)", reason ? reason : "session closing", cid, err);
     sess->closing = true;
+    sess->sub_count = 0;
     if (sess->sock >= 0) {
         close_sock = sess->sock;
         sess->sock = -1;
@@ -325,13 +326,21 @@ esp_err_t mqtt_core_start(void)
 
 esp_err_t mqtt_core_publish(const char *topic, const char *payload)
 {
+    return mqtt_core_publish_qos(topic, payload, 0);
+}
+
+esp_err_t mqtt_core_publish_qos(const char *topic, const char *payload, uint8_t qos)
+{
     if (!topic || !payload) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (qos > 1) {
+        return ESP_ERR_NOT_SUPPORTED;
     }
     if (!s_sessions || !s_lock) {
         return ESP_ERR_INVALID_STATE;
     }
-    publish_to_subscribers(topic, payload, 0, false, NULL);
+    publish_to_subscribers(topic, payload, qos, false, NULL);
     return ESP_OK;
 }
 

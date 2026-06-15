@@ -1,5 +1,6 @@
 #include "ws_runtime.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -45,8 +46,12 @@ static uint32_t s_snapshot_generation = 1;
 static SemaphoreHandle_t s_state_mutex = NULL;
 static StaticSemaphore_t s_state_mutex_storage;
 static portMUX_TYPE s_state_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
-static char s_ws_envelope_json[WS_RUNTIME_ENVELOPE_JSON_MAX];
-static char s_ws_payload_json[WS_RUNTIME_PAYLOAD_JSON_MAX];
+
+typedef struct {
+    char *buf;
+    size_t cap;
+    size_t len;
+} ws_json_writer_t;
 
 static esp_err_t ws_runtime_state_lock(void)
 {
@@ -116,6 +121,158 @@ static uint32_t ws_runtime_now_ms(void)
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
 
+static void ws_json_init(ws_json_writer_t *writer, char *buf, size_t cap)
+{
+    writer->buf = buf;
+    writer->cap = cap;
+    writer->len = 0;
+    if (cap > 0) {
+        buf[0] = '\0';
+    }
+}
+
+static esp_err_t ws_json_putn(ws_json_writer_t *writer, const char *text, size_t len)
+{
+    if (!writer || !writer->buf || !text || writer->cap == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (len >= writer->cap - writer->len) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    memcpy(writer->buf + writer->len, text, len);
+    writer->len += len;
+    writer->buf[writer->len] = '\0';
+    return ESP_OK;
+}
+
+static esp_err_t ws_json_puts(ws_json_writer_t *writer, const char *text)
+{
+    return ws_json_putn(writer, text, strlen(text));
+}
+
+static esp_err_t ws_json_putc(ws_json_writer_t *writer, char ch)
+{
+    return ws_json_putn(writer, &ch, 1);
+}
+
+static esp_err_t ws_json_put_u32(ws_json_writer_t *writer, uint32_t value)
+{
+    char tmp[16];
+    int written = snprintf(tmp, sizeof(tmp), "%lu", (unsigned long)value);
+    if (written < 0 || written >= (int)sizeof(tmp)) {
+        return ESP_ERR_NO_MEM;
+    }
+    return ws_json_putn(writer, tmp, (size_t)written);
+}
+
+static esp_err_t ws_json_put_string(ws_json_writer_t *writer, const char *value)
+{
+    const unsigned char *p = (const unsigned char *)(value ? value : "");
+    esp_err_t err = ws_json_putc(writer, '"');
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    while (*p) {
+        char escape[7];
+        switch (*p) {
+        case '"':
+            err = ws_json_puts(writer, "\\\"");
+            break;
+        case '\\':
+            err = ws_json_puts(writer, "\\\\");
+            break;
+        case '\b':
+            err = ws_json_puts(writer, "\\b");
+            break;
+        case '\f':
+            err = ws_json_puts(writer, "\\f");
+            break;
+        case '\n':
+            err = ws_json_puts(writer, "\\n");
+            break;
+        case '\r':
+            err = ws_json_puts(writer, "\\r");
+            break;
+        case '\t':
+            err = ws_json_puts(writer, "\\t");
+            break;
+        default:
+            if (*p < 0x20) {
+                snprintf(escape, sizeof(escape), "\\u%04x", (unsigned int)*p);
+                err = ws_json_puts(writer, escape);
+            } else {
+                err = ws_json_putc(writer, (char)*p);
+            }
+            break;
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+        ++p;
+    }
+
+    return ws_json_putc(writer, '"');
+}
+
+static esp_err_t ws_json_field_name(ws_json_writer_t *writer, bool *first, const char *name)
+{
+    esp_err_t err = ESP_OK;
+    if (!first || !name) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!*first) {
+        err = ws_json_putc(writer, ',');
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    *first = false;
+
+    err = ws_json_put_string(writer, name);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return ws_json_putc(writer, ':');
+}
+
+static esp_err_t ws_json_put_string_field(ws_json_writer_t *writer,
+                                          bool *first,
+                                          const char *name,
+                                          const char *value)
+{
+    esp_err_t err = ws_json_field_name(writer, first, name);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return ws_json_put_string(writer, value);
+}
+
+static esp_err_t ws_json_put_u32_field(ws_json_writer_t *writer,
+                                       bool *first,
+                                       const char *name,
+                                       uint32_t value)
+{
+    esp_err_t err = ws_json_field_name(writer, first, name);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return ws_json_put_u32(writer, value);
+}
+
+static esp_err_t ws_json_put_raw_field(ws_json_writer_t *writer,
+                                       bool *first,
+                                       const char *name,
+                                       const char *json)
+{
+    esp_err_t err = ws_json_field_name(writer, first, name);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return ws_json_puts(writer, json ? json : "null");
+}
+
 static esp_err_t send_text_to_fd(int fd, const char *text)
 {
     if (s_server == NULL || text == NULL) {
@@ -133,80 +290,204 @@ static esp_err_t send_text_to_fd(int fd, const char *text)
     return httpd_ws_send_frame_async(s_server, fd, &frame);
 }
 
-static esp_err_t send_envelope_to_fd_locked(int fd, const char *type, const char *payload_json)
+static esp_err_t build_envelope_json(char *out,
+                                     size_t out_size,
+                                     const char *type,
+                                     const char *payload_json,
+                                     uint32_t seq,
+                                     uint32_t snapshot_generation)
 {
     if (type == NULL || payload_json == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint32_t seq = ++s_ws_seq;
-    uint32_t now_ms = ws_runtime_now_ms();
+    ws_json_writer_t writer;
+    bool first = true;
+    esp_err_t err = ESP_OK;
 
-    int written = snprintf(
-        s_ws_envelope_json,
-        sizeof(s_ws_envelope_json),
-        "{\"type\":\"%s\","
-        "\"seq\":%lu,"
-        "\"schema_version\":1,"
-        "\"snapshot_generation\":%lu,"
-        "\"server_time_ms\":%lu,"
-        "\"payload\":%s}",
-        type,
-        (unsigned long)seq,
-        (unsigned long)s_snapshot_generation,
-        (unsigned long)now_ms,
-        payload_json
-    );
-
-    if (written < 0 || written >= (int)sizeof(s_ws_envelope_json)) {
-        ESP_LOGW(TAG, "ws envelope too large for type=%s", type);
-        return ESP_ERR_NO_MEM;
+    ws_json_init(&writer, out, out_size);
+    err = ws_json_putc(&writer, '{');
+    if (err == ESP_OK) {
+        err = ws_json_put_string_field(&writer, &first, "type", type);
     }
-
-    return send_text_to_fd(fd, s_ws_envelope_json);
+    if (err == ESP_OK) {
+        err = ws_json_put_u32_field(&writer, &first, "seq", seq);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_put_u32_field(&writer, &first, "schema_version", 1);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_put_u32_field(&writer, &first, "snapshot_generation", snapshot_generation);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_put_u32_field(&writer, &first, "server_time_ms", ws_runtime_now_ms());
+    }
+    if (err == ESP_OK) {
+        err = ws_json_put_raw_field(&writer, &first, "payload", payload_json);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_putc(&writer, '}');
+    }
+    return err;
 }
 
-static esp_err_t broadcast_envelope_locked(const char *type, const char *payload_json)
+static esp_err_t ws_runtime_next_envelope_meta(uint32_t *seq, uint32_t *snapshot_generation)
 {
-    if (s_server == NULL || type == NULL || payload_json == NULL) {
+    esp_err_t err = ws_runtime_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    *seq = ++s_ws_seq;
+    *snapshot_generation = s_snapshot_generation;
+    ws_runtime_state_unlock();
+    return ESP_OK;
+}
+
+static esp_err_t send_envelope_to_fd(int fd,
+                                     const char *type,
+                                     const char *payload_json,
+                                     uint32_t seq,
+                                     uint32_t snapshot_generation)
+{
+    char envelope_json[WS_RUNTIME_ENVELOPE_JSON_MAX];
+    esp_err_t err = build_envelope_json(envelope_json,
+                                        sizeof(envelope_json),
+                                        type,
+                                        payload_json,
+                                        seq,
+                                        snapshot_generation);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ws envelope too large for type=%s", type ? type : "(null)");
+        return err;
+    }
+
+    return send_text_to_fd(fd, envelope_json);
+}
+
+static esp_err_t send_envelope_to_fd_current(int fd, const char *type, const char *payload_json)
+{
+    uint32_t seq = 0;
+    uint32_t snapshot_generation = 0;
+    esp_err_t err = ws_runtime_next_envelope_meta(&seq, &snapshot_generation);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return send_envelope_to_fd(fd, type, payload_json, seq, snapshot_generation);
+}
+
+static esp_err_t snapshot_subscribed_clients(int *fds,
+                                             size_t fds_count,
+                                             size_t *out_count,
+                                             uint32_t *out_seq,
+                                             uint32_t *out_snapshot_generation,
+                                             uint32_t snapshot_generation_update)
+{
+    if (!fds || !out_count) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_server == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t last_err = ESP_OK;
+    esp_err_t err = ws_runtime_state_lock();
+    if (err != ESP_OK) {
+        return err;
+    }
 
+    if (snapshot_generation_update != 0) {
+        s_snapshot_generation = snapshot_generation_update;
+    }
+    *out_count = 0;
+    if (out_seq != NULL) {
+        *out_seq = ++s_ws_seq;
+    }
+    if (out_snapshot_generation != NULL) {
+        *out_snapshot_generation = s_snapshot_generation;
+    }
     for (int i = 0; i < WS_RUNTIME_MAX_CLIENTS; ++i) {
         if (!s_clients[i].active || !s_clients[i].subscribed) {
             continue;
         }
+        if (*out_count < fds_count) {
+            fds[*out_count] = s_clients[i].fd;
+            ++(*out_count);
+        }
+    }
+    ws_runtime_state_unlock();
+    return ESP_OK;
+}
 
-        esp_err_t err = send_envelope_to_fd_locked(s_clients[i].fd, type, payload_json);
+static void remove_failed_client(int fd)
+{
+    if (ws_runtime_state_lock() == ESP_OK) {
+        remove_client(fd);
+        ws_runtime_state_unlock();
+    }
+}
+
+static esp_err_t broadcast_envelope(const char *type,
+                                    const char *payload_json,
+                                    uint32_t snapshot_generation_update)
+{
+    int fds[WS_RUNTIME_MAX_CLIENTS];
+    size_t fd_count = 0;
+    uint32_t seq = 0;
+    uint32_t snapshot_generation = 0;
+    esp_err_t last_err = ESP_OK;
+    esp_err_t err = ESP_OK;
+
+    if (type == NULL || payload_json == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = snapshot_subscribed_clients(fds,
+                                      WS_RUNTIME_MAX_CLIENTS,
+                                      &fd_count,
+                                      &seq,
+                                      &snapshot_generation,
+                                      snapshot_generation_update);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    for (size_t i = 0; i < fd_count; ++i) {
+        err = send_envelope_to_fd(fds[i], type, payload_json, seq, snapshot_generation);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "broadcast failed fd=%d: %s", s_clients[i].fd, esp_err_to_name(err));
-            remove_client(s_clients[i].fd);
+            ESP_LOGW(TAG, "broadcast failed fd=%d: %s", fds[i], esp_err_to_name(err));
+            remove_failed_client(fds[i]);
             last_err = err;
         }
     }
-
     return last_err;
 }
 
 static esp_err_t send_error_to_fd(int fd, const char *message)
 {
-    char json[192];
+    char payload_json[192];
+    ws_json_writer_t writer;
+    bool first = true;
+    esp_err_t err = ESP_OK;
 
-    snprintf(
-        json,
-        sizeof(json),
-        "{\"type\":\"error\",\"schema_version\":1,\"payload\":{\"message\":\"%s\"}}",
-        message ? message : "unknown error"
-    );
-
-    return send_text_to_fd(fd, json);
+    ws_json_init(&writer, payload_json, sizeof(payload_json));
+    err = ws_json_putc(&writer, '{');
+    if (err == ESP_OK) {
+        err = ws_json_put_string_field(&writer, &first, "message", message ? message : "unknown error");
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (err == ESP_OK) {
+        err = ws_json_putc(&writer, '}');
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    return send_envelope_to_fd_current(fd, "error", payload_json);
 }
 
 static esp_err_t send_connection_ready_to_fd(int fd)
 {
-    return send_envelope_to_fd_locked(fd, "connection.ready",
+    return send_envelope_to_fd_current(fd, "connection.ready",
         "{"
             "\"device_id\":\"scenehub-main\","
             "\"api_version\":1"
@@ -216,21 +497,21 @@ static esp_err_t send_connection_ready_to_fd(int fd)
 
 static esp_err_t send_subscribed_to_fd(int fd)
 {
-    return send_envelope_to_fd_locked(fd, "subscription.ready",
+    return send_envelope_to_fd_current(fd, "subscription.ready",
         "{\"ok\":true}"
     );
 }
 
 static esp_err_t send_unsubscribed_to_fd(int fd)
 {
-    return send_envelope_to_fd_locked(fd, "subscription.closed",
+    return send_envelope_to_fd_current(fd, "subscription.closed",
         "{\"ok\":true}"
     );
 }
 
 static esp_err_t send_pong_to_fd(int fd)
 {
-    return send_envelope_to_fd_locked(fd, "pong",
+    return send_envelope_to_fd_current(fd, "pong",
         "{\"ok\":true}"
     );
 }
@@ -265,26 +546,31 @@ static esp_err_t handle_text_message(int fd, const char *text)
 
     if (strcmp(type->valuestring, "subscribe") == 0) {
         client->subscribed = true;
+        ws_runtime_state_unlock();
+        cJSON_Delete(root);
 
         result = send_connection_ready_to_fd(fd);
         if (result == ESP_OK) {
             result = send_subscribed_to_fd(fd);
         }
+        return result;
 
     } else if (strcmp(type->valuestring, "unsubscribe") == 0) {
         client->subscribed = false;
+        ws_runtime_state_unlock();
+        cJSON_Delete(root);
 
-        result = send_unsubscribed_to_fd(fd);
+        return send_unsubscribed_to_fd(fd);
     } else if (strcmp(type->valuestring, "ping") == 0) {
-        result = send_pong_to_fd(fd);
+        ws_runtime_state_unlock();
+        cJSON_Delete(root);
+        return send_pong_to_fd(fd);
     } else {
         ESP_LOGW(TAG, "unknown ws message type from fd=%d: %s", fd, type->valuestring);
-        result = send_error_to_fd(fd, "unknown message type");
+        ws_runtime_state_unlock();
+        cJSON_Delete(root);
+        return send_error_to_fd(fd, "unknown message type");
     }
-
-    ws_runtime_state_unlock();
-    cJSON_Delete(root);
-    return result;
 }
 
 static esp_err_t ws_runtime_handler(httpd_req_t *req)
@@ -406,47 +692,49 @@ esp_err_t ws_runtime_register_httpd(httpd_handle_t server)
 
 esp_err_t ws_runtime_broadcast_json(const char *json)
 {
+    int fds[WS_RUNTIME_MAX_CLIENTS];
+    size_t fd_count = 0;
+    esp_err_t last_err = ESP_OK;
+    esp_err_t err = ESP_OK;
+
     if (s_server == NULL || json == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t last_err = ESP_OK;
-    esp_err_t err = ws_runtime_state_lock();
+    err = snapshot_subscribed_clients(fds,
+                                      WS_RUNTIME_MAX_CLIENTS,
+                                      &fd_count,
+                                      NULL,
+                                      NULL,
+                                      0);
     if (err != ESP_OK) {
         return err;
     }
 
-    for (int i = 0; i < WS_RUNTIME_MAX_CLIENTS; ++i) {
-        if (!s_clients[i].active || !s_clients[i].subscribed) {
-            continue;
-        }
-
-        err = send_text_to_fd(s_clients[i].fd, json);
+    for (size_t i = 0; i < fd_count; ++i) {
+        err = send_text_to_fd(fds[i], json);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "broadcast failed fd=%d: %s", s_clients[i].fd, esp_err_to_name(err));
-            remove_client(s_clients[i].fd);
+            ESP_LOGW(TAG, "broadcast failed fd=%d: %s", fds[i], esp_err_to_name(err));
+            remove_failed_client(fds[i]);
             last_err = err;
         }
     }
 
-    ws_runtime_state_unlock();
     return last_err;
 }
 
 esp_err_t ws_runtime_broadcast_versions_changed(const ws_runtime_versions_changed_t *versions)
 {
+    char payload_json[WS_RUNTIME_PAYLOAD_JSON_MAX];
+    int written = 0;
+
     if (!versions) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t err = ws_runtime_state_lock();
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    snprintf(
-        s_ws_payload_json,
-        sizeof(s_ws_payload_json),
+    written = snprintf(
+        payload_json,
+        sizeof(payload_json),
         "{\"generation\":%lu,"
         "\"rooms\":%lu,"
         "\"devices\":%lu,"
@@ -466,19 +754,26 @@ esp_err_t ws_runtime_broadcast_versions_changed(const ws_runtime_versions_change
         (unsigned long)versions->static_generation,
         (unsigned long)versions->runtime_generation
     );
+    if (written < 0 || written >= (int)sizeof(payload_json)) {
+        ESP_LOGW(TAG, "ws versions payload too large");
+        return ESP_ERR_NO_MEM;
+    }
 
-    err = broadcast_envelope_locked("gm.versions.changed", s_ws_payload_json);
-    ws_runtime_state_unlock();
-    return err;
+    return broadcast_envelope("gm.versions.changed",
+                              payload_json,
+                              versions->snapshot_generation ? versions->snapshot_generation : versions->generation);
 }
 
 esp_err_t ws_runtime_broadcast_invalidation(const ws_runtime_invalidation_t *invalidation)
 {
-    int written = 0;
     const char *slice = NULL;
     const char *target_id = NULL;
     const char *scope = NULL;
     const char *reason = NULL;
+    char payload_json[WS_RUNTIME_PAYLOAD_JSON_MAX];
+    ws_json_writer_t writer;
+    bool first = true;
+    esp_err_t err = ESP_OK;
 
     if (!invalidation || !invalidation->slice || !invalidation->scope) {
         return ESP_ERR_INVALID_ARG;
@@ -489,39 +784,42 @@ esp_err_t ws_runtime_broadcast_invalidation(const ws_runtime_invalidation_t *inv
     scope = invalidation->scope;
     reason = invalidation->reason ? invalidation->reason : "";
 
-    esp_err_t err = ws_runtime_state_lock();
-    if (err != ESP_OK) {
-        return err;
+    ws_json_init(&writer, payload_json, sizeof(payload_json));
+    err = ws_json_putc(&writer, '{');
+    if (err == ESP_OK) {
+        err = ws_json_put_string_field(&writer, &first, "slice", slice);
     }
-
-    written = snprintf(s_ws_payload_json,
-                       sizeof(s_ws_payload_json),
-                       "{\"slice\":\"%s\","
-                       "\"target_id\":\"%s\","
-                       "\"scope\":\"%s\","
-                       "\"generation\":%lu,"
-                       "\"reason\":\"%s\"}",
-                       slice,
-                       target_id,
-                       scope,
-                       (unsigned long)invalidation->generation,
-                       reason);
-    if (written < 0 || written >= (int)sizeof(s_ws_payload_json)) {
-        ws_runtime_state_unlock();
+    if (err == ESP_OK) {
+        err = ws_json_put_string_field(&writer, &first, "target_id", target_id);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_put_string_field(&writer, &first, "scope", scope);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_put_u32_field(&writer, &first, "generation", invalidation->generation);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_put_string_field(&writer, &first, "reason", reason);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_putc(&writer, '}');
+    }
+    if (err != ESP_OK) {
         ESP_LOGW(TAG, "ws invalidation payload too large for slice=%s", slice);
         return ESP_ERR_NO_MEM;
     }
 
-    err = broadcast_envelope_locked("gm.invalidate", s_ws_payload_json);
-    ws_runtime_state_unlock();
-    return err;
+    return broadcast_envelope("gm.invalidate", payload_json, 0);
 }
 
 esp_err_t ws_runtime_broadcast_resync_required(const ws_runtime_resync_required_t *resync)
 {
-    int written = 0;
     const char *reason = NULL;
     const char *target_id = NULL;
+    char payload_json[WS_RUNTIME_PAYLOAD_JSON_MAX];
+    ws_json_writer_t writer;
+    bool first = true;
+    esp_err_t err = ESP_OK;
 
     if (!resync) {
         return ESP_ERR_INVALID_ARG;
@@ -530,28 +828,26 @@ esp_err_t ws_runtime_broadcast_resync_required(const ws_runtime_resync_required_
     reason = resync->reason ? resync->reason : "";
     target_id = resync->target_id ? resync->target_id : "";
 
-    esp_err_t err = ws_runtime_state_lock();
-    if (err != ESP_OK) {
-        return err;
+    ws_json_init(&writer, payload_json, sizeof(payload_json));
+    err = ws_json_putc(&writer, '{');
+    if (err == ESP_OK) {
+        err = ws_json_put_string_field(&writer, &first, "target_id", target_id);
     }
-
-    written = snprintf(s_ws_payload_json,
-                       sizeof(s_ws_payload_json),
-                       "{\"target_id\":\"%s\","
-                       "\"generation\":%lu,"
-                       "\"reason\":\"%s\"}",
-                       target_id,
-                       (unsigned long)resync->generation,
-                       reason);
-    if (written < 0 || written >= (int)sizeof(s_ws_payload_json)) {
-        ws_runtime_state_unlock();
+    if (err == ESP_OK) {
+        err = ws_json_put_u32_field(&writer, &first, "generation", resync->generation);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_put_string_field(&writer, &first, "reason", reason);
+    }
+    if (err == ESP_OK) {
+        err = ws_json_putc(&writer, '}');
+    }
+    if (err != ESP_OK) {
         ESP_LOGW(TAG, "ws resync payload too large");
         return ESP_ERR_NO_MEM;
     }
 
-    err = broadcast_envelope_locked("gm.resync.required", s_ws_payload_json);
-    ws_runtime_state_unlock();
-    return err;
+    return broadcast_envelope("gm.resync.required", payload_json, 0);
 }
 
 #else

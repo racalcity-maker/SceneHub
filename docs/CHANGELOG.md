@@ -1,5 +1,201 @@
 # Changelog
 
+## 2026-06-15
+
+- Expanded the SceneHub Node stress test with real-world stability phases:
+  input-event scenario traffic, reconnect waves, duplicate-client replacement,
+  slow-node isolation and optional soak traffic via `--soak-seconds`.
+- Fixed an MQTT session teardown race exposed by reconnect and duplicate-client
+  stress phases. A session slot is no longer marked reusable until its TX mutex
+  has been released, preventing the accept task from reinitializing the static
+  session storage while the old client task is still finishing cleanup.
+- Fixed a GM hint HTTP handler lifetime bug: `room_id` and `message` are now
+  copied out of the parsed JSON object before `cJSON_Delete()`, preventing
+  use-after-free when dispatching the hint command and logging performance.
+- Hardened the WebSocket runtime envelope path: string fields are now JSON
+  escaped with a bounded writer, websocket sends no longer run while holding the
+  runtime state mutex, envelope buffers are local to each send and
+  `snapshot_generation` now reflects the monotonic SceneHub websocket state
+  generation instead of remaining a constant placeholder.
+- Fixed MQTT session slot reuse so allocation no longer clears the embedded
+  FreeRTOS static TX mutex storage. Reconnect and duplicate-client waves now
+  preserve the per-slot mutex object while resetting only runtime session
+  fields, avoiding a rare crash during rapid session replacement.
+- Added a short MQTT session slot retirement window after client cleanup so a
+  static task stack/TCB slot is not reused while the old client task is still
+  returning into `vTaskDelete()`. This hardens duplicate-client reconnect waves
+  where old and replacement sessions overlap for the same client ID.
+- Changed MQTT duplicate-client replacement so sessions already marked closing
+  or retiring no longer claim their `client_id`, and closing a session clears
+  its subscriptions immediately. Replacement clients can now become the active
+  owner of the client ID without waiting for the old task to finish cleanup.
+- Increased the configured MQTT session limit from 24 to 25 so the target
+  20-node load can survive a five-node reconnect wave with one replacement slot
+  per reconnecting client instead of forcing the last duplicate through the
+  full-pool eviction path.
+- Updated the SceneHub Node stress reconnect phase to use a fresh MQTT client
+  object after each intentional transport disconnect. This matches real device
+  reconnect behavior more closely and avoids Paho client state from masking
+  broker-side CONNACK/SUBACK handling.
+- Fixed broker QoS 1 retry accounting under send-buffer pressure. Zero-byte
+  send timeouts now defer the retry without consuming the acknowledgement
+  budget, while partial TCP writes close the session immediately because the
+  MQTT stream framing can no longer be safely retried from the beginning.
+- Changed incoming QoS 1 PUBLISH handling to send PUBACK as soon as the broker
+  accepts the packet, before injecting and forwarding it to subscribers. This
+  prevents a same-session publish/subscribe burst from filling the socket with
+  outbound QoS 1 traffic while the client's inbound QoS 1 publishes are still
+  waiting for acknowledgement.
+
+## 2026-06-13
+
+- Added `tests/scenehub_node_stress_test`, a configurable MQTT stress client
+  that emulates 20 SceneHub Node v1 devices named `scenehubnode_1` through
+  `scenehubnode_20`. Each virtual node exposes four relays, four MOSFET
+  outputs, four inputs, four universal outputs and two addressable LED strips.
+- Added stress phases for valid commands, invalid and boundary payloads,
+  duplicate request IDs, command-queue pressure, post-stress health checks and
+  simultaneous `describe_interface` responses. Missed interface descriptions
+  are retried sequentially so the test distinguishes temporary large-message
+  congestion from a disconnected or non-responsive node.
+- Increased `CONFIG_LWIP_MAX_ACTIVE_TCP` from `24` to `36` so the configured
+  20 MQTT node sessions can coexist with the SceneHub web UI and a small number
+  of browser connections.
+- Increased `CONFIG_SCENEHUB_MQTT_MAX_CLIENTS` from `20` to `24` so a 20-node
+  run has spare MQTT session slots for reconnects and duplicate-client
+  replacement while old sessions are still closing.
+- Added duplicate-client eviction while the MQTT session pool is full. The
+  accept loop can now read the incoming CONNECT client ID, close the stale
+  session with the same ID and let the reconnect retry claim the freed slot,
+  instead of rejecting the reconnect indefinitely with `too many clients`.
+- Completed broker-side MQTT QoS 1 delivery for active clean sessions. The
+  broker now accepts client `PUBACK` packets, tracks up to 64 unacknowledged
+  outgoing messages per client, retains packet bytes in PSRAM while awaiting
+  acknowledgement, retries after two seconds with the MQTT `DUP` flag, frees
+  acknowledged messages and logs bounded-queue overflow without closing the
+  MQTT session.
+- Added a 512 KB global bound for pending broker QoS 1 packet storage and
+  cleanup of pending packets when an MQTT session closes.
+- Added `mqtt_core_publish_qos()` while preserving `mqtt_core_publish()` as the
+  QoS 0 compatibility API. SceneHub device commands, including
+  `describe_interface`, now use QoS 1; ordinary internal event bridging remains
+  QoS 0.
+- Changed SceneHub Node v1 command results to publish with QoS 1. Command
+  subscriptions remain QoS 1, while heartbeat, status and input-event
+  telemetry remain QoS 0.
+- Updated the node stress client to use QoS 1 for commands and command results
+  by default, including QoS 1 subscriptions in both directions. Added
+  `--command-qos 0` for comparison with the previous command path and bounded
+  the complete queue-pressure result wait to one shared timeout.
+- Added MQTT core unit coverage for matching, malformed and unknown `PUBACK`
+  handling. Python syntax and command-line argument checks were run for the
+  stress client; firmware and ESP-IDF test builds were intentionally not run.
+- Changed the node stress test to keep all emulated clients connected after the
+  stress summary. The interactive console logs incoming MQTT commands/results
+  and can publish `input.changed` events for any of the four inputs on one node
+  or all nodes, including pulse and four-input state helpers. Added
+  `interactive_commands.txt` with ready-to-copy command variants and
+  `--no-hold` for non-interactive runs.
+- Fixed a broker QoS 1 concurrency race found by the 20-node stress log:
+  `PUBACK` processing could free a pending packet while another task was still
+  sending or retrying it. ACK cleanup and retry inspection now use the session
+  TX lock, preventing packet use-after-free and the resulting reconnect storm.
+  Late or duplicate `PUBACK` packets are accepted as debug diagnostics instead
+  of warnings.
+- Made QoS 1 delivery tolerant of temporary send-buffer pressure: initial sends
+  and retries now keep the packet pending and defer delivery instead of
+  immediately closing the MQTT session on the first send timeout. QoS 1
+  backpressure no longer waits for a free slot inside a client session task,
+  avoiding self-delivery deadlocks where the same task must process the
+  `PUBACK` that frees the slot. Absolute per-client inflight overflow is logged
+  and the outbound publish is dropped rather than forcing a reconnect loop.
+- Bounded QoS 1 send deferral. A session now closes after repeated deferred
+  retry sends so a dead or non-draining socket cannot stay alive indefinitely
+  and keep retrying the same packet dozens of times.
+- Limited each QoS 1 retry pump pass to one due packet so an MQTT session task
+  does not spend a long burst inside retry sends and starve the receive path
+  that must process incoming `PUBACK` packets.
+- Throttled broker QoS 1 backpressure warnings so overload diagnostics report
+  suppressed repeats instead of flooding the serial log.
+- Reduced interactive stress-test log volume. Hold mode now logs incoming
+  commands only by default, truncates payload text to 240 characters, and
+  exposes `--log-results` plus `--log-payload-bytes` for deeper diagnostics.
+- Made the node stress client's receive callback tolerant of non-UTF8 MQTT
+  topic bytes, recording the malformed packet instead of letting the Paho
+  network thread die.
+- Changed the node stress client to stop subscribing each emulated node to its
+  own `/result` topic by default. Results are now considered observed when the
+  broker PUBACKs the QoS 1 result publish, which matches real node behavior
+  more closely and removes a large artificial broker-to-node echo load. Added
+  `--subscribe-results` to reproduce the older heavier mode.
+- Moved SceneHub Node v1 overflow results onto a bounded result queue. When the
+  four-command queue is full, the MQTT callback now enqueues a terminal
+  `rejected/busy` result and returns quickly; the command worker publishes that
+  result with bounded retries. This keeps the real queue limit while preventing
+  queue-pressure tests from losing terminal command results silently. The
+  Python stress node mirrors the same result-queue behavior.
+## 2026-06-03
+
+- Fixed Wi-Fi config migration after the RAM-only network recovery change:
+  `config_store` now migrates v1 NVS config to v2 instead of falling back to
+  empty defaults, and the hub performs a one-time import of legacy ESP-IDF
+  driver STA credentials into `config_store` before switching the driver to
+  RAM-only storage.
+- Made the maximum room slot count a SceneHub build-time setting:
+  `CONFIG_SCENEHUB_MAX_ROOMS` now defaults to `1`. The room catalog,
+  GM session slots, prepared event-ref snapshots and room read-model limits
+  inherit this value, reducing default static PSRAM use for the current
+  single-room product shape while keeping multi-room builds configurable.
+- Added the active audio pipeline refactor plan for pop-free background/effect
+  playback and tracked the issue as an active P1 runtime defect.
+- Added Phase 0 audio diagnostics for output state transitions, source
+  start/primed/finish/stop/fade events, stream starvation, partial stream reads,
+  I2S enable/disable/reset, and MP3 first-frame/first-PCM timing.
+- Simplified WAV decode ownership: WAV readers now only parse/convert PCM and
+  no longer apply their own edge fades, leaving source fade behavior to the
+  mixer/source lifecycle.
+- Made audio output start explicit: low-level I2S writes no longer enable
+  output implicitly, and the mixer now performs `idle -> priming -> running`
+  with bounded DMA preload before enabling output on idle start.
+- Added dual background mixer slots for gapless background switching: the next
+  background track is decoded into an inactive fixed PSRAM stream slot and must
+  reach the primed PCM window before the old background is faded/stopped. The
+  inactive slot stays muted while priming and becomes audible only after the
+  old background fade-out reaches zero.
+- Fixed mixer source EOF handling so an audible source with buffered tail PCM
+  stays under mixer source ownership. Long buffered tails now drain normally
+  and receive the bounded tail fade only at the final fade window instead of
+  being faded immediately at decoder EOF.
+- Tightened background switch routing so the runtime treats active mixer
+  background slots as live sources, not only reader task handles. This prevents
+  a live background from being misrouted as a cold start if runtime task state
+  and mixer source state drift apart.
+- Reduced audio diagnostics pressure on the live mixer path: source-primed
+  logging is now emitted only on the actual unprimed -> primed transition, and
+  per-reader slot route details are debug-only.
+- Fixed frame alignment for audio stream-buffer writes. Mixer writers now send
+  only chunks that fit in frame-aligned free space, preventing a full muted
+  priming buffer from accepting 1-3 stray bytes and shifting subsequent PCM
+  into digital noise.
+- Made source fade-in signal-aware so MP3 encoder delay or leading near-silence
+  does not consume the whole fade budget before the first audible transient.
+- Made normal audio stop paths graceful: `Stop game`, background stop and effect
+  stop now request mixer fade-out and no longer perform an I2S/MAX98357A reset
+  during ordinary playback shutdown.
+- Made effect replacement graceful: starting a new effect now gives the current
+  effect stream a short fade-out before the stream is stopped.
+- Added one-shot mixer diagnostics for the first audible MP3 effect block,
+  including raw first samples, peak level, fade state and reader timing; added
+  a second one-shot diagnostic for the first non-silent effect block where
+  fade-in actually starts consuming its budget.
+- Reduced live-mixer logging after field diagnostics showed identical MP3
+  signal-start PCM for popping and non-popping gong runs. Source-primed,
+  partial-read and first-effect-block diagnostics are now debug-level so INFO
+  logging does not block the audio-critical mixer loop.
+- Moved all remaining `audio_player` informational logs to debug level,
+  including output lifecycle, source lifecycle, WAV/MP3 open/first-frame timing
+  and volume-load messages. Audio warnings and errors remain visible.
+
 ## 2026-06-01
 
 - Completed the `gm_core` decomposition baseline. Runtime ownership is now

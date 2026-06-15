@@ -11,14 +11,14 @@ pip install paho-mqtt
 Run the main stress suite against production-like MQTT limits:
 
 ```powershell
-python .\mqtt_stress_test.py --host 192.168.1.XX --max-clients 20 --rounds 5
+python .\mqtt_stress_test.py --host 192.168.1.XX --max-clients 24 --rounds 5
 ```
 
 Run selected stress tests:
 
 ```powershell
-python .\mqtt_stress_test.py --host 192.168.1.XX --max-clients 20 --tests 7-10
-python .\mqtt_stress_test.py --host 192.168.1.XX --max-clients 20 --tests 8,9 --verbose
+python .\mqtt_stress_test.py --host 192.168.1.XX --max-clients 24 --tests 7-10
+python .\mqtt_stress_test.py --host 192.168.1.XX --max-clients 24 --tests 8,9 --verbose
 ```
 
 Stress test coverage:
@@ -37,7 +37,7 @@ Stress test coverage:
 Run protocol/semantics tests:
 
 ```powershell
-python .\mqtt_protocol_semantics_test.py --host 192.168.1.XX --max-clients 20 --max-subs 16 --duration 60
+python .\mqtt_protocol_semantics_test.py --host 192.168.1.XX --max-clients 24 --max-subs 16 --duration 60
 ```
 
 Run selected protocol tests:

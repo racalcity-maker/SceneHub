@@ -99,6 +99,8 @@ void setUp(void)
 {
     mqtt_test_flush_events();
     mqtt_test_clear_retain_table();
+    mqtt_qos1_clear_session_locked(&s_session_scratch);
+    memset(&s_session_scratch, 0, sizeof(s_session_scratch));
 }
 
 void tearDown(void)
@@ -286,6 +288,34 @@ static void test_mqtt_next_packet_id_is_never_zero(void)
     for (size_t i = 0; i < 8; ++i) {
         TEST_ASSERT_NOT_EQUAL_UINT16(0, mqtt_next_packet_id());
     }
+}
+
+static void test_mqtt_puback_clears_matching_qos1_message(void)
+{
+    mqtt_session_t *sess = &s_session_scratch;
+    uint8_t ack[2] = {0x12, 0x34};
+    uint8_t *packet = heap_caps_malloc(4, MALLOC_CAP_8BIT);
+
+    TEST_ASSERT_NOT_NULL(packet);
+    sess->qos1_pending[0].in_use = true;
+    sess->qos1_pending[0].packet_id = 0x1234;
+    sess->qos1_pending[0].packet = packet;
+    sess->qos1_pending[0].packet_len = 4;
+    TEST_ASSERT_EQUAL_UINT32(1, mqtt_qos1_pending_count(sess));
+
+    TEST_ASSERT_EQUAL(0, handle_puback(sess, ack, sizeof(ack)));
+    TEST_ASSERT_EQUAL_UINT32(0, mqtt_qos1_pending_count(sess));
+}
+
+static void test_mqtt_puback_validation_and_unknown_id(void)
+{
+    mqtt_session_t *sess = &s_session_scratch;
+    uint8_t zero_pid[2] = {0, 0};
+    uint8_t unknown_pid[2] = {0, 7};
+
+    TEST_ASSERT_EQUAL(-1, handle_puback(sess, zero_pid, sizeof(zero_pid)));
+    TEST_ASSERT_EQUAL(-1, handle_puback(sess, unknown_pid, 1));
+    TEST_ASSERT_EQUAL(0, handle_puback(sess, unknown_pid, sizeof(unknown_pid)));
 }
 
 static void test_mqtt_acl_requires_exact_client_id_match_and_default_deny(void)
@@ -532,6 +562,8 @@ void register_mqtt_core_tests(void)
     RUN_TEST(test_mqtt_handle_publish_acl_deny_qos1_returns_success);
     RUN_TEST(test_mqtt_effective_delivery_qos_uses_minimum);
     RUN_TEST(test_mqtt_next_packet_id_is_never_zero);
+    RUN_TEST(test_mqtt_puback_clears_matching_qos1_message);
+    RUN_TEST(test_mqtt_puback_validation_and_unknown_id);
     RUN_TEST(test_mqtt_acl_requires_exact_client_id_match_and_default_deny);
     RUN_TEST(test_mqtt_upsert_subscription_deduplicates_topic);
     RUN_TEST(test_mqtt_upsert_subscription_enforces_slot_limit);

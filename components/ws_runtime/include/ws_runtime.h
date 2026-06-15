@@ -12,6 +12,7 @@ extern "C" {
 
 typedef struct {
     uint32_t generation;
+    uint32_t snapshot_generation;
     uint32_t rooms;
     uint32_t devices;
     uint32_t scenarios;
