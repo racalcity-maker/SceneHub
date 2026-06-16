@@ -21,6 +21,9 @@ The compact manifest is based on
 `scenehub_node_v1/esp_idf/components/node_capability/node_capability.c`.
 Command parsing, duplicate cache size, queue length, command names, result
 statuses, and important value limits follow the current node implementation.
+The node contract, compact manifest and command cases live in
+`scenehub_contract.py`; the main script keeps the MQTT client emulator and
+stress scenario runner.
 
 ## Install
 
@@ -54,9 +57,12 @@ nodes. The current production-like default is 24, which leaves reconnect
 headroom for a 20-node run.
 
 Commands are published with QoS 1 by default, and nodes subscribe to command
-topics with QoS 1. This exercises broker-side PUBACK tracking and retries
-throughout the complete test. Use `--command-qos 0` to compare against the
-older QoS 0 behavior.
+topics with QoS 1. The default `--command-publisher self` mode is required by
+the current broker ACL: each virtual node is allowed to publish only under its
+own `cp/v1/dev/<node>/...` namespace. Use `--command-qos 0` to compare against
+the older QoS 0 behavior. `--command-publisher controller` uses one extra MQTT
+client, but it requires broker ACL rules that allow that client to publish to
+node command topics.
 
 Command results are published with QoS 1, matching the current SceneHub Node
 transport. By default the emulated node does not subscribe to its own
@@ -70,26 +76,33 @@ broker.
 
 ## Phases
 
-1. Connect all nodes and publish heartbeat/status.
-2. Send valid relay, MOSFET, output, LED, and node commands.
-3. Publish input-event scenario traffic for all four inputs on all nodes.
-4. Disconnect and reconnect nodes in waves, then verify commands still work.
+Setup connects all nodes and publishes heartbeat/status. The logged phases are:
+
+1. Send valid relay, MOSFET, output, LED, and node commands.
+2. Publish input-event scenario traffic for all four inputs on all nodes.
+3. Disconnect and reconnect nodes in waves, then verify commands still work.
+4. Randomly disconnect several nodes, reconnect them, optionally rotate their
+   `boot_id`, publish heartbeat/status again and verify all nodes are alive.
 5. Connect duplicate MQTT clients with existing node client IDs, verify the
    original node sessions recover, and run a status command.
-6. Send `describe_interface` to all nodes simultaneously, then retry only
-   missed responses sequentially with a short delay.
+6. Send `describe_interface` to all nodes simultaneously, retry only missed
+   responses sequentially with a short delay, and validate the returned compact
+   manifest structure.
 7. Verify duplicate `request_id` idempotency and conflicting duplicates.
 8. Send invalid channels, values, durations, colors, effects, malformed JSON,
    oversized args, and unknown commands.
-9. Send command bursts beyond the node's four-item command queue and verify
+9. Publish malformed, incomplete, foreign-request and oversized `/result`
+    packets, then verify normal status commands still work.
+10. Send command bursts beyond the node's four-item command queue and verify
    every command gets a terminal result, including `rejected/busy` responses.
-10. Slow down a subset of nodes, burst all nodes, and verify slow nodes do not
+11. Slow down a subset of nodes, burst all nodes, and verify slow nodes do not
     block command results from the remaining nodes.
-11. Optionally run soak traffic with `--soak-seconds`: periodic input events
+12. Optionally run soak traffic with `--soak-seconds`: periodic input events
     and status probes while all clients remain connected.
-12. Run a final `node.get_status` command through every connection.
-13. Keep all clients connected in interactive mode and log incoming MQTT
-   commands until `quit` or `Ctrl+C`.
+13. Run a final `node.get_status` command through every connection.
+
+After the summary, interactive mode keeps all clients connected and logs
+incoming MQTT commands until `quit` or `Ctrl+C`.
 
 After the summary, the process normally remains connected at the
 `scenehub-nodes>` prompt. Use `--no-hold` for the previous exit-after-test
@@ -117,6 +130,17 @@ The virtual node keeps the real four-command queue limit. When that queue is
 full it defers `rejected/busy` responses through a small result queue and
 retries result publication, matching the node transport behavior expected from
 the firmware.
+
+Fault injection is disabled by default. These flags intentionally make virtual
+nodes less reliable so the hub can be checked against slow or lossy devices:
+
+```powershell
+python .\tests\scenehub_node_stress_test\scenehub_node_stress_test.py `
+  --host 192.168.1.XX `
+  --drop-results-rate 0.05 `
+  --delay-results-ms 500 `
+  --disconnect-during-command-rate 0.02
+```
 
 To separately test commands published by an external MQTT client with QoS 1,
 add `--qos1-probe`. This probe runs last because a broker PUBACK handling

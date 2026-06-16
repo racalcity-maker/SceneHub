@@ -15,6 +15,7 @@ Protocol references:
 - `docs/API_POLICY.md`
 - `docs/NODE_V2_DESIGN.md`
 - `docs/NODE_V2_RULE_SCHEMA_DRAFT.md`
+- `docs/NODE_V2_TRANSITION_PLAN.md`
 
 Reference emulator:
 
@@ -35,8 +36,9 @@ SceneHub Node v1 must not depend on SceneHub controller internals such as
 `gm_core`, `quest_device`, `device_control_ingest`, `command_executor`,
 `mqtt_core` or Web UI DTOs.
 
-Node v2 is tracked as a future extension in `docs/NODE_V2_DESIGN.md`. The v1
-architecture should already leave room for v2 by keeping protocol, runtime,
+Node v2 is tracked as a future extension in `docs/NODE_V2_DESIGN.md` and the
+implementation sequence is tracked in `docs/NODE_V2_TRANSITION_PLAN.md`. The
+v1 architecture should already leave room for v2 by keeping protocol, runtime,
 hardware, storage and rule execution boundaries separate.
 
 ## Identity Rules

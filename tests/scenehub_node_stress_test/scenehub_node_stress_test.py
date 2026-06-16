@@ -13,7 +13,16 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+from scenehub_contract import (
+    CAPABILITIES,
+    LED_EFFECTS,
+    NORMAL_CASES,
+    PROBLEM_CASES,
+    CommandCase,
+    build_manifest,
+)
 
 try:
     import paho.mqtt.client as mqtt
@@ -23,20 +32,6 @@ except ImportError as exc:
 
 LOG = logging.getLogger("scenehub_node_stress")
 TOPIC_ROOT = "cp/v1/dev"
-CAPABILITIES = [
-    "heartbeat", "status", "describe_interface", "node.identify",
-    "node.get_status", "relay.set", "relay.pulse", "relay.all_off",
-    "mosfet.set", "mosfet.fade", "mosfet.pulse", "mosfet.blink",
-    "mosfet.breathe", "mosfet.all_off", "mosfet.effect", "io.set",
-    "io.all_off", "node.all_off", "led.off", "led.solid", "led.blink",
-    "led.breathe", "led.effect", "input.changed",
-]
-LED_EFFECTS = [
-    "rainbow", "rainbow_cycle", "color_wipe", "scanner", "theater_chase",
-    "strobe", "pulse", "fade_in_out", "twinkle", "twinkle_random",
-    "sparkle", "glitter", "comet", "larson", "running_lights",
-    "fire_flicker", "chase_dual", "chase_single", "bounce", "breath_wave",
-]
 SUCCESS_STATUSES = {"done", "started", "accepted"}
 MAX_DUPLICATES = 4
 NODE_QUEUE_LEN = 4
@@ -76,166 +71,6 @@ def make_client(client_id: str) -> mqtt.Client:
     return mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311, clean_session=True)
 
 
-def policy(result_required: bool = False, confirm: bool = False) -> dict[str, Any]:
-    return {
-        "manual_allowed": True,
-        "scenario_allowed": True,
-        "requires_confirmation": confirm,
-        "result_required": result_required,
-        "timeout_ms": 3000,
-        "danger_level": "normal",
-    }
-
-
-def command_template(
-    command: str,
-    target: str,
-    schema: str,
-    default_args: Optional[dict[str, Any]] = None,
-    result_required: bool = False,
-    confirm: bool = False,
-) -> dict[str, Any]:
-    item: dict[str, Any] = {
-        "id": command,
-        "label": command,
-        "target": target,
-        "command": command,
-        "args_schema_ref": schema,
-        "policy": policy(result_required, confirm),
-    }
-    if default_args is not None:
-        item["default_args"] = default_args
-    return item
-
-
-def build_manifest(node_id: str, node_name: str) -> dict[str, Any]:
-    resources = {
-        "relays": [{"channel": i, "label": f"Relay {i}"} for i in range(1, 5)],
-        "mosfets": [{"channel": i, "label": f"MOSFET {i}"} for i in range(1, 5)],
-        "inputs": [
-            {"channel": i, "label": f"Input {i}", "event": "input.changed"}
-            for i in range(1, 5)
-        ],
-        "outputs": [{"channel": i, "label": f"Output {i}"} for i in range(1, 5)],
-        "led_strips": [
-            {
-                "strip": i,
-                "pixels": 30,
-                "chipset": "ws2812",
-                "color_order": "grb",
-                "rgbw": False,
-                "label": f"LED Strip {i}",
-            }
-            for i in range(1, 3)
-        ],
-    }
-    templates = [
-        command_template("relay.set", "relays", "output_set", {"on": True}),
-        command_template("relay.pulse", "relays", "pulse", {"duration_ms": 300}, True),
-        command_template("relay.all_off", "relays", "none"),
-        command_template("mosfet.set", "mosfets", "mosfet_set", {"value": 255}),
-        command_template("mosfet.fade", "mosfets", "mosfet_fade", {"target": 255}),
-        command_template("mosfet.pulse", "mosfets", "mosfet_pulse", {"value": 255}),
-        command_template("mosfet.blink", "mosfets", "mosfet_blink", {"value": 255}),
-        command_template("mosfet.breathe", "mosfets", "mosfet_breathe", {}),
-        command_template("mosfet.all_off", "mosfets", "none"),
-        command_template(
-            "mosfet.effect", "mosfets", "mosfet_effect",
-            {"effect": "set", "value": 255},
-        ),
-        command_template("io.set", "outputs", "output_set", {"on": True}),
-        command_template("io.all_off", "outputs", "none"),
-        command_template("node.all_off", "device", "none", confirm=True),
-        command_template("led.off", "led_strips", "led_strip_only"),
-        command_template("led.solid", "led_strips", "led_solid", {"color": "#ffffff"}),
-        command_template(
-            "led.blink", "led_strips", "led_blink",
-            {"color": "#ffffff", "times": 1},
-        ),
-        command_template(
-            "led.breathe", "led_strips", "led_breathe", {"color": "#ffffff"},
-        ),
-        command_template(
-            "led.effect", "led_strips", "led_effect", {"effect": "rainbow"},
-        ),
-    ]
-    schemas = {
-        "output_set": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "on", "type": "checkbox"},
-        ],
-        "pulse": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "duration_ms", "type": "number"},
-        ],
-        "mosfet_set": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "value", "type": "number"},
-        ],
-        "mosfet_fade": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "target", "type": "number", "optional": True},
-        ],
-        "mosfet_pulse": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "value", "type": "number", "optional": True},
-        ],
-        "mosfet_blink": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "value", "type": "number", "optional": True},
-        ],
-        "mosfet_breathe": [{"key": "channel", "type": "resource_channel"}],
-        "mosfet_effect": [
-            {"key": "channel", "type": "resource_channel"},
-            {
-                "key": "effect",
-                "type": "select",
-                "options": ["set", "pulse", "blink", "fade", "fade_in", "fade_out", "breathe"],
-            },
-        ],
-        "led_strip_only": [{"key": "channel", "type": "resource_channel"}],
-        "led_solid": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "color", "type": "text"},
-        ],
-        "led_blink": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "color", "type": "text"},
-            {"key": "times", "type": "number"},
-        ],
-        "led_breathe": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "color", "type": "text"},
-        ],
-        "led_effect": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "effect", "type": "select", "options": LED_EFFECTS},
-        ],
-        "input_event": [
-            {"key": "channel", "type": "resource_channel"},
-            {"key": "value", "type": "number", "optional": True},
-        ],
-        "none": [],
-    }
-    return {
-        "manifest_version": 2,
-        "format": "compact_resources",
-        "node_kind": "scenehub_node",
-        "capability_contract": "scenehub.node.compact.v1",
-        "device": {"id": node_id, "name": node_name, "kind": "scenehub_node"},
-        "resources": resources,
-        "command_templates": templates,
-        "event_templates": [{
-            "id": "input.changed",
-            "label": "Input changed",
-            "source": "inputs",
-            "event": "input.changed",
-            "args_schema_ref": "input_event",
-        }],
-        "schemas": schemas,
-    }
-
-
 @dataclass
 class ResultWaiter:
     event: threading.Event = field(default_factory=threading.Event)
@@ -268,6 +103,9 @@ class VirtualSceneHubNode:
         log_results: bool,
         log_payload_bytes: int,
         subscribe_results: bool,
+        drop_results_rate: float,
+        delay_results_ms: int,
+        disconnect_during_command_rate: float,
     ) -> None:
         self.index = index
         self.node_id = f"scenehubnode_{index}"
@@ -283,6 +121,11 @@ class VirtualSceneHubNode:
         self.log_results = log_results
         self.log_payload_bytes = log_payload_bytes
         self.subscribe_results = subscribe_results
+        self.drop_results_rate = drop_results_rate
+        self.delay_results_ms = delay_results_ms
+        self.disconnect_during_command_rate = disconnect_during_command_rate
+        self.command_publisher: Optional[Callable[[str, str, int], bool]] = None
+        self.fault_rng = random.Random(1000 + index)
         self.expected_subscriptions = 2 if subscribe_results else 1
         self.boot_id = uuid.uuid4().hex[:12]
         self.started = time.monotonic()
@@ -312,6 +155,11 @@ class VirtualSceneHubNode:
         self.client = self._new_client()
         self.worker = threading.Thread(target=self._command_worker, daemon=True)
         self.telemetry = threading.Thread(target=self._telemetry_worker, daemon=True)
+
+    def rotate_boot_id(self) -> None:
+        self.boot_id = uuid.uuid4().hex[:12]
+        self.started = time.monotonic()
+        self.status_seq = 0
 
     def _new_client(self) -> mqtt.Client:
         client = make_client(self.client_id)
@@ -586,6 +434,11 @@ class VirtualSceneHubNode:
         cache: bool = False,
     ) -> dict[str, Any]:
         payload = self._make_result_payload(request_id, command, status, error_code, data)
+        if self.drop_results_rate > 0 and self.fault_rng.random() < self.drop_results_rate:
+            LOG.debug("[%s] dropping result %s by fault injection", self.node_id, request_id)
+            return payload
+        if self.delay_results_ms > 0:
+            time.sleep(self.delay_results_ms / 1000.0)
         if not self._publish_result_payload_with_retry(payload):
             return payload
         if status == "rejected":
@@ -793,6 +646,14 @@ class VirtualSceneHubNode:
             self._reject(request_id, command, "not_supported")
             return
 
+        if (
+            self.disconnect_during_command_rate > 0
+            and self.fault_rng.random() < self.disconnect_during_command_rate
+        ):
+            LOG.warning("[%s] disconnecting during command %s by fault injection", self.node_id, command)
+            self.disconnect_transport()
+            return
+
         self._publish_result(request_id, command, status, data=data, cache=True)
         if status in SUCCESS_STATUSES:
             self.publish_status()
@@ -815,22 +676,29 @@ class VirtualSceneHubNode:
         }
         body = json.dumps(payload, separators=(",", ":"))
         publish_qos = self.command_qos if qos is None else qos
-        self.client.publish(
-            topic(self.node_id, "control/command"),
-            body,
-            qos=publish_qos,
-            retain=False,
-        )
+        command_topic = topic(self.node_id, "control/command")
+        if self.command_publisher:
+            self.command_publisher(command_topic, body, publish_qos)
+        else:
+            self.client.publish(command_topic, body, qos=publish_qos, retain=False)
         return request_id
 
     def send_raw(self, payload: str, qos: Optional[int] = None) -> None:
         publish_qos = self.command_qos if qos is None else qos
-        self.client.publish(
-            topic(self.node_id, "control/command"),
+        command_topic = topic(self.node_id, "control/command")
+        if self.command_publisher:
+            self.command_publisher(command_topic, payload, publish_qos)
+        else:
+            self.client.publish(command_topic, payload, qos=publish_qos, retain=False)
+
+    def publish_raw_result(self, payload: str, qos: int = 1) -> bool:
+        info = self.client.publish(
+            topic(self.node_id, "result"),
             payload,
-            qos=publish_qos,
+            qos=qos,
             retain=False,
         )
+        return info.rc == mqtt.MQTT_ERR_SUCCESS
 
     def wait_result(self, request_id: str, timeout: float) -> Optional[dict[str, Any]]:
         with self.waiters_lock:
@@ -847,56 +715,11 @@ class VirtualSceneHubNode:
         return payload
 
 
-@dataclass(frozen=True)
-class CommandCase:
-    command: str
-    args: dict[str, Any]
-    expected_statuses: set[str]
-    expected_errors: set[str] = field(default_factory=set)
-
-
-NORMAL_CASES = [
-    CommandCase("node.get_status", {}, {"done"}),
-    CommandCase("node.identify", {}, {"done"}),
-    CommandCase("relay.set", {"channel": 1, "on": True}, {"started"}),
-    CommandCase("relay.pulse", {"channel": 4, "duration_ms": 300}, {"started"}),
-    CommandCase("relay.all_off", {}, {"started"}),
-    CommandCase("mosfet.set", {"channel": 1, "value": 255}, {"started"}),
-    CommandCase("mosfet.fade", {"channel": 2, "target": 64, "duration_ms": 500}, {"started"}),
-    CommandCase("mosfet.pulse", {"channel": 3, "value": 128, "duration_ms": 300}, {"started"}),
-    CommandCase("mosfet.blink", {"channel": 4, "value": 200}, {"started"}),
-    CommandCase("mosfet.breathe", {"channel": 1}, {"started"}),
-    CommandCase("mosfet.effect", {"channel": 2, "effect": "fade_out", "duration_ms": 250}, {"done"}),
-    CommandCase("io.set", {"channel": 4, "on": True}, {"started"}),
-    CommandCase("led.off", {"channel": 1}, {"done"}),
-    CommandCase("led.solid", {"channel": 2, "color": "#ff0080"}, {"done"}),
-    CommandCase("led.blink", {"channel": 1, "color": "#00ff00", "times": 2}, {"started"}),
-    CommandCase("led.breathe", {"channel": 2, "color": "#0000ff"}, {"started"}),
-    CommandCase("led.effect", {"channel": 1, "effect": "rainbow"}, {"started"}),
-    CommandCase("node.all_off", {}, {"started"}),
-]
-
-PROBLEM_CASES = [
-    CommandCase("unknown.command", {}, {"rejected"}, {"not_supported"}),
-    CommandCase("relay.set", {"channel": 1}, {"rejected"}, {"missing_on"}),
-    CommandCase("relay.set", {"channel": 0, "on": True}, {"rejected"}, {"invalid_channel"}),
-    CommandCase("relay.set", {"channel": 5, "on": True}, {"rejected"}, {"invalid_channel"}),
-    CommandCase("relay.pulse", {"channel": 1, "duration_ms": 0}, {"rejected"}, {"missing_duration_ms"}),
-    CommandCase("mosfet.set", {"channel": 1, "value": -1}, {"rejected"}, {"invalid_args"}),
-    CommandCase("mosfet.set", {"channel": 1, "value": 256}, {"rejected"}, {"invalid_args"}),
-    CommandCase("mosfet.fade", {"channel": 1, "duration_ms": 60001}, {"rejected"}, {"invalid_args"}),
-    CommandCase("mosfet.pulse", {"channel": 1, "duration_ms": 60001}, {"rejected"}, {"invalid_args"}),
-    CommandCase("mosfet.effect", {"channel": 1, "effect": "explode"}, {"rejected"}, {"invalid_args"}),
-    CommandCase("io.set", {"channel": 1, "on": "true"}, {"rejected"}, {"missing_on"}),
-    CommandCase("led.solid", {"channel": 1, "color": "red"}, {"rejected"}, {"invalid_args"}),
-    CommandCase("led.effect", {"channel": 3, "effect": "rainbow"}, {"rejected"}, {"invalid_channel"}),
-    CommandCase("led.effect", {"channel": 1, "effect": "invalid"}, {"rejected"}, {"invalid_args"}),
-]
-
-
 class StressRunner:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
+        self.controller_client: Optional[mqtt.Client] = None
+        self.controller_connected = threading.Event()
         self.nodes = [
             VirtualSceneHubNode(
                 i,
@@ -910,11 +733,50 @@ class StressRunner:
                 args.log_results,
                 args.log_payload_bytes,
                 args.subscribe_results,
+                args.drop_results_rate,
+                args.delay_results_ms,
+                args.disconnect_during_command_rate,
             )
             for i in range(1, args.nodes + 1)
         ]
         self.checks = 0
         self.failures: list[str] = []
+        if self.args.command_publisher == "controller":
+            self.controller_client = self._new_controller_client()
+            for node in self.nodes:
+                node.command_publisher = self.publish_command
+
+    def _new_controller_client(self) -> mqtt.Client:
+        client = make_client(f"dcc-ctl-{uuid.uuid4().hex[:8]}")
+        if self.args.username:
+            client.username_pw_set(self.args.username, password=self.args.password)
+
+        def on_connect(
+            _client: mqtt.Client,
+            _userdata: Any,
+            _flags: Any,
+            reason_code: Any,
+            _properties: Any = None,
+        ) -> None:
+            rc = getattr(reason_code, "value", reason_code)
+            if rc == 0:
+                self.controller_connected.set()
+            else:
+                LOG.error("controller publisher rejected rc=%s", rc)
+
+        def on_disconnect(_client: mqtt.Client, _userdata: Any, *args: Any) -> None:
+            self.controller_connected.clear()
+
+        client.on_connect = on_connect
+        client.on_disconnect = on_disconnect
+        client.reconnect_delay_set(min_delay=1, max_delay=3)
+        return client
+
+    def publish_command(self, command_topic: str, payload: str, qos: int) -> bool:
+        if not self.controller_client:
+            return False
+        info = self.controller_client.publish(command_topic, payload, qos=qos, retain=False)
+        return info.rc == mqtt.MQTT_ERR_SUCCESS
 
     def check(self, condition: bool, message: str) -> None:
         self.checks += 1
@@ -978,6 +840,13 @@ class StressRunner:
             )
 
     def start(self) -> None:
+        if self.controller_client:
+            LOG.info("Connecting stress controller publisher")
+            self.controller_client.connect_async(self.args.host, self.args.port, keepalive=30)
+            self.controller_client.loop_start()
+            if not self.controller_connected.wait(self.args.connect_timeout):
+                self.check(False, "controller publisher did not connect")
+                return
         LOG.info("Connecting %d emulated SceneHub nodes", len(self.nodes))
         for node in self.nodes:
             node.start()
@@ -1000,6 +869,12 @@ class StressRunner:
     def stop(self) -> None:
         for node in self.nodes:
             node.stop()
+        if self.controller_client:
+            try:
+                self.controller_client.disconnect()
+            except Exception:
+                pass
+            self.controller_client.loop_stop()
 
     def find_nodes(self, selector: str) -> list[VirtualSceneHubNode]:
         normalized = selector.strip().lower()
@@ -1056,6 +931,51 @@ class StressRunner:
             self.check(
                 result is not None and result.get("status") == "done",
                 f"{label}: {node.node_id} did not return status",
+            )
+
+    def validate_manifest_result(
+        self,
+        node: VirtualSceneHubNode,
+        result: Optional[dict[str, Any]],
+        label: str,
+    ) -> None:
+        data = result.get("data") if result else None
+        manifest = data.get("device_description") if isinstance(data, dict) else None
+        self.check(
+            isinstance(manifest, dict),
+            f"{label}: {node.node_id} missing device_description",
+        )
+        if not isinstance(manifest, dict):
+            return
+        self.check(
+            manifest.get("manifest_version") == 2,
+            f"{label}: {node.node_id} manifest_version={manifest.get('manifest_version')}",
+        )
+        self.check(
+            manifest.get("format") == "compact_resources",
+            f"{label}: {node.node_id} format={manifest.get('format')}",
+        )
+        self.check(
+            manifest.get("capability_contract") == "scenehub.node.compact.v1",
+            f"{label}: {node.node_id} capability_contract={manifest.get('capability_contract')}",
+        )
+        resources = manifest.get("resources")
+        self.check(isinstance(resources, dict), f"{label}: {node.node_id} resources missing")
+        if not isinstance(resources, dict):
+            return
+        expected_counts = {
+            "relays": 4,
+            "mosfets": 4,
+            "inputs": 4,
+            "outputs": 4,
+            "led_strips": 2,
+        }
+        for key, expected in expected_counts.items():
+            value = resources.get(key)
+            actual = len(value) if isinstance(value, list) else None
+            self.check(
+                actual == expected,
+                f"{label}: {node.node_id} resources.{key} count={actual}",
             )
 
     @staticmethod
@@ -1221,8 +1141,36 @@ class StressRunner:
             self.check_status_for_nodes(wave, "reconnect wave")
         LOG.info("Reconnect waves complete")
 
+    def reconnect_churn_phase(self) -> None:
+        LOG.info("Phase 4: random reconnect churn")
+        count = min(self.args.churn_nodes, len(self.nodes))
+        if count <= 0:
+            return
+        rng = random.Random(self.args.random_seed)
+        targets = rng.sample(self.nodes, count)
+        rotated: list[str] = []
+        LOG.info("reconnect churn: %s", ", ".join(node.node_id for node in targets))
+        for node in targets:
+            node.disconnect_transport()
+        time.sleep(self.args.churn_offline_delay)
+        for node in targets:
+            if rng.random() < self.args.churn_boot_id_rate:
+                node.rotate_boot_id()
+                rotated.append(node.node_id)
+            node.reconnect_transport()
+        self.wait_nodes_ready(targets, "reconnect churn")
+        for node in targets:
+            node.publish_heartbeat()
+            node.publish_status()
+        self.check_status_for_nodes(self.nodes, "reconnect churn")
+        LOG.info(
+            "Reconnect churn complete: targets=%s boot_id_rotated=%s",
+            ",".join(node.node_id for node in targets),
+            ",".join(rotated) if rotated else "none",
+        )
+
     def duplicate_client_phase(self) -> None:
-        LOG.info("Phase 4: duplicate client_id replacement")
+        LOG.info("Phase 5: duplicate client_id replacement")
         count = min(self.args.duplicate_client_count, len(self.nodes))
         targets = self.nodes[:count]
         duplicates: list[tuple[VirtualSceneHubNode, mqtt.Client]] = []
@@ -1267,9 +1215,10 @@ class StressRunner:
         self.check_status_for_nodes(targets, "duplicate client")
 
     def describe_recovery_phase(self) -> None:
-        LOG.info("Phase 5: simultaneous describe_interface and retry recovery")
+        LOG.info("Phase 6: simultaneous describe_interface and retry recovery")
         pending = list(self.nodes)
         recovered = 0
+        manifest_results: dict[VirtualSceneHubNode, dict[str, Any]] = {}
 
         requests = [
             (node, node.send_command("describe_interface", {}))
@@ -1281,6 +1230,8 @@ class StressRunner:
             result = node.wait_result(request_id, max(0.0, deadline - time.monotonic()))
             if not result or result.get("status") != "done":
                 pending.append(node)
+            else:
+                manifest_results[node] = result
 
         if pending:
             LOG.warning(
@@ -1300,6 +1251,7 @@ class StressRunner:
                 result = node.wait_result(request_id, self.args.result_timeout)
                 if result and result.get("status") == "done":
                     recovered += 1
+                    manifest_results[node] = result
                 else:
                     retry_pending.append(node)
             pending = retry_pending
@@ -1316,6 +1268,7 @@ class StressRunner:
             + ", ".join(node.node_id for node in pending),
         )
         for node in self.nodes:
+            self.validate_manifest_result(node, manifest_results.get(node), "describe_interface")
             self.check(
                 node.connected.is_set(),
                 f"describe_interface recovery: {node.node_id} disconnected",
@@ -1328,7 +1281,7 @@ class StressRunner:
         )
 
     def duplicate_phase(self) -> None:
-        LOG.info("Phase 6: duplicate request_id and conflicting duplicate")
+        LOG.info("Phase 7: duplicate request_id and conflicting duplicate")
         originals: list[tuple[VirtualSceneHubNode, str]] = []
         for node in self.nodes:
             request_id = f"duplicate-{node.index}-{uuid.uuid4().hex[:8]}"
@@ -1356,7 +1309,7 @@ class StressRunner:
             )
 
     def problem_phase(self) -> None:
-        LOG.info("Phase 7: invalid and boundary commands")
+        LOG.info("Phase 8: invalid and boundary commands")
         for case in PROBLEM_CASES:
             self.run_case_across_nodes(case, "problem")
 
@@ -1376,8 +1329,47 @@ class StressRunner:
             )
         time.sleep(0.5)
 
+    def result_corruption_phase(self) -> None:
+        LOG.info("Phase 9: corrupted result traffic")
+        targets = self.nodes[:min(5, len(self.nodes))]
+        published = 0
+        for node in targets:
+            payloads = [
+                '{"request_id":"corrupt-json","status":',
+                json.dumps({
+                    "request_id": f"foreign-{node.index}-{uuid.uuid4().hex[:8]}",
+                    "command": "relay.set",
+                    "status": "done",
+                    "ts_ms": now_ms(),
+                }, separators=(",", ":")),
+                json.dumps({
+                    "request_id": f"missing-command-{node.index}-{uuid.uuid4().hex[:8]}",
+                    "status": "done",
+                    "ts_ms": now_ms(),
+                }, separators=(",", ":")),
+                json.dumps({
+                    "request_id": f"bad-status-{node.index}-{uuid.uuid4().hex[:8]}",
+                    "command": "node.get_status",
+                    "status": "teleported",
+                    "ts_ms": now_ms(),
+                }, separators=(",", ":")),
+                json.dumps({
+                    "request_id": f"oversize-result-{node.index}-{uuid.uuid4().hex[:8]}",
+                    "command": "node.get_status",
+                    "status": "done",
+                    "data": {"padding": "x" * 1400},
+                    "ts_ms": now_ms(),
+                }, separators=(",", ":")),
+            ]
+            for payload in payloads:
+                if node.publish_raw_result(payload, qos=1):
+                    published += 1
+        LOG.info("Corrupted result traffic published %d packets", published)
+        time.sleep(0.5)
+        self.check_status_for_nodes(self.nodes, "result corruption")
+
     def burst_phase(self) -> None:
-        LOG.info("Phase 8: queue pressure burst")
+        LOG.info("Phase 10: queue pressure burst")
         all_requests: list[tuple[VirtualSceneHubNode, str]] = []
         for node in self.nodes:
             for burst_index in range(self.args.burst):
@@ -1403,7 +1395,7 @@ class StressRunner:
         )
 
     def slow_client_phase(self) -> None:
-        LOG.info("Phase 9: slow node isolation")
+        LOG.info("Phase 11: slow node isolation")
         count = min(self.args.slow_clients, len(self.nodes))
         if count <= 0:
             return
@@ -1472,7 +1464,7 @@ class StressRunner:
     def soak_phase(self) -> None:
         if self.args.soak_seconds <= 0:
             return
-        LOG.info("Phase 10: soak traffic for %.1f seconds", self.args.soak_seconds)
+        LOG.info("Phase 12: soak traffic for %.1f seconds", self.args.soak_seconds)
         deadline = time.monotonic() + self.args.soak_seconds
         next_input = time.monotonic()
         next_command = time.monotonic()
@@ -1497,7 +1489,7 @@ class StressRunner:
             time.sleep(0.05)
 
     def health_phase(self) -> None:
-        LOG.info("Phase 11: post-stress health probe")
+        LOG.info("Phase 13: post-stress health probe")
         case = CommandCase("node.get_status", {}, {"done"})
         self.run_case_across_nodes(case, "health")
         for node in self.nodes:
@@ -1553,10 +1545,12 @@ class StressRunner:
             self.normal_phase()
             self.input_scenario_phase()
             self.reconnect_phase()
+            self.reconnect_churn_phase()
             self.duplicate_client_phase()
             self.describe_recovery_phase()
             self.duplicate_phase()
             self.problem_phase()
+            self.result_corruption_phase()
             self.burst_phase()
             self.slow_client_phase()
             self.soak_phase()
@@ -1587,11 +1581,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-step-delay", type=float, default=0.05)
     parser.add_argument("--reconnect-wave-size", type=int, default=5)
     parser.add_argument("--reconnect-offline-delay", type=float, default=0.5)
+    parser.add_argument("--churn-nodes", type=int, default=5)
+    parser.add_argument("--churn-offline-delay", type=float, default=1.0)
+    parser.add_argument("--churn-boot-id-rate", type=float, default=0.5)
     parser.add_argument("--duplicate-client-count", type=int, default=3)
     parser.add_argument("--duplicate-hold", type=float, default=0.5)
     parser.add_argument("--slow-clients", type=int, default=2)
     parser.add_argument("--slow-command-delay-ms", type=int, default=250)
     parser.add_argument("--slow-burst", type=int, default=8)
+    parser.add_argument("--drop-results-rate", type=float, default=0.0)
+    parser.add_argument("--delay-results-ms", type=int, default=0)
+    parser.add_argument("--disconnect-during-command-rate", type=float, default=0.0)
+    parser.add_argument("--random-seed", type=int, default=4242)
     parser.add_argument("--soak-seconds", type=float, default=0.0)
     parser.add_argument("--soak-input-interval", type=float, default=1.0)
     parser.add_argument("--soak-command-interval", type=float, default=5.0)
@@ -1601,6 +1602,17 @@ def parse_args() -> argparse.Namespace:
         choices=[0, 1],
         default=1,
         help="MQTT QoS used for all emulated controller commands",
+    )
+    parser.add_argument(
+        "--command-publisher",
+        choices=["controller", "self"],
+        default="self",
+        help=(
+            "MQTT client used to publish control commands. 'self' works with the current "
+            "broker ACL because every virtual node publishes to its own topic. 'controller' "
+            "uses one extra client and requires broker ACL rules that allow it to publish "
+            "to node command topics."
+        ),
     )
     parser.add_argument("--connect-timeout", type=float, default=20.0)
     parser.add_argument("--result-timeout", type=float, default=8.0)
@@ -1656,6 +1668,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--reconnect-wave-size must be at least 1")
     if args.reconnect_offline_delay < 0:
         parser.error("--reconnect-offline-delay must not be negative")
+    if args.churn_nodes < 0:
+        parser.error("--churn-nodes must not be negative")
+    if args.churn_offline_delay < 0:
+        parser.error("--churn-offline-delay must not be negative")
+    if args.churn_boot_id_rate < 0 or args.churn_boot_id_rate > 1:
+        parser.error("--churn-boot-id-rate must be between 0 and 1")
     if args.duplicate_client_count < 0:
         parser.error("--duplicate-client-count must not be negative")
     if args.duplicate_hold < 0:
@@ -1666,6 +1684,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--slow-command-delay-ms must not be negative")
     if args.slow_burst < 1:
         parser.error("--slow-burst must be at least 1")
+    if args.drop_results_rate < 0 or args.drop_results_rate > 1:
+        parser.error("--drop-results-rate must be between 0 and 1")
+    if args.delay_results_ms < 0:
+        parser.error("--delay-results-ms must not be negative")
+    if args.disconnect_during_command_rate < 0 or args.disconnect_during_command_rate > 1:
+        parser.error("--disconnect-during-command-rate must be between 0 and 1")
     if args.soak_seconds < 0:
         parser.error("--soak-seconds must not be negative")
     if args.soak_input_interval <= 0:

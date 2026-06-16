@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-16
+
+- Split the SceneHub Node stress test contract data into
+  `tests/scenehub_node_stress_test/scenehub_contract.py`, keeping the compact
+  manifest and command-case definitions separate from the MQTT runner.
+- Added stress coverage for random reconnect churn, optional `boot_id`
+  rotation, corrupted `/result` packets, and strict `describe_interface`
+  manifest structure checks.
+- Added optional fault-injection flags for slow, missing or interrupted command
+  results: `--drop-results-rate`, `--delay-results-ms`, and
+  `--disconnect-during-command-rate`.
+- Added an optional separate controller MQTT command publisher for future ACL
+  testing. The default remains `--command-publisher self` because the current
+  broker ACL permits each virtual node to publish only inside its own
+  `cp/v1/dev/<node>/...` namespace.
+
 ## 2026-06-15
 
 - Expanded the SceneHub Node stress test with real-world stability phases:
