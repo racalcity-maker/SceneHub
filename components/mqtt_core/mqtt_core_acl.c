@@ -104,6 +104,11 @@ static const acl_entry_t *find_static_acl_entry(const char *client_id)
     return NULL;
 }
 
+bool acl_is_static_client_id(const char *client_id)
+{
+    return find_static_acl_entry(client_id) != NULL;
+}
+
 static bool acl_can_access_self_contract(const char *client_id, const char *topic)
 {
     char device_id[MQTT_MAX_TOPIC] = {0};

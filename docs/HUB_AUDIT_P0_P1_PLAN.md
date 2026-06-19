@@ -13,6 +13,36 @@ Audit and follow-up fixes covered:
 
 ## Confirmed OK
 
+### 2026-06-17 stress-only pressure audit
+
+The 20-node stress run exposed several bounded pressure paths that are expected
+under synthetic load but should stay explicit rather than silently corrupting
+state.
+
+Current classification:
+
+- `mqtt_core` new SceneHub Node client admission is an explicit refusal at
+  `QUEST_DEVICE_MAX_DEVICES`; duplicate replacement for the same client ID is
+  still allowed for reconnects.
+- `device_control_ingest` no longer evicts an existing control-state slot when
+  an unexpected extra device reports telemetry; overflow is refused.
+- `gm_room_session` may drop non-critical runtime/diagnostic events when its
+  queue is full, but critical device-control events are logged as errors and
+  counted.
+- `event_bus` pool/queue exhaustion is a bounded global-pressure failure with
+  stats and caller-visible `ESP_ERR_NO_MEM` / `ESP_ERR_TIMEOUT`.
+- `ws_runtime` rejects extra websocket clients instead of evicting an existing
+  client.
+
+Remaining P1 observation:
+
+- `mqtt_core` outbound QoS1 pressure can still defer or fail delivery under
+  extreme retry/backlog pressure. Command callers must continue treating missing
+  result as timeout rather than success.
+- retained MQTT topic overflow is a bounded cache/store limit. Do not put
+  required durable hub state behind retained-topic best-effort storage without a
+  separate admission or persistence rule.
+
 ### P0.1 write boundary
 
 Audited write handlers in `web_ui` route writes through `scenehub_control`.

@@ -9,5 +9,5 @@ idf_component_register(
         "mqtt_core_server.c"
         "mqtt_core_session.c"
     INCLUDE_DIRS "include"
-    REQUIRES event_bus config_store esp_event lwip esp_timer device_control_ingest scenehub_events scenehub_config
+    REQUIRES event_bus config_store esp_event lwip esp_timer device_control_ingest quest_device scenehub_events scenehub_config
 )

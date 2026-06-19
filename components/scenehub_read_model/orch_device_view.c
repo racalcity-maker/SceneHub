@@ -199,6 +199,20 @@ static void orch_apply_control_ingest(const quest_device_t *dev, orch_device_ent
     quest_str_copy(dst->last_result_error_code,
                 sizeof(dst->last_result_error_code),
                 ingest->result_error_code);
+    dst->runtime_driver_enabled = ingest->status_driver_nfc_enabled;
+    dst->runtime_driver_ready = ingest->status_driver_nfc_ready;
+    quest_str_copy(dst->runtime_driver_id,
+                   sizeof(dst->runtime_driver_id),
+                   ingest->status_driver_nfc_reader_id);
+    quest_str_copy(dst->runtime_driver_health,
+                   sizeof(dst->runtime_driver_health),
+                   ingest->status_driver_nfc_health);
+    quest_str_copy(dst->runtime_driver_state,
+                   sizeof(dst->runtime_driver_state),
+                   ingest->status_driver_nfc_state);
+    quest_str_copy(dst->runtime_driver_error_code,
+                   sizeof(dst->runtime_driver_error_code),
+                   ingest->status_driver_nfc_error_code);
 
     dst->connectivity = device_control_ingest_is_online(ingest,
                                                          now_ms,
@@ -271,6 +285,20 @@ void orch_device_view_fill_control_device(const device_control_ingest_device_t *
     quest_str_copy(dst->boot_id, sizeof(dst->boot_id), orch_control_boot_id(ingest));
     quest_str_copy(dst->mode, sizeof(dst->mode), ingest->status_mode);
     quest_str_copy(dst->state, sizeof(dst->state), ingest->status_state);
+    dst->runtime_driver_enabled = ingest->status_driver_nfc_enabled;
+    dst->runtime_driver_ready = ingest->status_driver_nfc_ready;
+    quest_str_copy(dst->runtime_driver_id,
+                   sizeof(dst->runtime_driver_id),
+                   ingest->status_driver_nfc_reader_id);
+    quest_str_copy(dst->runtime_driver_health,
+                   sizeof(dst->runtime_driver_health),
+                   ingest->status_driver_nfc_health);
+    quest_str_copy(dst->runtime_driver_state,
+                   sizeof(dst->runtime_driver_state),
+                   ingest->status_driver_nfc_state);
+    quest_str_copy(dst->runtime_driver_error_code,
+                   sizeof(dst->runtime_driver_error_code),
+                   ingest->status_driver_nfc_error_code);
     dst->has_heartbeat = ingest->has_heartbeat;
     dst->has_status = ingest->has_status;
     dst->has_diag = ingest->has_diag;

@@ -10,3 +10,7 @@ void node_config_migrate_v5(const node_config_v5_t *legacy, node_config_t *confi
 void node_config_migrate_v6(const node_config_v6_t *legacy, node_config_t *config);
 void node_config_migrate_v7(const node_config_v7_t *legacy, node_config_t *config);
 void node_config_migrate_v8(const node_config_v8_t *legacy, node_config_t *config);
+void node_config_migrate_v9(const node_config_v9_t *legacy, node_config_t *config);
+void node_config_migrate_v10(const node_config_v10_t *legacy, node_config_t *config);
+void node_config_migrate_v11(const node_config_v11_t *legacy, node_config_t *config);
+void node_config_migrate_v12(const node_config_v12_t *legacy, node_config_t *config);

@@ -1,0 +1,86 @@
+{
+  "version": 2,
+  "bundle_id": "pause_led_smoke_test",
+  "generation": 1,
+  "mode": "standalone",
+  "initial_state": {
+    "led_running": true
+  },
+  "rules": [
+    {
+      "id": "boot_start_blink",
+      "enabled": true,
+      "trigger": {
+        "kind": "boot"
+      },
+      "actions": [
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "rainbow_cycle"
+          }
+        },
+        {
+          "kind": "set_state",
+          "key": "led_running",
+          "value": true
+        },
+        {
+          "kind": "start_timer",
+          "timer": "led_toggle",
+          "mode": "repeat",
+          "interval_ms": 1000
+        }
+      ]
+    },
+    {
+      "id": "toggle_led_each_second",
+      "enabled": true,
+      "trigger": {
+        "kind": "timer",
+        "timer": "led_toggle"
+      },
+      "actions": [
+        {
+          "kind": "choose",
+          "condition": {
+            "kind": "state_equals",
+            "key": "led_running",
+            "value": true
+          },
+          "then": [
+            {
+              "kind": "command",
+              "command": "led.off",
+              "args": {
+                "output": "strip_1"
+              }
+            },
+            {
+              "kind": "set_state",
+              "key": "led_running",
+              "value": false
+            }
+          ],
+          "else": [
+            {
+              "kind": "command",
+              "command": "led.effect",
+              "args": {
+                "output": "strip_1",
+                "effect": "rainbow_cycle"
+              }
+            },
+            {
+              "kind": "set_state",
+              "key": "led_running",
+              "value": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -11,6 +11,7 @@ typedef enum {
     NODE_CONTROL_SOURCE_HUB,
     NODE_CONTROL_SOURCE_LOCAL_PREVIEW,
     NODE_CONTROL_SOURCE_LOCAL_UI,
+    NODE_CONTROL_SOURCE_LOCAL_RULE,
 } node_control_command_source_t;
 
 typedef struct {

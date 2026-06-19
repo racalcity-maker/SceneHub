@@ -46,6 +46,8 @@ Forbidden under locks:
 - storage read/write;
 - provisioning web request handling;
 - JSON parse/print;
+- large admin/export payload assembly or copy just to serve wide transient
+  responses;
 - rule bundle validation;
 - long hardware effects;
 - delays/sleeps;

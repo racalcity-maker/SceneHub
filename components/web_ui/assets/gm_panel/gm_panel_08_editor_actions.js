@@ -124,6 +124,145 @@ events
 };
 }
 
+function questDeviceAdminState(){
+if(!questDeviceEditor.admin_state||typeof questDeviceEditor.admin_state!=='object'){
+questDeviceEditor.admin_state={bundle_text:'',metadata:null,last_result:null,paused:false};
+}
+return questDeviceEditor.admin_state;
+}
+
+function questDeviceAdminBundleText(){
+const box=document.querySelector('[data-quest-admin-bundle]');
+if(box)return box.value||'';
+return String(questDeviceAdminState().bundle_text||'');
+}
+
+function questDeviceAdminSetBundleText(text){
+const next=String(text||'');
+questDeviceAdminState().bundle_text=next;
+const box=document.querySelector('[data-quest-admin-bundle]');
+if(box&&box.value!==next)box.value=next;
+}
+
+function questDeviceAdminBundleObject(){
+const text=questDeviceAdminBundleText().trim();
+let parsed=null;
+if(!text)throw new Error('Bundle JSON is empty');
+try{
+parsed=JSON.parse(text);
+}
+catch(err){
+throw new Error('Bundle JSON is invalid');
+}
+if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Bundle JSON must be an object');
+return parsed;
+}
+
+function questDeviceAdminApplyResponse(commandId,body){
+const state=questDeviceAdminState();
+const data=body&&body.data&&typeof body.data==='object'?body.data:null;
+state.last_result=body&&typeof body==='object'?JSON.parse(JSON.stringify(body)):null;
+if(data&&data.metadata&&typeof data.metadata==='object'){
+state.metadata=JSON.parse(JSON.stringify(data.metadata));
+}
+if(data&&Object.prototype.hasOwnProperty.call(data,'paused'))state.paused=!!data.paused;
+if(commandId==='node.rules.get'&&data&&Object.prototype.hasOwnProperty.call(data,'bundle')){
+state.bundle_text=data.bundle&&typeof data.bundle==='object'?JSON.stringify(data.bundle,null,2):'';
+}
+if(commandId==='node.rules.clear'){
+state.metadata=data&&data.metadata&&typeof data.metadata==='object'?JSON.parse(JSON.stringify(data.metadata)):{has_bundle:false};
+state.bundle_text='';
+state.paused=false;
+}
+return state;
+}
+
+async function loadQuestDeviceStoredBundle(){
+if(!isAdmin())throw new Error('Admin role required');
+const device=currentQuestDeviceDraft();
+const command=questDeviceAdminCommandById(device,'node.rules.get');
+if(!device||!device.id||!command)throw new Error('Bundle load is not available for this device');
+const body=await runDeviceAdminCommand(device.id,command.id,undefined,false,'Loading stored bundle...');
+questDeviceAdminApplyResponse(command.id,body);
+clearTransientFieldDirty();
+render();
+setGMStatus('Stored bundle loaded','gm-ok');
+}
+
+function formatQuestDeviceBundleJson(){
+const state=questDeviceAdminState();
+const parsed=questDeviceAdminBundleObject();
+state.bundle_text=JSON.stringify(parsed,null,2);
+clearTransientFieldDirty();
+render();
+setGMStatus('Bundle JSON formatted','gm-ok');
+}
+
+async function validateQuestDeviceBundle(){
+if(!isAdmin())throw new Error('Admin role required');
+const device=currentQuestDeviceDraft();
+const command=questDeviceAdminCommandById(device,'node.rules.validate');
+const bundle=questDeviceAdminBundleObject();
+if(!device||!device.id||!command)throw new Error('Bundle validation is not available for this device');
+questDeviceAdminState().bundle_text=JSON.stringify(bundle,null,2);
+const body=await runDeviceAdminCommand(device.id,
+command.id,
+bundle,
+false,
+'Validating bundle...');
+questDeviceAdminApplyResponse(command.id,body);
+render();
+setGMStatus('Bundle validated','gm-ok');
+}
+
+async function applyQuestDeviceBundle(){
+if(!isAdmin())throw new Error('Admin role required');
+const device=currentQuestDeviceDraft();
+const command=questDeviceAdminCommandById(device,'node.rules.apply');
+const bundle=questDeviceAdminBundleObject();
+if(!device||!device.id||!command)throw new Error('Bundle apply is not available for this device');
+questDeviceAdminState().bundle_text=JSON.stringify(bundle,null,2);
+const body=await runDeviceAdminCommand(device.id,
+command.id,
+bundle,
+true,
+'Applying bundle...');
+questDeviceAdminApplyResponse(command.id,body);
+await Promise.all([loadObserved(true),loadQuestDevices(true)]);
+render();
+setGMStatus('Bundle applied','gm-ok');
+}
+
+async function clearQuestDeviceBundle(){
+if(!isAdmin())throw new Error('Admin role required');
+const device=currentQuestDeviceDraft();
+const command=questDeviceAdminCommandById(device,'node.rules.clear');
+if(!device||!device.id||!command)throw new Error('Bundle clear is not available for this device');
+const body=await runDeviceAdminCommand(device.id,
+command.id,
+undefined,
+true,
+'Clearing bundle...');
+questDeviceAdminApplyResponse(command.id,body);
+await Promise.all([loadObserved(true),loadQuestDevices(true)]);
+render();
+setGMStatus('Bundle cleared','gm-ok');
+}
+
+async function runQuestDeviceQuickAdmin(deviceId,commandId,confirmed){
+if(!isAdmin())throw new Error('Admin role required');
+if(!deviceId||!commandId)throw new Error('Admin action is incomplete');
+const body=await runDeviceAdminCommand(deviceId,commandId,undefined,!!confirmed,'Running admin action...');
+const device=questDeviceById(deviceId);
+const adminCommand=questDeviceAdminCommandById(device,commandId);
+if(currentView==='device_setup'&&questDeviceEditor.open&&String(questDeviceEditor.device_id||'')===deviceId){
+questDeviceAdminApplyResponse(commandId,body);
+}
+await Promise.all([loadObserved(true),loadQuestDevices(true)]);
+render();
+setGMStatus(`${(adminCommand&&adminCommand.label)||commandId} completed`,'gm-ok');
+}
+
 async function discoverQuestDeviceInterface(){
 if(!isAdmin())throw new Error('Admin role required');
 const current=collectQuestDeviceEditor(false);

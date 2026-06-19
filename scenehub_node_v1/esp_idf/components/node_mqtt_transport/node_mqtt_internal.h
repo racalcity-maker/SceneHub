@@ -17,8 +17,10 @@
 #define NODE_MQTT_REQUEST_ID_MAX 48
 #define NODE_MQTT_COMMAND_MAX 64
 #define NODE_MQTT_ARGS_MAX 1024
+#define NODE_MQTT_ADMIN_ARGS_MAX (NODE_RULE_BUNDLE_MAX_LEN + 256)
 #define NODE_MQTT_DUP_CACHE_SIZE 4
 #define NODE_MQTT_COMMAND_QUEUE_LEN 4
+#define NODE_MQTT_ADMIN_QUEUE_LEN 1
 #define NODE_MQTT_RESULT_QUEUE_LEN 8
 #define NODE_MQTT_RESULT_PUBLISH_RETRIES 4
 #define NODE_MQTT_RESULT_RETRY_DELAY_MS 100
@@ -38,6 +40,13 @@ typedef struct {
     char command[NODE_MQTT_COMMAND_MAX];
     char args_json[NODE_MQTT_ARGS_MAX];
 } node_mqtt_command_message_t;
+
+typedef struct {
+    bool valid;
+    char request_id[NODE_MQTT_REQUEST_ID_MAX];
+    char command[NODE_MQTT_COMMAND_MAX];
+    char args_json[NODE_MQTT_ADMIN_ARGS_MAX];
+} node_mqtt_admin_message_t;
 
 typedef struct {
     char request_id[NODE_MQTT_REQUEST_ID_MAX];
@@ -84,4 +93,7 @@ esp_err_t node_mqtt_publish_event_locked(const char *event_name, const char *arg
 void node_mqtt_publish_heartbeat_and_status(bool include_status);
 
 bool node_mqtt_parse_command_payload(const char *payload, node_mqtt_command_message_t *out_message);
+bool node_mqtt_command_is_admin(const char *command);
+bool node_mqtt_parse_admin_command_payload(const char *payload, node_mqtt_admin_message_t *out_message);
 void node_mqtt_process_command_message(const node_mqtt_command_message_t *message);
+void node_mqtt_process_admin_command_message(const node_mqtt_admin_message_t *message);

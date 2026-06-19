@@ -548,6 +548,31 @@ args_schema:compactSchemaForTemplate(manifest,template)
 }).filter(command=>command.id&&command.command);
 }
 
+function compactAdminCommandsForDevice(device){
+const manifest=compactManifest(device);
+if(!manifest)return [];
+return (Array.isArray(manifest.admin_command_templates)?manifest.admin_command_templates:[]).map(template=>{
+const commandName=String(template&&template.command||'');
+return {
+id:String(template&&template.id||commandName),
+label:String(template&&template.label||template&&template.id||commandName),
+capability:'admin',
+command:commandName,
+default_args:template&&template.default_args&&typeof template.default_args==='object'?template.default_args:undefined,
+policy:compactPolicy(template&&template.policy),
+args_schema:[]
+};
+}).filter(command=>command.id&&command.command);
+}
+
+function questDeviceAdminCommandList(device){
+return compactAdminCommandsForDevice(device);
+}
+
+function questDeviceAdminCommandById(device,commandId){
+return questDeviceAdminCommandList(device).find(command=>String(command&&command.id||'')===String(commandId||''))||null;
+}
+
 function compactEventsForDevice(device){
 const manifest=compactManifest(device);
 if(!manifest)return Array.isArray(device&&device.events)?device.events:[];

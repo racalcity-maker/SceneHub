@@ -119,7 +119,22 @@ const suffix=String(value||'unknown').trim().replace(/[^a-zA-Z0-9_.-]+/g,'_')||'
 return gmStatInc(`${base}.${suffix}`,delta);
 }
 
-function setStatus(text,cls){const el=document.getElementById('system_status');if(!el)return;el.textContent=text||'';el.className='status '+(cls||'state-unknown');}
+function setStatus(text,cls){
+const message=text||'';
+const css='status '+(cls||'state-unknown');
+const el=document.getElementById('system_status');
+if(el){
+el.textContent=message;
+el.className=css;
+}
+document.querySelectorAll('[data-gm-inline-status-badge]').forEach(node=>{
+node.textContent=message?healthLabel((cls||'state-unknown').replace(/^state-/,'')):'idle';
+node.className=css;
+});
+document.querySelectorAll('[data-gm-inline-status-text]').forEach(node=>{
+node.textContent=message||'No recent action yet.';
+});
+}
 async function gmFetch(url,options){const res=await fetch(url,options);if(res.status===401){window.location='/login';throw new Error('Unauthorized');}return res;}
 function isAdmin(){return gmSession&&gmSession.role==='admin';}
 function canOpenView(view){return !['devices','profiles','scenarios','device_setup','hardware_io','observed','storage'].includes(view)||isAdmin();}
@@ -130,6 +145,12 @@ document.querySelectorAll('[data-view]').forEach(el=>{if(['devices','profiles','
 async function loadGMSession(){try{const res=await api.session.info();if(res.ok){gmSession=await res.json();}}catch(err){gmSession={role:'user',username:''};}window.__WEB_SESSION=gmSession;applyGMRoleLayout();return gmSession;}
 function metric(label,value){return `<div class='card metric'><div class='label'>${esc(label)}</div><div class='value'>${esc(value)}</div></div>`;}
 function status(v){return `<span class='status ${stateClass(v)}'>${esc(healthLabel(v))}</span>`;}
+function currentStatusState(){
+const el=document.getElementById('system_status');
+const className=el&&typeof el.className==='string'?el.className:'status state-unknown';
+const text=el&&typeof el.textContent==='string'?el.textContent.trim():'';
+return {text:text||'',className:className||'status state-unknown'};
+}
 function roomCard(r){const derived=roomDerivedHealth(r);const issueCount=Number(r&&r.issue_count)||0;const deviceCount=Number(r&&r.scenario_device_count)||Number(r&&r.device_count)||0;return `<article class='card clickable' data-room-card='${esc(r.room_id)}' data-action='room.open' data-room-id='${esc(r.room_id)}'><div class='card-head'><div><div class='card-title'>${esc(r.title||r.name||r.room_id)}</div><div class='card-sub'>Room</div></div>${status(derived)}</div><div class='kvs'><div class='kv'><span class='k'>Devices</span><span class='v'>${esc(deviceCount)}</span></div><div class='kv'><span class='k'>Issues</span><span class='v'>${esc(issueCount)}</span></div><div class='kv'><span class='k'>Timer</span>${roomClockHtml(r,'span','v')}</div></div></article>`;}
 function issueRow(i){const subject=i.device_id?deviceDisplayName(i.device_id):(i.room_id?roomName(i.room_id):i.scope);return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(subject)} - ${esc(i.title||i.code)}</div><div class='row-meta'>${esc(i.details||'')}</div></div>${status(i.severity)}</div>`;}
 function noProfilesHtml(roomId){return isAdmin()?`<div class='empty'>No game modes for this room</div><div class='actions'>${uiButton({label:'Create game mode',action:'admin.open',dataset:{view:'profiles','room-id':roomId||''}})}</div>`:`<div class='empty'>No game modes available. Ask admin.</div>`;}

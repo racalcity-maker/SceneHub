@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "node_hardware_io.h"
+#include "node_rule_engine.h"
 
 node_config_t g_node_control_config;
 
@@ -25,6 +26,8 @@ const char *command_source_text(node_control_command_source_t source)
         return "preview";
     case NODE_CONTROL_SOURCE_LOCAL_UI:
         return "local_ui";
+    case NODE_CONTROL_SOURCE_LOCAL_RULE:
+        return "local_rule";
     case NODE_CONTROL_SOURCE_UNKNOWN:
     default:
         return "unknown";
@@ -165,6 +168,16 @@ esp_err_t node_control_execute(const node_control_command_t *command, node_contr
     }
     if (strcmp(command->command, "led.preview.effect") == 0) {
         return execute_led_effect(command, out_result, true);
+    }
+    {
+        esp_err_t err = node_rule_engine_dispatch_mqtt_command(command->command);
+        if (err == ESP_OK) {
+            result_done(out_result);
+            return ESP_OK;
+        }
+        if (err == ESP_ERR_INVALID_STATE) {
+            return result_rejected(out_result, "rules_inactive");
+        }
     }
     return result_rejected(out_result, "not_supported");
 }

@@ -17,6 +17,19 @@ function questDeviceStatusText(dev){
 const observed=questDeviceObserved(dev);
 if(observed){
 const state=String(observed.state||'').trim();
+const driverEnabled=!!observed.runtime_driver_enabled;
+const driverHealth=String(observed.runtime_driver_health||'').trim().toLowerCase();
+const driverState=String(observed.runtime_driver_state||'').trim();
+const driverCode=String(observed.runtime_driver_error_code||'').trim();
+const driverId=String(observed.runtime_driver_id||'').trim();
+if(driverEnabled&&driverHealth&&driverHealth!=='ok'){
+const parts=[];
+if(state)parts.push(state);
+parts.push(driverId||'nfc_reader');
+if(driverState)parts.push(driverState);
+if(driverCode)parts.push(driverCode);
+return parts.join(' / ');
+}
 if(state)return state;
 const connectivity=String(observed.connectivity||'').trim();
 if(connectivity)return connectivity;

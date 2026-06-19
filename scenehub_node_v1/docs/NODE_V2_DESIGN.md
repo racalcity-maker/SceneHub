@@ -13,6 +13,10 @@ The concrete rule schema draft and AI-generation contract live in
 The transition plan from v1 firmware to v2 modules lives in
 `NODE_V2_TRANSITION_PLAN.md`.
 
+The frozen engine semantics live in `NODE_V2_ENGINE_CONTRACT.md`.
+
+The driver rollout plan lives in `NODE_V2_DRIVER_PLAN.md`.
+
 Node v2 may also expose a small set of firmware-built device drivers such as
 digital sensors, NFC readers, DFPlayer and LED strips. Driver support is
 intentionally bounded: the node is not trying to become ESPHome.
@@ -73,6 +77,69 @@ The node must not require operators to hand-maintain two independent documents.
 After `standalone_bundle` activation, firmware updates status and generated
 `device_description` metadata automatically.
 
+## Bundle-Exported Scenario Surface
+
+The active bundle may also define the scenario-facing controls/events that
+SceneHub should present for this node.
+
+Example:
+
+- raw hardware resource: `relay_2`
+- scenario-facing command shown in SceneHub: `open_room_2`
+
+This is not a firmware-side rename of the relay itself. It is a projection
+layer:
+
+- hardware capability remains the low-level truth;
+- bundle exports declare the high-level scenario meaning;
+- `describe_interface` publishes both, with bundle exports preferred for normal
+  scenario UX.
+
+This matters because operators should build room logic against meaning, not
+against board channels.
+
+Preferred model:
+
+- exported commands are explicit bundle-defined runtime commands;
+- exported events are explicit bundle-defined outward events;
+- exported commands may claim underlying resources such as `relay_2` or
+  `strip_1` for UI purposes;
+- claimed raw resources may be hidden or de-emphasized in normal SceneHub
+  device controls while still remaining visible in diagnostics/admin views.
+
+Example shape:
+
+```json
+{
+  "exports": {
+    "commands": [
+      {
+        "id": "open_room_2",
+        "label": "Open Room 2",
+        "kind": "runtime_command",
+        "claims": [
+          "relay_2"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "id": "room_2_open_started",
+        "label": "Room 2 Open Started"
+      },
+      {
+        "id": "room_2_open_finished",
+        "label": "Room 2 Open Finished"
+      }
+    ]
+  }
+}
+```
+
+At runtime, `open_room_2` should enter the same validated node command/rule
+path as any other scenario command. It must not call hardware directly from the
+transport layer.
+
 ## JSON Rule Model
 
 The uploaded standalone bundle uses this initial shape:
@@ -124,6 +191,65 @@ control flow. Example use cases:
 - reset input returns the local flow to its initial phase;
 - after several local conditions are complete, wait for additional inputs and
   emit a final event.
+
+## Engine Contract
+
+Node v2 should use a compiled reactive state machine, not a general scripting
+VM.
+
+This means:
+
+- author-facing JSON may look expressive, but firmware compiles it into fixed
+  bounded tables;
+- runtime execution is event-driven and non-blocking;
+- phases, state flags and timers are the primary way to express multi-step
+  logic;
+- the hot path must not traverse arbitrary JSON, allocate memory or interpret
+  free-form expressions.
+
+The target mental model is:
+
+- event arrives;
+- matching rules are selected;
+- conditions are evaluated from current inputs, phase, state and timer status;
+- actions enqueue deterministic side effects or state transitions;
+- any long wait is represented as a timer or a later event, not as a blocked
+  rule frame.
+
+This is intentionally less powerful than Lua or JavaScript, but it is a better
+fit for a node that must stay predictable under memory and timing pressure.
+
+## Complex Logic Policy
+
+Node v2 should support useful quest logic such as `if`, `or`, reset paths,
+branching and timed waits, but only through bounded declarative constructs.
+
+Approved patterns:
+
+- `all` / `any` / `not` for boolean logic;
+- explicit `phase` values for flow control;
+- local `state` values for latched facts;
+- `start_timer` / `cancel_timer` plus `timer` trigger for delayed behavior;
+- `choose` for bounded branch selection inside an action list;
+- `sequence` for bounded ordered action groups.
+
+Disallowed patterns:
+
+- loops;
+- recursion;
+- inline scripting;
+- arbitrary expression strings;
+- blocking `wait until ...` semantics;
+- hidden background execution contexts per rule.
+
+If an operator says "wait until input 3 becomes active", the compiled logic
+should usually become:
+
+- move to phase `waiting_input_3`;
+- optionally start a timeout timer;
+- let a later `input_edge`, `input_level` or `timer` event continue the flow.
+
+That keeps the runtime model deterministic and observable.
 
 ## Driver Model
 
@@ -228,11 +354,13 @@ Optional commands:
 
 Rules are event driven:
 
-- input event;
+- boot event;
+- input edge/level event;
+- input hold event;
 - timer event;
 - MQTT command event;
-- local state change;
-- boot/reconnect event.
+- local emitted event;
+- optional local state change event.
 
 Actions are routed through the same validated command handlers used by normal
 MQTT commands.
@@ -241,12 +369,18 @@ Allowed action kinds:
 
 - `command`
 - `set_state`
+- `set_phase`
 - `emit_event`
-- `delay`
+- `start_timer`
 - `cancel_timer`
+- `choose`
+- `sequence`
 
 Unsafe action kinds are not allowed unless represented as normal declared
 commands with policy and validation.
+
+The rule engine must never block on a delay. Any delayed continuation is
+represented by a timer trigger or by phase-gated follow-up rules.
 
 ## Safety Limits
 
@@ -256,7 +390,7 @@ Every active bundle has hard limits:
 - maximum actions per rule;
 - maximum queued actions;
 - maximum timers;
-- maximum delay duration;
+- maximum action nesting depth;
 - maximum action execution time per tick;
 - maximum JSON size;
 - maximum string pool bytes.
@@ -315,6 +449,10 @@ The generated `device_description` should also include v2 state metadata:
 Normal room scenarios should continue to use high-level device commands and
 events. Rule editing is an admin/config operation, not a scenario step path.
 
+When a bundle exports a scenario surface, SceneHub should generally use that
+surface instead of showing raw channel names such as `relay_2` as the primary
+control vocabulary.
+
 ## Versioning
 
 - Rule bundle schema has its own `version`.
@@ -329,9 +467,9 @@ V2 should be built in small steps:
 
 1. Add rule bundle storage with validate/get/clear only.
 2. Add compile-to-table without execution.
-3. Add input-event trigger and one `command` action.
-4. Add timers/delay.
-5. Add state variables and conditions.
+3. Add boot/input triggers, `command`, `set_state`, `set_phase`, `emit_event`.
+4. Add timers and phase-gated multi-step flows.
+5. Add bounded branching with `all` / `any` / `not` and `choose`.
 6. Add diagnostics and rule status projection.
 
 Do not add a general scripting VM until fixed-table rules prove insufficient.

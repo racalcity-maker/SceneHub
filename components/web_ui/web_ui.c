@@ -217,6 +217,7 @@ static esp_err_t register_httpd_routes(void)
         {.uri = "/api/gm/device/save", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_device_save_handler},
         {.uri = "/api/gm/device/delete", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_device_delete_handler},
         {.uri = "/api/gm/device/command/run", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_USER, .redirect_on_fail = false, .fn = gm_quest_device_command_run_handler},
+        {.uri = "/api/gm/device/admin/run", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = gm_quest_device_admin_command_run_handler},
         {.uri = "/api/hardware-io/status", .method = HTTP_GET, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = hardware_io_status_handler},
         {.uri = "/api/hardware-io/io-mode", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = hardware_io_io_mode_handler},
         {.uri = "/api/gm/device/describe-interface", .method = HTTP_POST, .guarded = true, .min_role = WEB_USER_ROLE_ADMIN, .redirect_on_fail = false, .fn = orchestrator_describe_interface_handler},
@@ -309,6 +310,8 @@ static esp_err_t start_httpd(void)
     config.backlog_conn = config.max_open_sockets;
     config.lru_purge_enable = true; // drop oldest sockets instead of refusing new ones
     config.keep_alive_enable = false; // close connections immediately
+    config.recv_wait_timeout = 3;
+    config.send_wait_timeout = 3;
     config.stack_size = 16384; // avoid stack overflow with larger handlers/pages
     #if WEB_UI_DEBUG
     ESP_LOGI(TAG, "starting httpd: uri=%d sockets=%d backlog=%d keepalive=%d free_int=%u",

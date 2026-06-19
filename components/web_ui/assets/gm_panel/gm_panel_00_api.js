@@ -83,6 +83,12 @@ command_id:commandId,
 ...(params&&typeof params==='object'?{params}:{}),
 ...(confirmed?{confirmed:true}:{}),
 }),
+runAdminCommand:(deviceId,commandId,params,confirmed)=>gmPostJson('/api/gm/device/admin/run',{
+device_id:deviceId,
+command_id:commandId,
+...(params&&typeof params==='object'?{params}:{}),
+...(confirmed?{confirmed:true}:{}),
+}),
 },
 sidebarPresets:{
 list:()=>gmGet('/api/gm/sidebar-presets'),

@@ -99,8 +99,9 @@ static void handle_client(void *param)
         goto cleanup;
     }
     pkt[rem] = 0;
-    if ((header >> 4) != 1 || handle_connect(sess, pkt, rem) != 0) {
-        send_connack(sess->sock, 0x02);
+    int connack_rc = (header >> 4) == 1 ? handle_connect(sess, pkt, rem) : 0x02;
+    if (connack_rc != 0) {
+        send_connack(sess->sock, (uint8_t)connack_rc);
         goto cleanup;
     }
     configure_session_recv_timeout(sess);

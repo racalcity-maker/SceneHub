@@ -2,6 +2,24 @@
 
 #include <string.h>
 
+static void copy_universal_io_v11(node_universal_pin_config_t *dst,
+                                  const node_universal_pin_config_v11_t *src,
+                                  size_t count)
+{
+    if (!dst || !src) {
+        return;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        dst[i].enabled = src[i].enabled;
+        dst[i].channel = src[i].channel;
+        dst[i].gpio = src[i].gpio;
+        dst[i].role = src[i].role;
+        dst[i].active_low = src[i].active_low;
+        dst[i].debounce_ms = 0;
+        memcpy(dst[i].label, src[i].label, sizeof(dst[i].label));
+    }
+}
+
 static void copy_led_effect_preset_v7(node_led_effect_preset_t *dst, const node_led_effect_preset_v7_t *src)
 {
     if (!dst || !src) {
@@ -60,7 +78,7 @@ void node_config_migrate_v1(const node_config_v1_t *legacy, node_config_t *confi
         config->mosfets[i].active_low = legacy->mosfets[i].active_low;
         memcpy(config->mosfets[i].label, legacy->mosfets[i].label, sizeof(config->mosfets[i].label));
     }
-    memcpy(config->universal_io, legacy->universal_io, sizeof(config->universal_io));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         config->led_strips[i].enabled = legacy->led_strips[i].enabled;
         config->led_strips[i].channel = legacy->led_strips[i].channel;
@@ -105,7 +123,7 @@ void node_config_migrate_v2(const node_config_v2_t *legacy, node_config_t *confi
         config->mosfets[i].active_low = legacy->mosfets[i].active_low;
         memcpy(config->mosfets[i].label, legacy->mosfets[i].label, sizeof(config->mosfets[i].label));
     }
-    memcpy(config->universal_io, legacy->universal_io, sizeof(config->universal_io));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         config->led_strips[i].enabled = legacy->led_strips[i].enabled;
         config->led_strips[i].channel = legacy->led_strips[i].channel;
@@ -150,7 +168,7 @@ void node_config_migrate_v3(const node_config_v3_t *legacy, node_config_t *confi
         config->mosfets[i].active_low = legacy->mosfets[i].active_low;
         memcpy(config->mosfets[i].label, legacy->mosfets[i].label, sizeof(config->mosfets[i].label));
     }
-    memcpy(config->universal_io, legacy->universal_io, sizeof(config->universal_io));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         config->led_strips[i].enabled = legacy->led_strips[i].enabled;
         config->led_strips[i].channel = legacy->led_strips[i].channel;
@@ -206,7 +224,7 @@ void node_config_migrate_v4(const node_config_v4_t *legacy, node_config_t *confi
         config->mosfets[i].active_low = legacy->mosfets[i].active_low;
         memcpy(config->mosfets[i].label, legacy->mosfets[i].label, sizeof(config->mosfets[i].label));
     }
-    memcpy(config->universal_io, legacy->universal_io, sizeof(config->universal_io));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         config->led_strips[i].enabled = legacy->led_strips[i].enabled;
         config->led_strips[i].channel = legacy->led_strips[i].channel;
@@ -262,7 +280,7 @@ void node_config_migrate_v5(const node_config_v5_t *legacy, node_config_t *confi
         config->mosfets[i].active_low = legacy->mosfets[i].active_low;
         memcpy(config->mosfets[i].label, legacy->mosfets[i].label, sizeof(config->mosfets[i].label));
     }
-    memcpy(config->universal_io, legacy->universal_io, sizeof(config->universal_io));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         config->led_strips[i].enabled = legacy->led_strips[i].enabled;
         config->led_strips[i].channel = legacy->led_strips[i].channel;
@@ -325,7 +343,7 @@ void node_config_migrate_v6(const node_config_v6_t *legacy, node_config_t *confi
         config->mosfets[i].active_low = legacy->mosfets[i].active_low;
         memcpy(config->mosfets[i].label, legacy->mosfets[i].label, sizeof(config->mosfets[i].label));
     }
-    memcpy(config->universal_io, legacy->universal_io, sizeof(config->universal_io));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         config->led_strips[i].enabled = legacy->led_strips[i].enabled;
         config->led_strips[i].channel = legacy->led_strips[i].channel;
@@ -378,7 +396,7 @@ void node_config_migrate_v7(const node_config_v7_t *legacy, node_config_t *confi
     config->pin_config_locked = legacy->pin_config_locked;
     memcpy(config->relays, legacy->relays, sizeof(config->relays));
     memcpy(config->mosfets, legacy->mosfets, sizeof(config->mosfets));
-    memcpy(config->universal_io, legacy->universal_io, sizeof(config->universal_io));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         config->led_strips[i].enabled = legacy->led_strips[i].enabled;
         config->led_strips[i].channel = legacy->led_strips[i].channel;
@@ -418,7 +436,7 @@ void node_config_migrate_v8(const node_config_v8_t *legacy, node_config_t *confi
     config->pin_config_locked = legacy->pin_config_locked;
     memcpy(config->relays, legacy->relays, sizeof(config->relays));
     memcpy(config->mosfets, legacy->mosfets, sizeof(config->mosfets));
-    memcpy(config->universal_io, legacy->universal_io, sizeof(config->universal_io));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {
         config->led_strips[i].enabled = legacy->led_strips[i].enabled;
         config->led_strips[i].channel = legacy->led_strips[i].channel;
@@ -452,5 +470,104 @@ void node_config_migrate_v8(const node_config_v8_t *legacy, node_config_t *confi
             migrate_effect_aux_colors((node_led_effect_id_t)effect_index, dst);
         }
     }
+    config->version = g_node_config_version;
+}
+
+void node_config_migrate_v9(const node_config_v9_t *legacy, node_config_t *config)
+{
+    if (!legacy || !config) {
+        return;
+    }
+
+    node_config_set_factory_defaults(config);
+    memcpy(config->node_id, legacy->node_id, sizeof(config->node_id));
+    memcpy(config->node_name, legacy->node_name, sizeof(config->node_name));
+    memcpy(config->wifi_ssid, legacy->wifi_ssid, sizeof(config->wifi_ssid));
+    memcpy(config->wifi_password, legacy->wifi_password, sizeof(config->wifi_password));
+    memcpy(config->controller_host, legacy->controller_host, sizeof(config->controller_host));
+    config->mqtt_port = legacy->mqtt_port;
+    memcpy(config->mqtt_client_id, legacy->mqtt_client_id, sizeof(config->mqtt_client_id));
+    config->reset_gpio = legacy->reset_gpio;
+    config->pin_config_locked = legacy->pin_config_locked;
+    config->operation_mode = NODE_OPERATION_MODE_SCENEHUB;
+    memcpy(config->relays, legacy->relays, sizeof(config->relays));
+    memcpy(config->mosfets, legacy->mosfets, sizeof(config->mosfets));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
+    memcpy(config->led_strips, legacy->led_strips, sizeof(config->led_strips));
+    config->version = g_node_config_version;
+}
+
+void node_config_migrate_v10(const node_config_v10_t *legacy, node_config_t *config)
+{
+    if (!legacy || !config) {
+        return;
+    }
+
+    node_config_set_factory_defaults(config);
+    memcpy(config->node_id, legacy->node_id, sizeof(config->node_id));
+    memcpy(config->node_name, legacy->node_name, sizeof(config->node_name));
+    memcpy(config->wifi_ssid, legacy->wifi_ssid, sizeof(config->wifi_ssid));
+    memcpy(config->wifi_password, legacy->wifi_password, sizeof(config->wifi_password));
+    memcpy(config->controller_host, legacy->controller_host, sizeof(config->controller_host));
+    config->mqtt_port = legacy->mqtt_port;
+    memcpy(config->mqtt_client_id, legacy->mqtt_client_id, sizeof(config->mqtt_client_id));
+    config->reset_gpio = legacy->reset_gpio;
+    config->pin_config_locked = legacy->pin_config_locked;
+    config->operation_mode = legacy->operation_mode;
+    config->standalone_mqtt_enabled = false;
+    memcpy(config->relays, legacy->relays, sizeof(config->relays));
+    memcpy(config->mosfets, legacy->mosfets, sizeof(config->mosfets));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
+    memcpy(config->led_strips, legacy->led_strips, sizeof(config->led_strips));
+    config->version = g_node_config_version;
+}
+
+void node_config_migrate_v11(const node_config_v11_t *legacy, node_config_t *config)
+{
+    if (!legacy || !config) {
+        return;
+    }
+
+    node_config_set_factory_defaults(config);
+    memcpy(config->node_id, legacy->node_id, sizeof(config->node_id));
+    memcpy(config->node_name, legacy->node_name, sizeof(config->node_name));
+    memcpy(config->wifi_ssid, legacy->wifi_ssid, sizeof(config->wifi_ssid));
+    memcpy(config->wifi_password, legacy->wifi_password, sizeof(config->wifi_password));
+    memcpy(config->controller_host, legacy->controller_host, sizeof(config->controller_host));
+    config->mqtt_port = legacy->mqtt_port;
+    memcpy(config->mqtt_client_id, legacy->mqtt_client_id, sizeof(config->mqtt_client_id));
+    config->reset_gpio = legacy->reset_gpio;
+    config->pin_config_locked = legacy->pin_config_locked;
+    config->operation_mode = legacy->operation_mode;
+    config->standalone_mqtt_enabled = legacy->standalone_mqtt_enabled;
+    memcpy(config->relays, legacy->relays, sizeof(config->relays));
+    memcpy(config->mosfets, legacy->mosfets, sizeof(config->mosfets));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
+    memcpy(config->led_strips, legacy->led_strips, sizeof(config->led_strips));
+    config->version = g_node_config_version;
+}
+
+void node_config_migrate_v12(const node_config_v12_t *legacy, node_config_t *config)
+{
+    if (!legacy || !config) {
+        return;
+    }
+
+    node_config_set_factory_defaults(config);
+    memcpy(config->node_id, legacy->node_id, sizeof(config->node_id));
+    memcpy(config->node_name, legacy->node_name, sizeof(config->node_name));
+    memcpy(config->wifi_ssid, legacy->wifi_ssid, sizeof(config->wifi_ssid));
+    memcpy(config->wifi_password, legacy->wifi_password, sizeof(config->wifi_password));
+    memcpy(config->controller_host, legacy->controller_host, sizeof(config->controller_host));
+    config->mqtt_port = legacy->mqtt_port;
+    memcpy(config->mqtt_client_id, legacy->mqtt_client_id, sizeof(config->mqtt_client_id));
+    config->reset_gpio = legacy->reset_gpio;
+    config->pin_config_locked = legacy->pin_config_locked;
+    config->operation_mode = legacy->operation_mode;
+    config->standalone_mqtt_enabled = legacy->standalone_mqtt_enabled;
+    memcpy(config->relays, legacy->relays, sizeof(config->relays));
+    memcpy(config->mosfets, legacy->mosfets, sizeof(config->mosfets));
+    copy_universal_io_v11(config->universal_io, legacy->universal_io, NODE_UNIVERSAL_IO_MAX);
+    memcpy(config->led_strips, legacy->led_strips, sizeof(config->led_strips));
     config->version = g_node_config_version;
 }

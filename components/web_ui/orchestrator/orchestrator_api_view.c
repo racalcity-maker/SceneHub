@@ -310,6 +310,12 @@ static cJSON *api_build_devices_json(const orch_registry_snapshot_t *snapshot)
         cJSON_AddStringToObject(obj, "last_diag_message", device->last_diag_message);
         cJSON_AddStringToObject(obj, "last_result_status", device->last_result_status);
         cJSON_AddStringToObject(obj, "last_result_error_code", device->last_result_error_code);
+        cJSON_AddBoolToObject(obj, "runtime_driver_enabled", device->runtime_driver_enabled);
+        cJSON_AddBoolToObject(obj, "runtime_driver_ready", device->runtime_driver_ready);
+        cJSON_AddStringToObject(obj, "runtime_driver_id", device->runtime_driver_id);
+        cJSON_AddStringToObject(obj, "runtime_driver_health", device->runtime_driver_health);
+        cJSON_AddStringToObject(obj, "runtime_driver_state", device->runtime_driver_state);
+        cJSON_AddStringToObject(obj, "runtime_driver_error_code", device->runtime_driver_error_code);
         cJSON_AddBoolToObject(obj, "has_runtime", device->has_runtime);
 
         badges = api_build_badges_json(device);

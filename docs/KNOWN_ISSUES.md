@@ -162,9 +162,10 @@ Remaining command-executor work:
 
 ### P8 - Node Describe Interface Size Budget
 
-Large `describe_interface` handling was partially refactored: the large
-metadata response no longer lives in ordinary steady-state ingest result
-storage. Remaining work is tracked in
+Large `describe_interface` / node-admin metadata handling was refactored so
+wide payloads no longer live in ordinary steady-state ingest/result storage,
+and oversize compact-manifest saves now fail with an explicit
+`device_manifest_too_large` error. Remaining work is tracked in
 `docs/NODE_DESCRIBE_INTERFACE_REFACTOR_PLAN.md`:
 
 - Review whether current MQTT transport ceilings are still appropriate after

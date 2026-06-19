@@ -31,6 +31,7 @@ static void management_task(void *arg)
             err = node_config_factory_reset();
             ESP_LOGW(TAG, "factory reset: %s", esp_err_to_name(err));
             vTaskDelay(pdMS_TO_TICKS(200));
+            ESP_LOGW(TAG, "restart source=reset_button reason=factory_reset");
             esp_restart();
             continue;
         }
@@ -38,6 +39,7 @@ static void management_task(void *arg)
             err = node_config_reset_wifi();
             ESP_LOGW(TAG, "wifi settings reset: %s", esp_err_to_name(err));
             vTaskDelay(pdMS_TO_TICKS(200));
+            ESP_LOGW(TAG, "restart source=reset_button reason=wifi_reset");
             esp_restart();
         }
     }

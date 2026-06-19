@@ -16,7 +16,7 @@ static const node_board_profile_t s_profile = {
     .default_node_id = "scenehub_node_s3",
     .default_node_name = "SceneHub Node S3",
     .default_mqtt_client_id = "dcc-scenehub-node-s3",
-    .default_reset_gpio = 0,
+    .default_reset_gpio = -1,
     .max_relays = NODE_RELAY_MAX,
     .max_mosfets = NODE_MOSFET_MAX,
     .max_universal_io = NODE_UNIVERSAL_IO_MAX,
@@ -28,7 +28,7 @@ static const node_board_profile_t s_profile = {
     .default_node_id = "scenehub_node",
     .default_node_name = "SceneHub Node",
     .default_mqtt_client_id = "dcc-scenehub-node",
-    .default_reset_gpio = 0,
+    .default_reset_gpio = -1,
     .max_relays = NODE_RELAY_MAX,
     .max_mosfets = NODE_MOSFET_MAX,
     .max_universal_io = NODE_UNIVERSAL_IO_MAX,
@@ -235,7 +235,7 @@ bool node_board_gpio_is_strapping_or_reserved(int gpio)
 {
 #if CONFIG_IDF_TARGET_ESP32S3
     switch (gpio) {
-    case 0:  // boot/config button on many dev boards; allowed only for reset/config by policy.
+    case 0:  // boot/strap pin on many dev boards; reserved by policy.
     case 19: // native USB D-
     case 20: // native USB D+
     case 26: // commonly tied to flash/PSRAM on some modules.
@@ -409,7 +409,13 @@ bool node_board_sanitize_pin_config(node_config_t *config)
     bool changed = false;
     bool used[49] = {0};
 
-    if (!node_board_gpio_is_allowed(config->reset_gpio) && config->reset_gpio != 0) {
+    if (config->reset_gpio < 0) {
+        config->reset_gpio = -1;
+    } else if (!node_board_gpio_is_allowed(config->reset_gpio)) {
+        ESP_LOGW(TAG,
+                 "sanitize reset_gpio=%d reason=invalid_or_reserved_gpio using=%d",
+                 config->reset_gpio,
+                 s_profile.default_reset_gpio);
         config->reset_gpio = s_profile.default_reset_gpio;
         changed = true;
     }

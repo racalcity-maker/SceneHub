@@ -18,6 +18,9 @@ typedef struct {
     StaticTask_t auto_close_task_storage;
     StackType_t auto_close_task_stack[4096];
     TaskHandle_t auto_close_task;
+    StaticTask_t got_ip_task_storage;
+    StackType_t got_ip_task_stack[6144];
+    TaskHandle_t got_ip_task;
 } node_provisioning_state_t;
 
 extern node_provisioning_state_t g_node_prov;
@@ -30,9 +33,17 @@ esp_err_t node_provisioning_led_config_get(httpd_req_t *req);
 esp_err_t node_provisioning_led_effects_schema_get(httpd_req_t *req);
 esp_err_t node_provisioning_config_post(httpd_req_t *req);
 esp_err_t node_provisioning_led_config_post(httpd_req_t *req);
+esp_err_t node_provisioning_nfc_reader_post(httpd_req_t *req);
 esp_err_t node_provisioning_led_preview_post(httpd_req_t *req);
 esp_err_t node_provisioning_status_get(httpd_req_t *req);
 esp_err_t node_provisioning_keep_open_post(httpd_req_t *req);
 esp_err_t node_provisioning_restart_post(httpd_req_t *req);
 esp_err_t node_provisioning_reset_wifi_post(httpd_req_t *req);
 esp_err_t node_provisioning_factory_reset_post(httpd_req_t *req);
+esp_err_t node_provisioning_rules_get(httpd_req_t *req);
+esp_err_t node_provisioning_rules_context_get(httpd_req_t *req);
+esp_err_t node_provisioning_rules_validate_post(httpd_req_t *req);
+esp_err_t node_provisioning_rules_apply_post(httpd_req_t *req);
+esp_err_t node_provisioning_rules_clear_post(httpd_req_t *req);
+esp_err_t node_provisioning_rules_pause_post(httpd_req_t *req);
+esp_err_t node_provisioning_rules_resume_post(httpd_req_t *req);

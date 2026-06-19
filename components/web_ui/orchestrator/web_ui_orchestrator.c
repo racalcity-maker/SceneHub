@@ -99,34 +99,35 @@ static esp_err_t orch_send_text_error(httpd_req_t *req, const char *status, cons
     return web_ui_http_resp_send(req, message, HTTPD_RESP_USE_STRLEN);
 }
 
-static esp_err_t orch_read_json_body(httpd_req_t *req, size_t max_len, char **out_body)
+static esp_err_t orch_read_json_body(httpd_req_t *req,
+                                     size_t max_len,
+                                     char *out_body,
+                                     size_t out_body_size,
+                                     size_t *out_len)
 {
-    char *body = NULL;
     size_t received = 0;
-    if (!req || !out_body) {
+    if (!req || !out_body || out_body_size == 0 || !out_len) {
         return ESP_ERR_INVALID_ARG;
     }
-    *out_body = NULL;
+    *out_len = 0;
     if (req->content_len <= 0 || req->content_len > (int)max_len) {
         return ESP_ERR_INVALID_SIZE;
     }
-    body = orch_snapshot_alloc((size_t)req->content_len + 1);
-    if (!body) {
-        return ESP_ERR_NO_MEM;
+    if ((size_t)req->content_len + 1 > out_body_size) {
+        return ESP_ERR_INVALID_SIZE;
     }
     while (received < (size_t)req->content_len) {
-        int r = httpd_req_recv(req, body + received, req->content_len - received);
+        int r = httpd_req_recv(req, out_body + received, req->content_len - received);
         if (r <= 0) {
             if (r == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
-            heap_caps_free(body);
             return ESP_FAIL;
         }
         received += (size_t)r;
     }
-    body[received] = '\0';
-    *out_body = body;
+    out_body[received] = '\0';
+    *out_len = received;
     return ESP_OK;
 }
 
@@ -317,13 +318,14 @@ static esp_err_t orch_send_interface_discovery_error(httpd_req_t *req,
 
 esp_err_t orchestrator_describe_interface_handler(httpd_req_t *req)
 {
-    char *body = NULL;
+    char body[513] = {0};
+    size_t body_len = 0;
     cJSON *json = NULL;
     const cJSON *client_id_item = NULL;
     char client_id[QUEST_ID_MAX_LEN] = {0};
     scenehub_control_device_interface_info_t info = {0};
     scenehub_control_result_t result = {0};
-    esp_err_t err = orch_read_json_body(req, 512, &body);
+    esp_err_t err = orch_read_json_body(req, 512, body, sizeof(body), &body_len);
 
     if (err == ESP_ERR_INVALID_SIZE || err == ESP_ERR_INVALID_ARG) {
         return orch_send_interface_discovery_error(req, "400 Bad Request", "invalid_request", "", "");
@@ -335,8 +337,7 @@ esp_err_t orchestrator_describe_interface_handler(httpd_req_t *req)
         return orch_send_interface_discovery_error(req, "500 Internal Server Error", "execution_failed", "", "");
     }
 
-    json = cJSON_Parse(body);
-    heap_caps_free(body);
+    json = cJSON_ParseWithLength(body, body_len);
     if (!json) {
         return orch_send_interface_discovery_error(req, "400 Bad Request", "invalid_json", "", "");
     }

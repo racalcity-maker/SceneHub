@@ -5,6 +5,20 @@
 
 #include "scenehub_command_result.h"
 
+static void orch_issue_builder_append_text(char *dst, size_t dst_size, const char *text)
+{
+    size_t used = 0;
+
+    if (!dst || dst_size == 0 || !text || !text[0]) {
+        return;
+    }
+    used = strlen(dst);
+    if (used >= dst_size - 1) {
+        return;
+    }
+    quest_str_copy(dst + used, dst_size - used, text);
+}
+
 static bool orch_issue_builder_room_has_related_issue(const orch_room_entry_t *room,
                                                       const char *issue_id)
 {
@@ -181,6 +195,51 @@ void orch_issue_builder_collect_devices(orch_registry_snapshot_t *snapshot)
                                              ingest->result_error_code[0] ? ingest->result_error_code : "command_error",
                                              "Device command failed",
                                              ingest->result_message[0] ? ingest->result_message : "Device returned command error result.");
+            }
+            if (ingest->has_status &&
+                ingest->status_driver_nfc_enabled &&
+                ingest->status_driver_nfc_health[0] &&
+                strcmp(ingest->status_driver_nfc_health, "ok") != 0) {
+                char title[ORCH_REGISTRY_ISSUE_TITLE_MAX_LEN] = {0};
+                char details[ORCH_REGISTRY_ISSUE_DETAILS_MAX_LEN] = {0};
+                const char *device_name = device->display_name[0] ? device->display_name : device->device_id;
+                const char *reader_id = ingest->status_driver_nfc_reader_id[0]
+                                            ? ingest->status_driver_nfc_reader_id
+                                            : "nfc_reader";
+                const char *reader_state = ingest->status_driver_nfc_state[0]
+                                               ? ingest->status_driver_nfc_state
+                                               : "unknown";
+                const char *reader_health = ingest->status_driver_nfc_health[0]
+                                                ? ingest->status_driver_nfc_health
+                                                : "unknown";
+                const char *reader_code = ingest->status_driver_nfc_error_code[0]
+                                              ? ingest->status_driver_nfc_error_code
+                                              : "none";
+                snprintf(title,
+                         sizeof(title),
+                         "NFC reader %s",
+                         strcmp(ingest->status_driver_nfc_health, "degraded") == 0 ? "degraded" : "error");
+                quest_str_copy(details, sizeof(details), "Device ");
+                orch_issue_builder_append_text(details, sizeof(details), device_name);
+                orch_issue_builder_append_text(details, sizeof(details), " reader ");
+                orch_issue_builder_append_text(details, sizeof(details), reader_id);
+                orch_issue_builder_append_text(details, sizeof(details), " state=");
+                orch_issue_builder_append_text(details, sizeof(details), reader_state);
+                orch_issue_builder_append_text(details, sizeof(details), " health=");
+                orch_issue_builder_append_text(details, sizeof(details), reader_health);
+                orch_issue_builder_append_text(details, sizeof(details), " code=");
+                orch_issue_builder_append_text(details, sizeof(details), reader_code);
+                orch_issue_builder_append_text(details, sizeof(details), ".");
+                orch_issue_builder_add_issue(snapshot,
+                                             ORCH_ISSUE_SCOPE_DEVICE,
+                                             ORCH_ISSUE_SEVERITY_WARNING,
+                                             device->room_id,
+                                             device->device_id,
+                                             ingest->status_driver_nfc_error_code[0]
+                                                 ? ingest->status_driver_nfc_error_code
+                                                 : "nfc_reader_issue",
+                                             title,
+                                             details);
             }
         }
     }

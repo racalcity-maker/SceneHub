@@ -1,0 +1,223 @@
+{
+  "version": 2,
+  "bundle_id": "nfc_hold_5s_any_known_card",
+  "generation": 1,
+  "mode": "standalone",
+  "emits": [
+    "nfc_hold_started",
+    "nfc_hold_confirmed",
+    "nfc_hold_reset"
+  ],
+  "limits": {
+    "max_action_ms": 50,
+    "max_parallel_timers": 4
+  },
+  "initial_state": {
+    "hold_armed": false,
+    "hold_done": false
+  },
+  "rules": [
+    {
+      "id": "boot_init",
+      "enabled": true,
+      "trigger": {
+        "kind": "boot"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "set_state",
+          "key": "hold_armed",
+          "value": false
+        },
+        {
+          "kind": "set_state",
+          "key": "hold_done",
+          "value": false
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "start_hold_any_known",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_seen"
+      },
+      "conditions": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "idle"
+          },
+          {
+            "kind": "any",
+            "conditions": [
+              {
+                "kind": "event_field_equals",
+                "field": "token_id",
+                "value": 1
+              },
+              {
+                "kind": "event_field_equals",
+                "field": "token_id",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "set_state",
+          "key": "hold_armed",
+          "value": true
+        },
+        {
+          "kind": "set_state",
+          "key": "hold_done",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "waiting_hold_5s"
+        },
+        {
+          "kind": "start_timer",
+          "timer": "reader_1_hold_5s",
+          "mode": "oneshot",
+          "duration_ms": 5000
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_hold_started",
+          "args": {
+            "reader": "reader_1",
+            "hold_ms": 5000
+          }
+        }
+      ]
+    },
+    {
+      "id": "confirm_hold_any_known",
+      "enabled": true,
+      "trigger": {
+        "kind": "timer",
+        "timer": "reader_1_hold_5s"
+      },
+      "conditions": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "waiting_hold_5s"
+          },
+          {
+            "kind": "state_equals",
+            "key": "hold_armed",
+            "value": true
+          },
+          {
+            "kind": "state_equals",
+            "key": "hold_done",
+            "value": false
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "set_state",
+          "key": "hold_done",
+          "value": true
+        },
+        {
+          "kind": "set_phase",
+          "phase": "hold_confirmed"
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "rainbow_cycle"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_hold_confirmed",
+          "args": {
+            "reader": "reader_1",
+            "hold_ms": 5000
+          }
+        }
+      ]
+    },
+    {
+      "id": "reset_on_removed",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_removed"
+      },
+      "conditions": {
+        "kind": "any",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "waiting_hold_5s"
+          },
+          {
+            "kind": "phase_is",
+            "phase": "hold_confirmed"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "reader_1_hold_5s"
+        },
+        {
+          "kind": "set_state",
+          "key": "hold_armed",
+          "value": false
+        },
+        {
+          "kind": "set_state",
+          "key": "hold_done",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_hold_reset",
+          "args": {
+            "reader": "reader_1",
+            "reason": "card_removed"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -22,6 +22,11 @@ The build can enable `SCENEHUB_NODE_FACTORY_PIN_PROFILE` in menuconfig for boxed
 hardware. In that mode, selected relay/IO/LED pins are compiled into the
 firmware and applied on boot.
 
+Driver factory profiles may use the same pattern. For example, a boxed build
+may enable a compile-time `pn532` NFC reader stub with fixed I2C SDA/SCL pins
+through the component's own menuconfig section, instead of exposing those pins
+through provisioning first.
+
 The factory profile exposes the full v1 capacity:
 
 - 8 relay GPIOs;

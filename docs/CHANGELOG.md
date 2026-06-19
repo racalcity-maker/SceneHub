@@ -1,7 +1,26 @@
 # Changelog
 
+## 2026-06-17
+
+- Hardened SceneHub Node MQTT overload behavior so terminal command results are
+  no longer silently lost when both the command queue and deferred-result queue
+  are saturated. The node now attempts a non-blocking overflow rejection publish
+  and otherwise schedules MQTT reconnect so the hub sees a transport failure
+  instead of hidden command loss.
+- Changed MQTT device admission so only `QUEST_DEVICE_MAX_DEVICES` active
+  SceneHub Node contract clients are accepted. A 21st new device client now
+  gets CONNECT refused instead of forcing control-state eviction, while
+  duplicate replacement for an existing client ID remains allowed.
+- Stopped `device_control_ingest` from evicting an existing device slot on
+  overflow; unexpected telemetry beyond the device limit is now refused without
+  rotating the 20 active device states.
+
 ## 2026-06-16
 
+- Added the first SceneHub Node v2 runtime-mode slice: config version `10`,
+  `scenehub`/`standalone`/reserved `fallback` modes, local provisioning UI/API
+  selection, status/manifest reporting, and `standalone` startup without a
+  required SceneHub controller host. Rule execution remains disabled.
 - Split the SceneHub Node stress test contract data into
   `tests/scenehub_node_stress_test/scenehub_contract.py`, keeping the compact
   manifest and command-case definitions separate from the MQTT runner.

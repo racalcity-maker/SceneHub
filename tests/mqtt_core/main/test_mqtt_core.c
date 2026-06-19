@@ -333,6 +333,15 @@ static void test_mqtt_acl_requires_exact_client_id_match_and_default_deny(void)
     TEST_ASSERT_FALSE(acl_can_publish("dcc-uid-gate-1", "cp/v1/dev/relay_room_2/status"));
 }
 
+static void test_mqtt_acl_identifies_static_service_clients(void)
+{
+    TEST_ASSERT_TRUE(acl_is_static_client_id("relay"));
+    TEST_ASSERT_TRUE(acl_is_static_client_id("webui"));
+    TEST_ASSERT_FALSE(acl_is_static_client_id("dcc-scenehub-node-s3"));
+    TEST_ASSERT_FALSE(acl_is_static_client_id("scenehub_node_s3"));
+    TEST_ASSERT_FALSE(acl_is_static_client_id(""));
+}
+
 static void test_mqtt_upsert_subscription_deduplicates_topic(void)
 {
     mqtt_session_t *sess = &s_session_scratch;
@@ -565,6 +574,7 @@ void register_mqtt_core_tests(void)
     RUN_TEST(test_mqtt_puback_clears_matching_qos1_message);
     RUN_TEST(test_mqtt_puback_validation_and_unknown_id);
     RUN_TEST(test_mqtt_acl_requires_exact_client_id_match_and_default_deny);
+    RUN_TEST(test_mqtt_acl_identifies_static_service_clients);
     RUN_TEST(test_mqtt_upsert_subscription_deduplicates_topic);
     RUN_TEST(test_mqtt_upsert_subscription_enforces_slot_limit);
     RUN_TEST(test_mqtt_inject_stress);

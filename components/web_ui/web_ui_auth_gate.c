@@ -2,9 +2,12 @@
 
 #include <string.h>
 
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "config_store.h"
 #include "web_ui_utils.h"
+
+#define WEB_UI_SLOW_HANDLER_MS 750
 
 static esp_err_t web_same_origin_reject(httpd_req_t *req)
 {
@@ -87,15 +90,26 @@ esp_err_t auth_gate_handler(httpd_req_t *req)
     if (req->method != HTTP_GET && !web_ui_is_same_origin_request(req)) {
         return web_same_origin_reject(req);
     }
-#if WEB_AUTH_TRACE_HTTP
     const char *uri = req ? req->uri : "?";
+#if WEB_AUTH_TRACE_HTTP
     ESP_LOGI(g_web_ui_auth_tag,
              "HTTP begin method=%d uri=%s stack_hwm=%u",
              (int)req->method,
              uri,
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
 #endif
+    int64_t started_us = esp_timer_get_time();
     esp_err_t err = route->fn(req);
+    int64_t elapsed_ms = (esp_timer_get_time() - started_us) / 1000;
+    if (elapsed_ms >= WEB_UI_SLOW_HANDLER_MS) {
+        ESP_LOGW(g_web_ui_auth_tag,
+                 "HTTP slow method=%d uri=%s elapsed_ms=%lld err=%s stack_hwm=%u",
+                 (int)req->method,
+                 uri,
+                 (long long)elapsed_ms,
+                 esp_err_to_name(err),
+                 (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    }
 #if WEB_AUTH_TRACE_HTTP
     ESP_LOGI(g_web_ui_auth_tag,
              "HTTP end method=%d uri=%s err=%s stack_hwm=%u",

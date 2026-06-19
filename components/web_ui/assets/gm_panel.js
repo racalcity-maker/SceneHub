@@ -210,6 +210,12 @@ command_id:commandId,
 ...(params&&typeof params==='object'?{params}:{}),
 ...(confirmed?{confirmed:true}:{}),
 }),
+runAdminCommand:(deviceId,commandId,params,confirmed)=>gmPostJson('/api/gm/device/admin/run',{
+device_id:deviceId,
+command_id:commandId,
+...(params&&typeof params==='object'?{params}:{}),
+...(confirmed?{confirmed:true}:{}),
+}),
 },
 sidebarPresets:{
 list:()=>gmGet('/api/gm/sidebar-presets'),
@@ -706,6 +712,30 @@ gmRegisterAction('quest.device.discover',async()=>{
 await discoverQuestDeviceInterface();
 });
 
+gmRegisterAction('quest.device.admin.load_bundle',async()=>{
+await loadQuestDeviceStoredBundle();
+});
+
+gmRegisterAction('quest.device.admin.format_bundle',async()=>{
+formatQuestDeviceBundleJson();
+});
+
+gmRegisterAction('quest.device.admin.validate_bundle',async()=>{
+await validateQuestDeviceBundle();
+});
+
+gmRegisterAction('quest.device.admin.apply_bundle',async()=>{
+await applyQuestDeviceBundle();
+});
+
+gmRegisterAction('quest.device.admin.clear_bundle',async()=>{
+await clearQuestDeviceBundle();
+});
+
+gmRegisterAction('quest.device.admin.quick',async(el,_e,confirmed)=>{
+await runQuestDeviceQuickAdmin(el.dataset.deviceId||'',el.dataset.commandId||'',confirmed);
+});
+
 gmRegisterAction('quest.discovery.apply',async()=>{
 applyQuestDeviceDiscovery();
 });
@@ -900,7 +930,22 @@ const suffix=String(value||'unknown').trim().replace(/[^a-zA-Z0-9_.-]+/g,'_')||'
 return gmStatInc(`${base}.${suffix}`,delta);
 }
 
-function setStatus(text,cls){const el=document.getElementById('system_status');if(!el)return;el.textContent=text||'';el.className='status '+(cls||'state-unknown');}
+function setStatus(text,cls){
+const message=text||'';
+const css='status '+(cls||'state-unknown');
+const el=document.getElementById('system_status');
+if(el){
+el.textContent=message;
+el.className=css;
+}
+document.querySelectorAll('[data-gm-inline-status-badge]').forEach(node=>{
+node.textContent=message?healthLabel((cls||'state-unknown').replace(/^state-/,'')):'idle';
+node.className=css;
+});
+document.querySelectorAll('[data-gm-inline-status-text]').forEach(node=>{
+node.textContent=message||'No recent action yet.';
+});
+}
 async function gmFetch(url,options){const res=await fetch(url,options);if(res.status===401){window.location='/login';throw new Error('Unauthorized');}return res;}
 function isAdmin(){return gmSession&&gmSession.role==='admin';}
 function canOpenView(view){return !['devices','profiles','scenarios','device_setup','hardware_io','observed','storage'].includes(view)||isAdmin();}
@@ -911,6 +956,12 @@ document.querySelectorAll('[data-view]').forEach(el=>{if(['devices','profiles','
 async function loadGMSession(){try{const res=await api.session.info();if(res.ok){gmSession=await res.json();}}catch(err){gmSession={role:'user',username:''};}window.__WEB_SESSION=gmSession;applyGMRoleLayout();return gmSession;}
 function metric(label,value){return `<div class='card metric'><div class='label'>${esc(label)}</div><div class='value'>${esc(value)}</div></div>`;}
 function status(v){return `<span class='status ${stateClass(v)}'>${esc(healthLabel(v))}</span>`;}
+function currentStatusState(){
+const el=document.getElementById('system_status');
+const className=el&&typeof el.className==='string'?el.className:'status state-unknown';
+const text=el&&typeof el.textContent==='string'?el.textContent.trim():'';
+return {text:text||'',className:className||'status state-unknown'};
+}
 function roomCard(r){const derived=roomDerivedHealth(r);const issueCount=Number(r&&r.issue_count)||0;const deviceCount=Number(r&&r.scenario_device_count)||Number(r&&r.device_count)||0;return `<article class='card clickable' data-room-card='${esc(r.room_id)}' data-action='room.open' data-room-id='${esc(r.room_id)}'><div class='card-head'><div><div class='card-title'>${esc(r.title||r.name||r.room_id)}</div><div class='card-sub'>Room</div></div>${status(derived)}</div><div class='kvs'><div class='kv'><span class='k'>Devices</span><span class='v'>${esc(deviceCount)}</span></div><div class='kv'><span class='k'>Issues</span><span class='v'>${esc(issueCount)}</span></div><div class='kv'><span class='k'>Timer</span>${roomClockHtml(r,'span','v')}</div></div></article>`;}
 function issueRow(i){const subject=i.device_id?deviceDisplayName(i.device_id):(i.room_id?roomName(i.room_id):i.scope);return `<div class='row-card'><div class='row-main'><div class='row-title'>${esc(subject)} - ${esc(i.title||i.code)}</div><div class='row-meta'>${esc(i.details||'')}</div></div>${status(i.severity)}</div>`;}
 function noProfilesHtml(roomId){return isAdmin()?`<div class='empty'>No game modes for this room</div><div class='actions'>${uiButton({label:'Create game mode',action:'admin.open',dataset:{view:'profiles','room-id':roomId||''}})}</div>`:`<div class='empty'>No game modes available. Ask admin.</div>`;}
@@ -1519,7 +1570,7 @@ function scenarioDraftValidationHtml(){const r=scenarioValidationReportCurrent()
 function isEditableControl(el){return !!(el&&el.closest&&el.closest('#gm_content')&&el.matches('input,select,textarea'));}
 function dirtyLockControl(el){
 if(!isEditableControl(el)||el.disabled||el.readOnly)return false;
-return !!el.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled,#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field],[data-quest-device-field],[data-quest-command-field],[data-quest-event-field],#gm_timer_minutes,#gm_hint_input,#storage_devices_file,#storage_scenarios_file,#storage_profiles_file');
+return !!el.closest('#profile_id,#profile_name,#profile_duration,#profile_hint_pack,#profile_audio_pack,#profile_scenario,#profile_enabled,#scenario_id,#scenario_name,[data-scenario-branch-field],[data-step-field],[data-step-param],[data-group-command-field],[data-event-group-field],[data-flag-list-field],[data-v2-branch-field],[data-v2-trigger-field],[data-v2-trigger-event-field],[data-v2-policy-field],[data-v2-reentry-field],[data-v2-result-field],[data-v2-guard-field],[data-v2-variant-field],[data-quest-device-field],[data-quest-command-field],[data-quest-event-field],[data-quest-admin-bundle],#gm_timer_minutes,#gm_hint_input,#storage_devices_file,#storage_scenarios_file,#storage_profiles_file');
 }
 function markControlEditing(el){if(!isEditableControl(el))return;el.classList.add('gm-field-editing');}
 function unmarkControlEditing(el){if(!isEditableControl(el))return;el.classList.remove('gm-field-editing');}
@@ -1537,7 +1588,7 @@ function confirmDiscardQuestDevice(){if(!questDeviceEditor.dirty)return true;if(
 function confirmDiscardEditorChanges(){if(!confirmDiscardScenario())return false;if(!confirmDiscardProfile())return false;if(!confirmDiscardQuestDevice())return false;if(!confirmDiscardTransientFields())return false;return true;}
 function clearProfileDirty(){profileEditor.dirty=false;profileEditor.prefill=null;clearTransientFieldDirty();}
 function clearScenarioDirty(){scenarioEditor.dirty=false;scenarioEditor.draft=null;scenarioEditor.original_scenario=null;scenarioEditor.validation_report=null;scenarioEditor.draft_revision=0;scenarioEditor.validation_revision=0;scenarioEditor.branch_count_shrink_allowed=false;scenarioEditor.branch_count_shrink_floor=0;clearTransientFieldDirty();}
-function clearQuestDeviceDirty(){questDeviceEditor.dirty=false;questDeviceEditor.draft=null;questDeviceEditor.discovery=null;clearTransientFieldDirty();}
+function clearQuestDeviceDirty(){questDeviceEditor.dirty=false;questDeviceEditor.draft=null;questDeviceEditor.discovery=null;questDeviceEditor.admin_state=null;clearTransientFieldDirty();}
 function scenarioSetLoadedDraft(scenario,roomId){
 const editable=scenarioEditableJson(scenario,roomId||scenarioEditor.room_id);
 scenarioEditor.original_scenario=scenarioClone(editable);
@@ -1582,6 +1633,19 @@ function questDeviceStatusText(dev){
 const observed=questDeviceObserved(dev);
 if(observed){
 const state=String(observed.state||'').trim();
+const driverEnabled=!!observed.runtime_driver_enabled;
+const driverHealth=String(observed.runtime_driver_health||'').trim().toLowerCase();
+const driverState=String(observed.runtime_driver_state||'').trim();
+const driverCode=String(observed.runtime_driver_error_code||'').trim();
+const driverId=String(observed.runtime_driver_id||'').trim();
+if(driverEnabled&&driverHealth&&driverHealth!=='ok'){
+const parts=[];
+if(state)parts.push(state);
+parts.push(driverId||'nfc_reader');
+if(driverState)parts.push(driverState);
+if(driverCode)parts.push(driverCode);
+return parts.join(' / ');
+}
 if(state)return state;
 const connectivity=String(observed.connectivity||'').trim();
 if(connectivity)return connectivity;
@@ -2838,7 +2902,7 @@ const presets=sidebarPresets();
 const presetGroups=sidebarPresetAdminGroups();
 const legacyMigration=sidebarPresetMigrationPending()?`<div class='card'><div class='card-head'><div><h2 class='section-title'>Import legacy browser presets</h2><div class='card-sub'>Found ${esc(legacySidebarPresetCount())} quick action${legacySidebarPresetCount()===1?'':'s'} saved in this browser from the old localStorage model.</div></div><div class='actions'>${uiButton({label:'Import to controller',action:'sidebar.preset.import_legacy'})}</div></div><div class='row-meta'>Import them once into /sdcard/quest/gm_sidebar_presets.json so every browser sees the same operator sidebar.</div></div><div style='height:12px'></div>`:'';
 const presetRows=presetGroups.length?presetGroups.map(group=>renderSidebarPresetGroupCard(group,presets.length)).join(''):`<div class='manual-empty'>No quick actions yet. Add the first quick action.</div>`;
-return `<div class='observed-toolbar'><div class='observed-summary'><span>Quick actions <strong>${esc(presets.length)}</strong></span><span>Quest devices <strong>${esc(savedQuestDevices.length)}</strong></span><span>Observed <strong>${esc(observed.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Degraded <strong>${esc(degraded)}</strong></span><span>Offline/Fault <strong>${esc(fault)}</strong></span></div></div>${legacyMigration}<section class='card'><div class='card-head'><div><h2 class='section-title'>Sidebar quick actions</h2><div class='card-sub'>Only these presets are shown to the operator in the right sidebar.</div></div><div class='actions'>${uiButton({label:'New quick action',action:'sidebar.preset.new'})}</div></div><div class='admin-entity-grid'>${presetRows}</div></section>${renderSidebarPresetWizard()}`;
+return `<div class='observed-toolbar'><div class='observed-summary'><span>Quick actions <strong>${esc(presets.length)}</strong></span><span>Quest devices <strong>${esc(savedQuestDevices.length)}</strong></span><span>Observed <strong>${esc(observed.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Degraded <strong>${esc(degraded)}</strong></span><span>Offline/Fault <strong>${esc(fault)}</strong></span></div></div>${legacyMigration}${renderQuestDeviceAdminQuickActions()}<section class='card'><div class='card-head'><div><h2 class='section-title'>Sidebar quick actions</h2><div class='card-sub'>Only these presets are shown to the operator in the right sidebar.</div></div><div class='actions'>${uiButton({label:'New quick action',action:'sidebar.preset.new'})}</div></div><div class='admin-entity-grid'>${presetRows}</div></section>${renderSidebarPresetWizard()}`;
 }
 
 function renderObservedView(){
@@ -2853,8 +2917,17 @@ const rows=items.length?items.map(o=>{
 const reg=observedRegistration(o.device_id);
 const action=reg&&reg.via==='quest_device'?uiButton({label:'Setup',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':reg.device_id}}):(reg?`<span class='muted'>linked</span>`:uiButton({label:'Add',kind:'small-btn',action:'device.setup.open',dataset:{'device-id':'new'}}));
 const clientMeta=[o.device_id||'',o.fw_version?`fw ${o.fw_version}`:'',o.mode||''].filter(Boolean).join(' / ');
-const stateMeta=[o.state||'idle',o.boot_id?`boot ${o.boot_id}`:''].filter(Boolean).join(' / ');
-return `<tr><td><strong>${esc(observedDisplayName(o))}</strong><span>${esc(clientMeta||o.device_id||'')}</span></td><td>${status(o.connectivity)}</td><td><span class='badge ${reg?'selected-badge':''}'>${reg?'registered':'unregistered'}</span></td><td><strong>${esc(o.state||'idle')}</strong><span>${esc(stateMeta||'no state')}</span></td><td class='observed-actions'>${action}</td></tr>`;
+const driverEnabled=!!o.runtime_driver_enabled;
+const driverHealth=String(o.runtime_driver_health||'').toLowerCase();
+const driverState=String(o.runtime_driver_state||'').trim();
+const driverCode=String(o.runtime_driver_error_code||'').trim();
+const driverId=String(o.runtime_driver_id||'').trim();
+const healthLabel=String(o.health||o.connectivity||'unknown').trim()||'unknown';
+const stateLabel=(driverEnabled&&driverHealth&&driverHealth!=='ok')
+?[o.state||'idle',driverId||'nfc_reader',driverState,driverCode].filter(Boolean).join(' / ')
+:(o.state||'idle');
+const stateMeta=[stateLabel,o.boot_id?`boot ${o.boot_id}`:''].filter(Boolean).join(' / ');
+return `<tr><td><strong>${esc(observedDisplayName(o))}</strong><span>${esc(clientMeta||o.device_id||'')}</span></td><td>${status(healthLabel)}</td><td><span class='badge ${reg?'selected-badge':''}'>${reg?'registered':'unregistered'}</span></td><td><strong>${esc(stateLabel||'idle')}</strong><span>${esc(stateMeta||'no state')}</span></td><td class='observed-actions'>${action}</td></tr>`;
 }).join(''):`<tr><td colspan='5' class='observed-empty'>No observed clients</td></tr>`;
 return `<div class='ops-summary-strip observed-summary'><span>Observed <strong>${esc(all.length)}</strong></span><span>Registered <strong>${esc(registered)}</strong></span><span>Unregistered <strong>${esc(unregistered)}</strong></span><span>Offline <strong>${esc(offline)}</strong></span></div><div class='observed-toolbar ops-toolbar'><select class='scenario-select' data-observed-filter><option value='all' ${observedFilter==='all'?'selected':''}>All observed</option><option value='registered' ${observedFilter==='registered'?'selected':''}>Registered</option><option value='unregistered' ${observedFilter==='unregistered'?'selected':''}>Unregistered</option></select><div class='row-meta'>Physical MQTT clients and their registration state.</div></div><div class='observed-table-wrap ops-table-wrap'><table class='observed-table ops-table'><thead><tr><th>Client</th><th>Status</th><th>Link</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -3866,6 +3939,31 @@ scenario_allowed:!template||!template.policy||template.policy.scenario_allowed!=
 args_schema:compactSchemaForTemplate(manifest,template)
 };
 }).filter(command=>command.id&&command.command);
+}
+
+function compactAdminCommandsForDevice(device){
+const manifest=compactManifest(device);
+if(!manifest)return [];
+return (Array.isArray(manifest.admin_command_templates)?manifest.admin_command_templates:[]).map(template=>{
+const commandName=String(template&&template.command||'');
+return {
+id:String(template&&template.id||commandName),
+label:String(template&&template.label||template&&template.id||commandName),
+capability:'admin',
+command:commandName,
+default_args:template&&template.default_args&&typeof template.default_args==='object'?template.default_args:undefined,
+policy:compactPolicy(template&&template.policy),
+args_schema:[]
+};
+}).filter(command=>command.id&&command.command);
+}
+
+function questDeviceAdminCommandList(device){
+return compactAdminCommandsForDevice(device);
+}
+
+function questDeviceAdminCommandById(device,commandId){
+return questDeviceAdminCommandList(device).find(command=>String(command&&command.id||'')===String(commandId||''))||null;
 }
 
 function compactEventsForDevice(device){
@@ -5640,7 +5738,8 @@ const resources=manifest.resources&&typeof manifest.resources==='object'?manifes
 const count=key=>Array.isArray(resources[key])?resources[key].length:0;
 const templates=Array.isArray(manifest.command_templates)?manifest.command_templates:[];
 const eventTemplates=Array.isArray(manifest.event_templates)?manifest.event_templates:[];
-return `<div class='builder-step'><div class='card-head'><div><h2 class='section-title'>${esc(title||'Compact node interface')}</h2><div class='row-meta'>manifest v${esc(manifest.manifest_version)} / ${esc(manifest.node_kind||'node')} / ${esc(manifest.capability_contract||'')}</div></div></div><div class='kvs'><div class='kv'><span class='k'>Resources</span><span class='v'>Relays ${count('relays')}, MOSFETs ${count('mosfets')}, inputs ${count('inputs')}, outputs ${count('outputs')}, LED strips ${count('led_strips')}</span></div><div class='kv'><span class='k'>Templates</span><span class='v'>${templates.length} commands / ${eventTemplates.length} events</span></div></div><details class='scenario-advanced'><summary>Manifest JSON</summary><pre class='code-block'>${esc(JSON.stringify(manifest,null,2))}</pre></details></div>`;
+const adminTemplates=Array.isArray(manifest.admin_command_templates)?manifest.admin_command_templates:[];
+return `<div class='builder-step'><div class='card-head'><div><h2 class='section-title'>${esc(title||'Compact node interface')}</h2><div class='row-meta'>manifest v${esc(manifest.manifest_version)} / ${esc(manifest.node_kind||'node')} / ${esc(manifest.capability_contract||'')}</div></div></div><div class='kvs'><div class='kv'><span class='k'>Resources</span><span class='v'>Relays ${count('relays')}, MOSFETs ${count('mosfets')}, inputs ${count('inputs')}, outputs ${count('outputs')}, LED strips ${count('led_strips')}</span></div><div class='kv'><span class='k'>Templates</span><span class='v'>${templates.length} commands / ${eventTemplates.length} events / ${adminTemplates.length} admin</span></div></div><details class='scenario-advanced'><summary>Manifest JSON</summary><pre class='code-block'>${esc(JSON.stringify(manifest,null,2))}</pre></details></div>`;
 }
 
 function renderQuestDiscoveryPreview(){
@@ -5678,6 +5777,56 @@ const meta=manifest?`${(manifest.command_templates||[]).length} templates / comp
 return `<div class='row-card admin-item-card'><div class='admin-item-main'><div class='admin-item-title-row'><div class='row-title'>${esc(d.name||d.id)}</div>${d.enabled===false?`<span class='badge'>disabled</span>`:''}</div><div class='admin-item-meta'><span>${meta}</span><span>${esc(questDeviceStatusText(d))}</span></div></div><div class='admin-item-side'><div>${status(health)}</div><div class='actions'>${uiButton({label:'Edit',action:'quest.device.edit',dataset:{'device-id':d.id||''}})}${uiButton({label:'Delete',action:'quest.device.delete',kind:'danger',dataset:{'device-id':d.id||''},confirm:`Delete device ${d.id||''}?`})}</div></div></div>`;
 }
 
+function renderQuestDeviceOperationStatus(){
+const state=currentStatusState();
+const badgeClass=state.className||'status state-unknown';
+const badgeText=state.text?healthLabel(badgeClass.replace(/^status\s+/,'').replace(/^state-/,'')):'idle';
+return `<div class='builder-step'><div class='card-head'><div><h2 class='section-title'>Operation status</h2><div class='row-meta'>Latest response for import, save and node admin actions in this modal.</div></div><span class='${esc(badgeClass)}' data-gm-inline-status-badge='1'>${esc(badgeText)}</span></div><div class='row-meta' data-gm-inline-status-text='1'>${esc(state.text||'No recent action yet.')}</div></div>`;
+}
+
+function renderQuestDeviceAdminPanel(draft){
+const compact=compactManifest(draft);
+if(!compact)return '';
+const adminDetailsKey=`quest-device-admin:${draft&&draft.id||'new'}`;
+const canLoad=!!questDeviceAdminCommandById(draft,'node.rules.get');
+const canValidate=!!questDeviceAdminCommandById(draft,'node.rules.validate');
+const canApply=!!questDeviceAdminCommandById(draft,'node.rules.apply');
+const canClear=!!questDeviceAdminCommandById(draft,'node.rules.clear');
+const canReboot=!!questDeviceAdminCommandById(draft,'node.reboot');
+if(!canLoad&&!canValidate&&!canApply&&!canClear&&!canReboot)return '';
+const adminState=questDeviceAdminState();
+const metadata=adminState.metadata&&typeof adminState.metadata==='object'?adminState.metadata:null;
+const lastResult=adminState.last_result&&typeof adminState.last_result==='object'?adminState.last_result:null;
+const bundleText=String(adminState.bundle_text||'');
+const runtimeMeta=metadata?`<pre class='code-block'>${esc(JSON.stringify({metadata,paused:!!adminState.paused},null,2))}</pre>`:`<div class='manual-empty'>Bundle state is not loaded yet. Use "Load stored bundle".</div>`;
+const resultMeta=lastResult?`<details class='scenario-advanced' open><summary>Last admin result</summary><pre class='code-block'>${esc(JSON.stringify(lastResult,null,2))}</pre></details>`:'';
+const rebootButton=canReboot?uiButton({label:'Reboot node',action:'quest.device.admin.quick',kind:'danger',dataset:{'device-id':draft.id||'', 'command-id':'node.reboot'},confirm:'Reboot this node?' }):'';
+const clearButton=canClear?uiButton({label:'Clear bundle',action:'quest.device.admin.clear_bundle',kind:'danger',confirm:'Clear the stored standalone bundle from this node?' }):'';
+return `<details class='scenario-advanced compact-advanced' ${detailsAttrs(adminDetailsKey,false)}><summary>Standalone Rule Engine</summary><div class='form-section'><div class='row-meta'>Admin-only workflow for stored standalone bundle JSON. This stays separate from scenario/device-control commands.</div><div class='actions'>${canLoad?uiButton({label:'Load stored bundle',action:'quest.device.admin.load_bundle'}):''}${uiButton({label:'Format JSON',action:'quest.device.admin.format_bundle'})}</div><div class='field-stack'><span>Bundle JSON</span><textarea class='json-editor' data-quest-admin-bundle='1' rows='18' placeholder='Paste standalone bundle JSON here'>${esc(bundleText)}</textarea></div><div class='actions'>${canValidate?uiButton({label:'Validate bundle',action:'quest.device.admin.validate_bundle'}):''}${canApply?uiButton({label:'Apply bundle',action:'quest.device.admin.apply_bundle',kind:'danger',confirm:'Apply this standalone bundle to the node?' }):''}${clearButton}${rebootButton}</div><div class='builder-step'><div class='builder-step-head'><div class='builder-step-title'>Stored bundle metadata</div></div>${runtimeMeta}${resultMeta}</div></div></details>`;
+}
+
+function renderQuestDeviceAdminQuickActions(){
+const devices=questEditableDevices().filter(device=>{
+const ids=questDeviceAdminCommandList(device).map(command=>String(command&&command.id||''));
+return ids.includes('node.rules.pause')||ids.includes('node.rules.resume')||ids.includes('node.reboot');
+});
+if(!devices.length)return '';
+const renderAction=(device,commandId,labelOverride,confirmText)=>{
+const command=questDeviceAdminCommandById(device,commandId);
+if(!command)return '';
+const policy=command.policy&&typeof command.policy==='object'?command.policy:{};
+return uiButton({
+label:labelOverride||command.label||commandId,
+action:'quest.device.admin.quick',
+kind:policy.requires_confirmation||String(policy.danger_level||'normal')!=='normal'?'danger':'',
+dataset:{'device-id':device.id||'','command-id':commandId},
+confirm:confirmText||(policy.requires_confirmation?`Run "${command.label||commandId}"?`:'')
+});
+};
+const cards=devices.map(device=>`<section class='manual-group admin-item-card preset-device-group'><div class='manual-group-head'><div><div class='manual-title'>${esc(device.name||device.id)}</div><div class='manual-meta'>${esc(questDeviceStatusText(device))}</div></div>${status(questDeviceHealth(device))}</div><div class='actions'>${renderAction(device,'node.rules.pause','Pause rules','Pause standalone rules on this node?')}${renderAction(device,'node.rules.resume','Resume rules')}${renderAction(device,'node.reboot','Restart node','Restart this node?')}</div></section>`).join('');
+return `<section class='card'><div class='card-head'><div><h2 class='section-title'>Node Admin Actions</h2><div class='card-sub'>Quick admin-only controls exposed from node admin templates. They are not mixed into operator sidebar presets.</div></div></div><div class='admin-entity-grid'>${cards}</div></section>`;
+}
+
 function renderQuestDeviceEditor(draft){
 if(!draft){
 return `<div class='card empty-state'><h2 class='section-title'>Device editor</h2><div class='empty-title'>Select a quest device or create a new one</div><div class='row-meta'>Quest devices are physical client capabilities: commands, events and manual buttons. They are used later in room scenarios.</div><div class='actions'>${uiButton({label:'Add device',action:'quest.device.new'})}</div></div>`;
@@ -5687,6 +5836,8 @@ const compact=compactManifest(draft);
 const commandRows=!compact&&((draft.commands||[]).length?draft.commands.map(renderQuestCommandRow).join(''):`<div class='empty'>No commands. Import config from the client or add a command manually.</div>`);
 const eventRows=!compact&&((draft.events||[]).length?draft.events.map(renderQuestEventRow).join(''):`<div class='empty'>No events. Import config from the client or add an event manually.</div>`);
 const compactSummary=compact?(renderQuestDiscoveryPreview()||renderCompactQuestDeviceSummary(draft,'Compact node interface')):'';
+const operationStatus=renderQuestDeviceOperationStatus();
+const adminPanel=compact?renderQuestDeviceAdminPanel(draft):'';
 const flatEditors=compact?'':`<div class='form-section'><div class='card-head'><div><h2 class='section-title'>Commands</h2><div class='row-meta'>Commands can become scenario actions and manual buttons.</div></div><div class='actions'>${uiButton({label:'Add command',action:'quest.command.add'})}</div></div><div>${commandRows}</div></div><div class='form-section'><div class='card-head'><div><h2 class='section-title'>Events</h2><div class='row-meta'>Events are available as scenario waits.</div></div><div class='actions'>${uiButton({label:'Add event',action:'quest.event.add'})}</div></div><div>${eventRows}</div></div>`;
 return uiOverlayCard({
 title:`${questDeviceEditor.device_id?'Edit quest device':'New quest device'}${questDeviceEditor.dirty?' *':''}`,
@@ -5694,7 +5845,7 @@ subtitle:'Define what this physical client can do and report.',
 closeAction:'quest.device.cancel',
 className:'card editor-modal-card',
 dataset:{'quest-device-editor-modal':'1'},
-content:`<div data-quest-device-editor='1'><label class='row-meta'><input data-quest-device-field='enabled' type='checkbox' ${draft.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label><div class='form-section'><h2 class='section-title'>Basics</h2><div class='field-grid'><label class='field-stack'><span>Device name</span><input data-quest-device-field='name' placeholder='Altar controller' value='${esc(draft.name||'')}'></label><label class='field-stack'><span>Physical client</span>${clientControl}</label></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-device-field='id' placeholder='Device ID' value='${esc(draft.id||'')}'></div></details></div><div class='form-section import-panel'><div><h2 class='section-title'>Import capabilities</h2><div class='row-meta'>Ask the selected physical client for its supported commands and events.</div></div><div class='actions'>${uiButton({label:'Get config',action:'quest.device.discover',kind:'approve'})}</div></div>${compactSummary||renderQuestDiscoveryPreview()}${flatEditors}<div class='actions sticky-actions'>${uiButton({label:'Save device',action:'quest.device.save'})}${questDeviceEditor.device_id?uiButton({label:'Delete',action:'quest.device.delete',kind:'danger',dataset:{'device-id':questDeviceEditor.device_id},confirm:`Delete device ${questDeviceEditor.device_id}?`}):''}${uiButton({label:'Cancel',action:'quest.device.cancel'})}</div></div>`
+content:`<div data-quest-device-editor='1'>${operationStatus}<label class='row-meta'><input data-quest-device-field='enabled' type='checkbox' ${draft.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label><div class='form-section'><h2 class='section-title'>Basics</h2><div class='field-grid'><label class='field-stack'><span>Device name</span><input data-quest-device-field='name' placeholder='Altar controller' value='${esc(draft.name||'')}'></label><label class='field-stack'><span>Physical client</span>${clientControl}</label></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-device-field='id' placeholder='Device ID' value='${esc(draft.id||'')}'></div></details></div><div class='form-section import-panel'><div><h2 class='section-title'>Import capabilities</h2><div class='row-meta'>Ask the selected physical client for its supported commands and events.</div></div><div class='actions'>${uiButton({label:'Get config',action:'quest.device.discover',kind:'approve'})}</div></div>${compactSummary||renderQuestDiscoveryPreview()}${adminPanel}${flatEditors}<div class='actions sticky-actions'>${uiButton({label:'Save device',action:'quest.device.save'})}${questDeviceEditor.device_id?uiButton({label:'Delete',action:'quest.device.delete',kind:'danger',dataset:{'device-id':questDeviceEditor.device_id},confirm:`Delete device ${questDeviceEditor.device_id}?`}):''}${uiButton({label:'Cancel',action:'quest.device.cancel'})}</div></div>`
 });
 }
 
@@ -7249,6 +7400,13 @@ await gmExpectOk(res);
 setGMStatus('Button sent','gm-ok');
 }
 
+async function runDeviceAdminCommand(deviceId,commandId,paramsOverride,confirmed,statusText){
+if(!deviceId||!commandId)throw new Error('Admin action is incomplete');
+setGMStatus(statusText||'Running admin action...');
+const res=await api.device.runAdminCommand(deviceId,commandId,paramsOverride,!!confirmed);
+return await gmReadJson(res);
+}
+
 async function createRoomFromPrompt(){
 if(!isAdmin())return;
 const name=(prompt('Room name')||'').trim();
@@ -7499,6 +7657,145 @@ enabled:base.enabled!==false,
 commands,
 events
 };
+}
+
+function questDeviceAdminState(){
+if(!questDeviceEditor.admin_state||typeof questDeviceEditor.admin_state!=='object'){
+questDeviceEditor.admin_state={bundle_text:'',metadata:null,last_result:null,paused:false};
+}
+return questDeviceEditor.admin_state;
+}
+
+function questDeviceAdminBundleText(){
+const box=document.querySelector('[data-quest-admin-bundle]');
+if(box)return box.value||'';
+return String(questDeviceAdminState().bundle_text||'');
+}
+
+function questDeviceAdminSetBundleText(text){
+const next=String(text||'');
+questDeviceAdminState().bundle_text=next;
+const box=document.querySelector('[data-quest-admin-bundle]');
+if(box&&box.value!==next)box.value=next;
+}
+
+function questDeviceAdminBundleObject(){
+const text=questDeviceAdminBundleText().trim();
+let parsed=null;
+if(!text)throw new Error('Bundle JSON is empty');
+try{
+parsed=JSON.parse(text);
+}
+catch(err){
+throw new Error('Bundle JSON is invalid');
+}
+if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Bundle JSON must be an object');
+return parsed;
+}
+
+function questDeviceAdminApplyResponse(commandId,body){
+const state=questDeviceAdminState();
+const data=body&&body.data&&typeof body.data==='object'?body.data:null;
+state.last_result=body&&typeof body==='object'?JSON.parse(JSON.stringify(body)):null;
+if(data&&data.metadata&&typeof data.metadata==='object'){
+state.metadata=JSON.parse(JSON.stringify(data.metadata));
+}
+if(data&&Object.prototype.hasOwnProperty.call(data,'paused'))state.paused=!!data.paused;
+if(commandId==='node.rules.get'&&data&&Object.prototype.hasOwnProperty.call(data,'bundle')){
+state.bundle_text=data.bundle&&typeof data.bundle==='object'?JSON.stringify(data.bundle,null,2):'';
+}
+if(commandId==='node.rules.clear'){
+state.metadata=data&&data.metadata&&typeof data.metadata==='object'?JSON.parse(JSON.stringify(data.metadata)):{has_bundle:false};
+state.bundle_text='';
+state.paused=false;
+}
+return state;
+}
+
+async function loadQuestDeviceStoredBundle(){
+if(!isAdmin())throw new Error('Admin role required');
+const device=currentQuestDeviceDraft();
+const command=questDeviceAdminCommandById(device,'node.rules.get');
+if(!device||!device.id||!command)throw new Error('Bundle load is not available for this device');
+const body=await runDeviceAdminCommand(device.id,command.id,undefined,false,'Loading stored bundle...');
+questDeviceAdminApplyResponse(command.id,body);
+clearTransientFieldDirty();
+render();
+setGMStatus('Stored bundle loaded','gm-ok');
+}
+
+function formatQuestDeviceBundleJson(){
+const state=questDeviceAdminState();
+const parsed=questDeviceAdminBundleObject();
+state.bundle_text=JSON.stringify(parsed,null,2);
+clearTransientFieldDirty();
+render();
+setGMStatus('Bundle JSON formatted','gm-ok');
+}
+
+async function validateQuestDeviceBundle(){
+if(!isAdmin())throw new Error('Admin role required');
+const device=currentQuestDeviceDraft();
+const command=questDeviceAdminCommandById(device,'node.rules.validate');
+const bundle=questDeviceAdminBundleObject();
+if(!device||!device.id||!command)throw new Error('Bundle validation is not available for this device');
+questDeviceAdminState().bundle_text=JSON.stringify(bundle,null,2);
+const body=await runDeviceAdminCommand(device.id,
+command.id,
+bundle,
+false,
+'Validating bundle...');
+questDeviceAdminApplyResponse(command.id,body);
+render();
+setGMStatus('Bundle validated','gm-ok');
+}
+
+async function applyQuestDeviceBundle(){
+if(!isAdmin())throw new Error('Admin role required');
+const device=currentQuestDeviceDraft();
+const command=questDeviceAdminCommandById(device,'node.rules.apply');
+const bundle=questDeviceAdminBundleObject();
+if(!device||!device.id||!command)throw new Error('Bundle apply is not available for this device');
+questDeviceAdminState().bundle_text=JSON.stringify(bundle,null,2);
+const body=await runDeviceAdminCommand(device.id,
+command.id,
+bundle,
+true,
+'Applying bundle...');
+questDeviceAdminApplyResponse(command.id,body);
+await Promise.all([loadObserved(true),loadQuestDevices(true)]);
+render();
+setGMStatus('Bundle applied','gm-ok');
+}
+
+async function clearQuestDeviceBundle(){
+if(!isAdmin())throw new Error('Admin role required');
+const device=currentQuestDeviceDraft();
+const command=questDeviceAdminCommandById(device,'node.rules.clear');
+if(!device||!device.id||!command)throw new Error('Bundle clear is not available for this device');
+const body=await runDeviceAdminCommand(device.id,
+command.id,
+undefined,
+true,
+'Clearing bundle...');
+questDeviceAdminApplyResponse(command.id,body);
+await Promise.all([loadObserved(true),loadQuestDevices(true)]);
+render();
+setGMStatus('Bundle cleared','gm-ok');
+}
+
+async function runQuestDeviceQuickAdmin(deviceId,commandId,confirmed){
+if(!isAdmin())throw new Error('Admin role required');
+if(!deviceId||!commandId)throw new Error('Admin action is incomplete');
+const body=await runDeviceAdminCommand(deviceId,commandId,undefined,!!confirmed,'Running admin action...');
+const device=questDeviceById(deviceId);
+const adminCommand=questDeviceAdminCommandById(device,commandId);
+if(currentView==='device_setup'&&questDeviceEditor.open&&String(questDeviceEditor.device_id||'')===deviceId){
+questDeviceAdminApplyResponse(commandId,body);
+}
+await Promise.all([loadObserved(true),loadQuestDevices(true)]);
+render();
+setGMStatus(`${(adminCommand&&adminCommand.label)||commandId} completed`,'gm-ok');
 }
 
 async function discoverQuestDeviceInterface(){

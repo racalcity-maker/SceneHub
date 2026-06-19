@@ -20,6 +20,7 @@ typedef struct {
     uint64_t rx_ms;
     char device_id[QUEST_ID_MAX_LEN];
     char request_id[DEVICE_CONTROL_INGEST_REQUEST_ID_MAX_LEN];
+    char command[DEVICE_CONTROL_INGEST_COMMAND_MAX_LEN];
     char *data_json;
     size_t data_len;
 } dci_describe_interface_cache_entry_t;
@@ -52,6 +53,12 @@ uint64_t dci_now_ms(void);
 dci_slot_t *dci_find_slot_locked(const char *device_id);
 dci_slot_t *dci_alloc_slot_locked(const char *device_id);
 void dci_clear_describe_interface_cache_locked(void);
+esp_err_t dci_store_result_data_locked(const char *device_id,
+                                       const char *request_id,
+                                       const char *command,
+                                       const char *json,
+                                       size_t json_len,
+                                       uint64_t rx_ms);
 esp_err_t dci_store_describe_interface_data_locked(const char *device_id,
                                                    const char *request_id,
                                                    const char *json,

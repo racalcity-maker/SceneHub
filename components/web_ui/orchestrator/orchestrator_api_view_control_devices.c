@@ -38,6 +38,12 @@ cJSON *orchestrator_api_view_control_devices(const orch_control_device_entry_t *
         cJSON_AddStringToObject(item, "boot_id", device->boot_id);
         cJSON_AddStringToObject(item, "mode", device->mode);
         cJSON_AddStringToObject(item, "state", device->state);
+        cJSON_AddBoolToObject(item, "runtime_driver_enabled", device->runtime_driver_enabled);
+        cJSON_AddBoolToObject(item, "runtime_driver_ready", device->runtime_driver_ready);
+        cJSON_AddStringToObject(item, "runtime_driver_id", device->runtime_driver_id);
+        cJSON_AddStringToObject(item, "runtime_driver_health", device->runtime_driver_health);
+        cJSON_AddStringToObject(item, "runtime_driver_state", device->runtime_driver_state);
+        cJSON_AddStringToObject(item, "runtime_driver_error_code", device->runtime_driver_error_code);
         cJSON_AddBoolToObject(item, "has_heartbeat", device->has_heartbeat);
         cJSON_AddBoolToObject(item, "has_status", device->has_status);
         cJSON_AddBoolToObject(item, "has_diag", device->has_diag);

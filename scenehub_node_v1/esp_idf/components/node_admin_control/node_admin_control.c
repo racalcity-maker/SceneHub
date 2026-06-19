@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -10,15 +11,23 @@
 #include "freertos/task.h"
 #include "node_board.h"
 #include "node_control.h"
-
-static const char *TAG = "node_admin_ctl";
+#include "node_driver_nfc_reader_runtime.h"
+#include "node_rule_api.h"
+#include "sdkconfig.h"
 
 typedef enum {
     NODE_ADMIN_REQ_SAVE_BASE = 0,
     NODE_ADMIN_REQ_SAVE_LED,
+    NODE_ADMIN_REQ_SAVE_NFC_CARDS,
     NODE_ADMIN_REQ_RESET_WIFI,
     NODE_ADMIN_REQ_FACTORY_RESET,
     NODE_ADMIN_REQ_RESTART,
+    NODE_ADMIN_REQ_VALIDATE_RULES,
+    NODE_ADMIN_REQ_APPLY_RULES,
+    NODE_ADMIN_REQ_CLEAR_RULES,
+    NODE_ADMIN_REQ_PAUSE_RULES,
+    NODE_ADMIN_REQ_RESUME_RULES,
+    NODE_ADMIN_REQ_REINIT_NFC,
 } node_admin_request_type_t;
 
 typedef struct {
@@ -26,9 +35,20 @@ typedef struct {
     const node_config_t *config;
     const node_led_strip_config_t *led_strips;
     size_t led_count;
+    const node_nfc_known_card_t *nfc_cards;
+    size_t nfc_card_count;
+    const char *rule_bundle_json;
+    node_rule_bundle_metadata_t *rule_metadata;
+    char *error_code;
+    size_t error_code_size;
     node_admin_control_result_t *result;
     TaskHandle_t reply_task;
 } node_admin_request_t;
+
+typedef struct {
+    node_config_t config_scratch;
+    node_nfc_reader_config_t nfc_reader_scratch;
+} node_admin_scratch_t;
 
 static node_config_t *s_live_config;
 static StaticSemaphore_t s_config_mutex_storage;
@@ -37,9 +57,67 @@ static StaticQueue_t s_request_queue_storage;
 static uint8_t s_request_queue_buffer[2 * sizeof(node_admin_request_t)];
 static QueueHandle_t s_request_queue;
 static StaticTask_t s_task_storage;
-static StackType_t s_task_stack[4096];
+static StackType_t *s_task_stack_mem;
 static TaskHandle_t s_task;
 static bool s_initialized;
+static node_admin_scratch_t *s_scratch;
+static const char *TAG = "node_admin_ctl";
+
+#define s_config_scratch (s_scratch->config_scratch)
+#define s_nfc_reader_scratch (s_scratch->nfc_reader_scratch)
+
+static void *alloc_admin_buffer(size_t size)
+{
+    void *ptr = NULL;
+
+    if (size == 0) {
+        return NULL;
+    }
+#if CONFIG_SPIRAM
+    ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ptr) {
+        memset(ptr, 0, size);
+        return ptr;
+    }
+#endif
+    ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+    if (ptr) {
+        memset(ptr, 0, size);
+    }
+    return ptr;
+}
+
+static bool ensure_admin_scratch(void)
+{
+    if (s_scratch) {
+        return true;
+    }
+
+    s_scratch = (node_admin_scratch_t *)alloc_admin_buffer(sizeof(*s_scratch));
+    if (!s_scratch) {
+        ESP_LOGE(TAG, "admin scratch alloc failed (%u bytes)", (unsigned)sizeof(*s_scratch));
+        return false;
+    }
+    return true;
+}
+
+static StackType_t *allocate_admin_task_stack(void)
+{
+    size_t stack_bytes = 4096U * sizeof(StackType_t);
+
+    if (s_task_stack_mem) {
+        return s_task_stack_mem;
+    }
+
+    /* Admin task performs NVS/flash operations, so its stack must stay internal. */
+    s_task_stack_mem = (StackType_t *)heap_caps_malloc(stack_bytes,
+                                                       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (s_task_stack_mem) {
+        memset(s_task_stack_mem, 0, stack_bytes);
+        ESP_LOGI(TAG, "admin task stack source=internal_heap bytes=%u", (unsigned)stack_bytes);
+    }
+    return s_task_stack_mem;
+}
 
 static bool lock_config(void)
 {
@@ -84,6 +162,19 @@ static void apply_led_overlay(node_config_t *config,
         config->led_strips[i].breathe = led_strips[i].breathe;
         config->led_strips[i].effects = led_strips[i].effects;
     }
+}
+
+static esp_err_t copy_live_config(node_config_t *out_config)
+{
+    if (!out_config || !s_live_config) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!lock_config()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    *out_config = *s_live_config;
+    unlock_config();
+    return ESP_OK;
 }
 
 static esp_err_t handle_save_base(const node_admin_request_t *request)
@@ -132,6 +223,46 @@ static esp_err_t handle_save_led(const node_admin_request_t *request)
     return node_control_update_led_config(request->led_strips, request->led_count);
 }
 
+static esp_err_t handle_save_nfc_cards(const node_admin_request_t *request)
+{
+    esp_err_t err = ESP_OK;
+
+    if (!request || (!request->nfc_cards && request->nfc_card_count > 0) ||
+        request->nfc_card_count > NODE_DRIVER_NFC_KNOWN_CARD_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!ensure_admin_scratch()) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    memset(&s_config_scratch, 0, sizeof(s_config_scratch));
+    err = copy_live_config(&s_config_scratch);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    memset(&s_nfc_reader_scratch, 0, sizeof(s_nfc_reader_scratch));
+    err = node_driver_nfc_reader_load_factory_config(&s_config_scratch, &s_nfc_reader_scratch);
+    if (err != ESP_OK) {
+        return err;
+    }
+    s_nfc_reader_scratch.known_card_count = request->nfc_card_count;
+    memset(s_nfc_reader_scratch.known_cards, 0, sizeof(s_nfc_reader_scratch.known_cards));
+    for (size_t i = 0; i < request->nfc_card_count; ++i) {
+        s_nfc_reader_scratch.known_cards[i] = request->nfc_cards[i];
+    }
+    err = node_driver_nfc_reader_validate_config(&s_nfc_reader_scratch, NULL);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = node_driver_nfc_reader_save_known_cards(s_nfc_reader_scratch.known_cards,
+                                                  s_nfc_reader_scratch.known_card_count);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return node_driver_nfc_reader_runtime_reload(&s_config_scratch);
+}
+
 static esp_err_t handle_reset_wifi(void)
 {
     esp_err_t err = node_config_reset_wifi();
@@ -150,15 +281,22 @@ static esp_err_t handle_reset_wifi(void)
 
 static esp_err_t handle_factory_reset(void)
 {
-    node_config_t factory_config;
     esp_err_t err = node_config_factory_reset();
 
     if (err != ESP_OK) {
         return err;
     }
+    err = node_rule_api_clear_bundle();
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!ensure_admin_scratch()) {
+        return ESP_ERR_NO_MEM;
+    }
 
-    node_config_set_factory_defaults(&factory_config);
-    err = node_board_apply_factory_pin_config(&factory_config);
+    memset(&s_config_scratch, 0, sizeof(s_config_scratch));
+    node_config_set_factory_defaults(&s_config_scratch);
+    err = node_board_apply_factory_pin_config(&s_config_scratch);
     if (err != ESP_OK) {
         return err;
     }
@@ -166,9 +304,77 @@ static esp_err_t handle_factory_reset(void)
     if (!lock_config()) {
         return ESP_ERR_TIMEOUT;
     }
-    *s_live_config = factory_config;
+    *s_live_config = s_config_scratch;
     unlock_config();
     return ESP_OK;
+}
+
+static esp_err_t handle_apply_rules(const node_admin_request_t *request)
+{
+    esp_err_t err = ESP_OK;
+
+    if (!request || !request->rule_bundle_json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!ensure_admin_scratch()) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    memset(&s_config_scratch, 0, sizeof(s_config_scratch));
+    err = copy_live_config(&s_config_scratch);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return node_rule_api_apply_bundle_for_config(request->rule_bundle_json,
+                                                 &s_config_scratch,
+                                                 request->rule_metadata,
+                                                 request->error_code,
+                                                 request->error_code_size);
+}
+
+static esp_err_t handle_validate_rules(const node_admin_request_t *request)
+{
+    esp_err_t err = ESP_OK;
+
+    if (!request || !request->rule_bundle_json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!ensure_admin_scratch()) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    memset(&s_config_scratch, 0, sizeof(s_config_scratch));
+    err = copy_live_config(&s_config_scratch);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return node_rule_api_validate_bundle_for_config(request->rule_bundle_json,
+                                                    &s_config_scratch,
+                                                    request->rule_metadata,
+                                                    request->error_code,
+                                                    request->error_code_size);
+}
+
+static esp_err_t handle_clear_rules(void)
+{
+    return node_rule_api_clear_bundle();
+}
+
+static esp_err_t handle_pause_rules(void)
+{
+    return node_rule_api_pause();
+}
+
+static esp_err_t handle_resume_rules(void)
+{
+    return node_rule_api_resume();
+}
+
+static esp_err_t handle_reinit_nfc(void)
+{
+    return node_driver_nfc_reader_runtime_reinit();
 }
 
 static void node_admin_task(void *arg)
@@ -194,6 +400,10 @@ static void node_admin_task(void *arg)
             err = handle_save_led(&request);
             applied = err == ESP_OK;
             break;
+        case NODE_ADMIN_REQ_SAVE_NFC_CARDS:
+            err = handle_save_nfc_cards(&request);
+            applied = err == ESP_OK;
+            break;
         case NODE_ADMIN_REQ_RESET_WIFI:
             err = handle_reset_wifi();
             restart_required = err == ESP_OK;
@@ -206,6 +416,27 @@ static void node_admin_task(void *arg)
             err = ESP_OK;
             restarting = true;
             break;
+        case NODE_ADMIN_REQ_VALIDATE_RULES:
+            err = handle_validate_rules(&request);
+            break;
+        case NODE_ADMIN_REQ_APPLY_RULES:
+            err = handle_apply_rules(&request);
+            break;
+        case NODE_ADMIN_REQ_CLEAR_RULES:
+            err = handle_clear_rules();
+            break;
+        case NODE_ADMIN_REQ_PAUSE_RULES:
+            err = handle_pause_rules();
+            applied = err == ESP_OK;
+            break;
+        case NODE_ADMIN_REQ_RESUME_RULES:
+            err = handle_resume_rules();
+            applied = err == ESP_OK;
+            break;
+        case NODE_ADMIN_REQ_REINIT_NFC:
+            err = handle_reinit_nfc();
+            applied = err == ESP_OK;
+            break;
         default:
             err = ESP_ERR_INVALID_ARG;
             break;
@@ -217,6 +448,7 @@ static void node_admin_task(void *arg)
         }
 
         if (request.type == NODE_ADMIN_REQ_RESTART && err == ESP_OK) {
+            ESP_LOGW(TAG, "restart source=provisioning_api reason=explicit_restart");
             vTaskDelay(pdMS_TO_TICKS(100));
             esp_restart();
         }
@@ -244,6 +476,9 @@ esp_err_t node_admin_control_init(node_config_t *live_config)
     if (!live_config) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!ensure_admin_scratch()) {
+        return ESP_ERR_NO_MEM;
+    }
 
     if (!s_config_mutex) {
         s_config_mutex = xSemaphoreCreateMutexStatic(&s_config_mutex_storage);
@@ -255,12 +490,17 @@ esp_err_t node_admin_control_init(node_config_t *live_config)
                                              &s_request_queue_storage);
     }
     if (!s_task) {
+        StackType_t *task_stack = allocate_admin_task_stack();
+
+        if (!task_stack) {
+            return ESP_ERR_NO_MEM;
+        }
         s_task = xTaskCreateStatic(node_admin_task,
                                    "node_admin",
-                                   sizeof(s_task_stack) / sizeof(s_task_stack[0]),
+                                   4096,
                                    NULL,
                                    tskIDLE_PRIORITY + 2,
-                                   s_task_stack,
+                                   task_stack,
                                    &s_task_storage);
     }
     if (!s_config_mutex || !s_request_queue || !s_task) {
@@ -316,6 +556,23 @@ esp_err_t node_admin_control_save_led(const node_led_strip_config_t *led_strips,
     return submit_request(&request);
 }
 
+esp_err_t node_admin_control_save_nfc_cards(const node_nfc_known_card_t *cards,
+                                            size_t count,
+                                            node_admin_control_result_t *out_result)
+{
+    node_admin_request_t request = {
+        .type = NODE_ADMIN_REQ_SAVE_NFC_CARDS,
+        .nfc_cards = cards,
+        .nfc_card_count = count,
+        .result = out_result,
+    };
+
+    if (out_result) {
+        write_result(out_result, ESP_ERR_INVALID_STATE, false, false, false);
+    }
+    return submit_request(&request);
+}
+
 esp_err_t node_admin_control_reset_wifi(node_admin_control_result_t *out_result)
 {
     node_admin_request_t request = {
@@ -346,6 +603,121 @@ esp_err_t node_admin_control_restart(node_admin_control_result_t *out_result)
 {
     node_admin_request_t request = {
         .type = NODE_ADMIN_REQ_RESTART,
+        .result = out_result,
+    };
+
+    if (out_result) {
+        write_result(out_result, ESP_ERR_INVALID_STATE, false, false, false);
+    }
+    return submit_request(&request);
+}
+
+esp_err_t node_admin_control_validate_rules(const char *raw_json,
+                                            node_rule_bundle_metadata_t *out_metadata,
+                                            char *out_error_code,
+                                            size_t out_error_code_size,
+                                            node_admin_control_result_t *out_result)
+{
+    node_admin_request_t request = {
+        .type = NODE_ADMIN_REQ_VALIDATE_RULES,
+        .rule_bundle_json = raw_json,
+        .rule_metadata = out_metadata,
+        .error_code = out_error_code,
+        .error_code_size = out_error_code_size,
+        .result = out_result,
+    };
+
+    if (out_result) {
+        write_result(out_result, ESP_ERR_INVALID_STATE, false, false, false);
+    }
+    if (out_error_code && out_error_code_size > 0) {
+        out_error_code[0] = '\0';
+    }
+    if (out_metadata) {
+        memset(out_metadata, 0, sizeof(*out_metadata));
+    }
+    return submit_request(&request);
+}
+
+esp_err_t node_admin_control_apply_rules(const char *raw_json,
+                                         node_rule_bundle_metadata_t *out_metadata,
+                                         char *out_error_code,
+                                         size_t out_error_code_size,
+                                         node_admin_control_result_t *out_result)
+{
+    node_admin_request_t request = {
+        .type = NODE_ADMIN_REQ_APPLY_RULES,
+        .rule_bundle_json = raw_json,
+        .rule_metadata = out_metadata,
+        .error_code = out_error_code,
+        .error_code_size = out_error_code_size,
+        .result = out_result,
+    };
+
+    if (out_result) {
+        write_result(out_result, ESP_ERR_INVALID_STATE, false, false, false);
+    }
+    if (out_error_code && out_error_code_size > 0) {
+        out_error_code[0] = '\0';
+    }
+    if (out_metadata) {
+        memset(out_metadata, 0, sizeof(*out_metadata));
+    }
+    return submit_request(&request);
+}
+
+esp_err_t node_admin_control_get_rules(node_rule_store_entry_t *out_entry)
+{
+    if (!s_initialized || !out_entry) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    memset(out_entry, 0, sizeof(*out_entry));
+    return node_rule_api_get_bundle(out_entry);
+}
+
+esp_err_t node_admin_control_clear_rules(node_admin_control_result_t *out_result)
+{
+    node_admin_request_t request = {
+        .type = NODE_ADMIN_REQ_CLEAR_RULES,
+        .result = out_result,
+    };
+
+    if (out_result) {
+        write_result(out_result, ESP_ERR_INVALID_STATE, false, false, false);
+    }
+    return submit_request(&request);
+}
+
+esp_err_t node_admin_control_pause_rules(node_admin_control_result_t *out_result)
+{
+    node_admin_request_t request = {
+        .type = NODE_ADMIN_REQ_PAUSE_RULES,
+        .result = out_result,
+    };
+
+    if (out_result) {
+        write_result(out_result, ESP_ERR_INVALID_STATE, false, false, false);
+    }
+    return submit_request(&request);
+}
+
+esp_err_t node_admin_control_resume_rules(node_admin_control_result_t *out_result)
+{
+    node_admin_request_t request = {
+        .type = NODE_ADMIN_REQ_RESUME_RULES,
+        .result = out_result,
+    };
+
+    if (out_result) {
+        write_result(out_result, ESP_ERR_INVALID_STATE, false, false, false);
+    }
+    return submit_request(&request);
+}
+
+esp_err_t node_admin_control_reinit_nfc(node_admin_control_result_t *out_result)
+{
+    node_admin_request_t request = {
+        .type = NODE_ADMIN_REQ_REINIT_NFC,
         .result = out_result,
     };
 

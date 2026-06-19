@@ -18,6 +18,7 @@ uint32_t dci_s_generation = 0;
 char dci_s_last_changed_device_id[QUEST_ID_MAX_LEN] = {0};
 dci_describe_interface_cache_entry_t dci_s_describe_interface_cache
     [DCI_DESCRIBE_INTERFACE_CACHE_MAX] = {0};
+static uint64_t dci_s_last_capacity_log_ms = 0;
 
 static dci_slot_t *dci_alloc_slot_storage(void)
 {
@@ -91,14 +92,30 @@ esp_err_t dci_store_describe_interface_data_locked(const char *device_id,
                                                    size_t json_len,
                                                    uint64_t rx_ms)
 {
+    return dci_store_result_data_locked(device_id,
+                                        request_id,
+                                        "describe_interface",
+                                        json,
+                                        json_len,
+                                        rx_ms);
+}
+
+esp_err_t dci_store_result_data_locked(const char *device_id,
+                                       const char *request_id,
+                                       const char *command,
+                                       const char *json,
+                                       size_t json_len,
+                                       uint64_t rx_ms)
+{
     dci_describe_interface_cache_entry_t *entry = NULL;
     dci_describe_interface_cache_entry_t *oldest = NULL;
     char *buffer = NULL;
 
-    if (!device_id || !device_id[0] || !request_id || !request_id[0] || !json || json_len == 0) {
+    if (!device_id || !device_id[0] || !request_id || !request_id[0] || !command || !command[0] ||
+        !json || json_len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (json_len >= DEVICE_CONTROL_INGEST_DESCRIBE_INTERFACE_DATA_JSON_MAX_LEN) {
+    if (json_len >= DEVICE_CONTROL_INGEST_CACHED_RESULT_DATA_JSON_MAX_LEN) {
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -106,7 +123,8 @@ esp_err_t dci_store_describe_interface_data_locked(const char *device_id,
         dci_describe_interface_cache_entry_t *candidate = &dci_s_describe_interface_cache[i];
         if (candidate->in_use &&
             strcmp(candidate->device_id, device_id) == 0 &&
-            strcmp(candidate->request_id, request_id) == 0) {
+            strcmp(candidate->request_id, request_id) == 0 &&
+            strcmp(candidate->command, command) == 0) {
             entry = candidate;
             break;
         }
@@ -139,6 +157,7 @@ esp_err_t dci_store_describe_interface_data_locked(const char *device_id,
     entry->rx_ms = rx_ms;
     quest_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     quest_str_copy(entry->request_id, sizeof(entry->request_id), request_id);
+    quest_str_copy(entry->command, sizeof(entry->command), command);
     entry->data_json = buffer;
     entry->data_len = json_len;
     return ESP_OK;
@@ -225,7 +244,6 @@ dci_slot_t *dci_find_slot_locked(const char *device_id)
 dci_slot_t *dci_alloc_slot_locked(const char *device_id)
 {
     dci_slot_t *free_slot = NULL;
-    dci_slot_t *oldest_slot = NULL;
     if (!dci_s_slots || !device_id || !device_id[0]) {
         return NULL;
     }
@@ -244,19 +262,17 @@ dci_slot_t *dci_alloc_slot_locked(const char *device_id)
         if (strcmp(slot->state.device_id, device_id) == 0) {
             return slot;
         }
-        if (!oldest_slot || slot->state.last_contract_rx_ms < oldest_slot->state.last_contract_rx_ms) {
-            oldest_slot = slot;
-        }
     }
 
     if (!free_slot) {
-        free_slot = oldest_slot;
-    }
-    if (!free_slot) {
+        uint64_t now = dci_now_ms();
+        if (now - dci_s_last_capacity_log_ms >= 1000) {
+            ESP_LOGW(TAG,
+                     "control state capacity full; refusing device state for %s",
+                     device_id);
+            dci_s_last_capacity_log_ms = now;
+        }
         return NULL;
-    }
-    if (free_slot->in_use) {
-        ESP_LOGW(TAG, "evicting control state for %s", free_slot->state.device_id);
     }
     memset(free_slot, 0, sizeof(*free_slot));
     free_slot->in_use = true;
@@ -314,6 +330,7 @@ esp_err_t device_control_ingest_reset(void)
     }
     dci_clear_describe_interface_cache_locked();
     dci_s_last_changed_device_id[0] = '\0';
+    dci_s_last_capacity_log_ms = 0;
     dci_s_generation++;
     xSemaphoreGive(dci_s_lock);
     return ESP_OK;
@@ -465,7 +482,21 @@ esp_err_t device_control_ingest_take_describe_interface_data(const char *device_
                                                              char *out,
                                                              size_t out_size)
 {
-    if (!device_id || !device_id[0] || !request_id || !request_id[0] || !out || out_size == 0) {
+    return device_control_ingest_take_result_data(device_id,
+                                                  request_id,
+                                                  "describe_interface",
+                                                  out,
+                                                  out_size);
+}
+
+esp_err_t device_control_ingest_take_result_data(const char *device_id,
+                                                 const char *request_id,
+                                                 const char *command,
+                                                 char *out,
+                                                 size_t out_size)
+{
+    if (!device_id || !device_id[0] || !request_id || !request_id[0] || !command || !command[0] ||
+        !out || out_size == 0) {
         return ESP_ERR_INVALID_ARG;
     }
     out[0] = '\0';
@@ -481,7 +512,8 @@ esp_err_t device_control_ingest_take_describe_interface_data(const char *device_
             continue;
         }
         if (strcmp(entry->device_id, device_id) != 0 ||
-            strcmp(entry->request_id, request_id) != 0) {
+            strcmp(entry->request_id, request_id) != 0 ||
+            strcmp(entry->command, command) != 0) {
             continue;
         }
         if (entry->data_len >= out_size) {

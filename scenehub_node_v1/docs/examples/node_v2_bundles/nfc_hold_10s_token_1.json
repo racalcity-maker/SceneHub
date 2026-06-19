@@ -1,0 +1,216 @@
+{
+  "version": 2,
+  "bundle_id": "nfc_hold_10s_token_1",
+  "generation": 1,
+  "mode": "standalone",
+  "emits": [
+    "token_1_hold_started",
+    "token_1_hold_confirmed",
+    "token_1_hold_reset"
+  ],
+  "limits": {
+    "max_action_ms": 50,
+    "max_parallel_timers": 4
+  },
+  "initial_state": {
+    "token_1_hold_armed": false,
+    "token_1_hold_done": false
+  },
+  "rules": [
+    {
+      "id": "boot_init",
+      "enabled": true,
+      "trigger": {
+        "kind": "boot"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "set_state",
+          "key": "token_1_hold_armed",
+          "value": false
+        },
+        {
+          "kind": "set_state",
+          "key": "token_1_hold_done",
+          "value": false
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "start_hold_token_1",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_seen"
+      },
+      "conditions": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "idle"
+          },
+          {
+            "kind": "event_field_equals",
+            "field": "token_id",
+            "value": 1
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "set_state",
+          "key": "token_1_hold_armed",
+          "value": true
+        },
+        {
+          "kind": "set_state",
+          "key": "token_1_hold_done",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "waiting_token_1_hold"
+        },
+        {
+          "kind": "start_timer",
+          "timer": "token_1_hold_10s",
+          "mode": "oneshot",
+          "duration_ms": 10000
+        },
+        {
+          "kind": "emit_event",
+          "event": "token_1_hold_started",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 1,
+            "hold_ms": 10000
+          }
+        }
+      ]
+    },
+    {
+      "id": "confirm_hold_token_1",
+      "enabled": true,
+      "trigger": {
+        "kind": "timer",
+        "timer": "token_1_hold_10s"
+      },
+      "conditions": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "waiting_token_1_hold"
+          },
+          {
+            "kind": "state_equals",
+            "key": "token_1_hold_armed",
+            "value": true
+          },
+          {
+            "kind": "state_equals",
+            "key": "token_1_hold_done",
+            "value": false
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "set_state",
+          "key": "token_1_hold_done",
+          "value": true
+        },
+        {
+          "kind": "set_phase",
+          "phase": "token_1_hold_confirmed"
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "twinkle_random"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "token_1_hold_confirmed",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 1,
+            "hold_ms": 10000
+          }
+        }
+      ]
+    },
+    {
+      "id": "reset_token_1_hold_on_removed",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_removed"
+      },
+      "conditions": {
+        "kind": "any",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "waiting_token_1_hold"
+          },
+          {
+            "kind": "phase_is",
+            "phase": "token_1_hold_confirmed"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "token_1_hold_10s"
+        },
+        {
+          "kind": "set_state",
+          "key": "token_1_hold_armed",
+          "value": false
+        },
+        {
+          "kind": "set_state",
+          "key": "token_1_hold_done",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "token_1_hold_reset",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 1,
+            "reason": "card_removed"
+          }
+        }
+      ]
+    }
+  ]
+}

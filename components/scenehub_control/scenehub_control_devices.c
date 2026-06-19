@@ -82,6 +82,15 @@ static void scenehub_control_fill_device_payload_error(scenehub_control_result_t
         scenehub_control_fill_common_error(result, err);
         return;
     }
+    if (err == ESP_ERR_INVALID_SIZE) {
+        scenehub_control_set_result(result,
+                                    SCENEHUB_CONTROL_STATUS_REJECTED,
+                                    err,
+                                    false,
+                                    "device_manifest_too_large",
+                                    "SceneHub Node manifest exceeds the hub storage limit for one device.");
+        return;
+    }
     if (scenehub_control_json_has_key(manifest, "version") ||
         scenehub_control_json_has_key(manifest, "commands") ||
         scenehub_control_json_has_key(manifest, "events")) {
@@ -298,6 +307,64 @@ esp_err_t scenehub_control_device_command_run(const char *source,
                                                           SCENEHUB_STATE_SLICE_DEVICES_RUNTIME,
                                                           device_id,
                                                           "device_command_run");
+    }
+    return ESP_OK;
+}
+
+static bool scenehub_control_device_admin_changes_state(const char *command_id)
+{
+    if (!command_id || !command_id[0]) {
+        return false;
+    }
+    return strcmp(command_id, "node.rules.get") != 0 &&
+           strcmp(command_id, "node.rules.validate") != 0;
+}
+
+esp_err_t scenehub_control_device_admin_command_run(
+    const char *source,
+    const char *device_id,
+    const char *command_id,
+    const char *params_json,
+    bool confirmed,
+    scenehub_control_device_admin_info_t *out_info,
+    scenehub_control_result_t *out_result)
+{
+    bool log_warning = false;
+    esp_err_t err = scenehub_control_prepare_result("", "device_admin_command_run", out_result);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (out_info) {
+        memset(out_info, 0, sizeof(*out_info));
+    }
+
+    err = scenehub_control_dispatch_device_admin_command(source,
+                                                         device_id,
+                                                         command_id,
+                                                         params_json,
+                                                         confirmed,
+                                                         out_info,
+                                                         &log_warning,
+                                                         out_result);
+    if (err != ESP_OK) {
+        if (out_result->message[0] == '\0' && out_result->error_code[0] == '\0') {
+            scenehub_control_fill_common_error(out_result, err);
+        }
+        return ESP_OK;
+    }
+
+    scenehub_control_log_device_action(source,
+                                       device_id,
+                                       log_warning,
+                                       command_id,
+                                       out_result->has_request_id ? out_result->request_id : "");
+    if (scenehub_control_device_admin_changes_state(command_id)) {
+        scenehub_control_finish_success_with_invalidation(out_result,
+                                                          SCENEHUB_STATE_SLICE_DEVICES_RUNTIME,
+                                                          device_id,
+                                                          "device_admin_command_run");
+    } else {
+        scenehub_control_finish_success_no_state_change(out_result);
     }
     return ESP_OK;
 }

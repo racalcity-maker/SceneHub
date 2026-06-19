@@ -1,0 +1,45 @@
+menu "SceneHub Node NFC reader"
+
+config SCENEHUB_NODE_DRIVER_PN532_ENABLED
+    bool "Enable PN532 NFC reader"
+    default n
+    help
+        Enable compile-time PN532 NFC reader configuration and runtime polling
+        over I2C for one bounded reader instance.
+
+if SCENEHUB_NODE_DRIVER_PN532_ENABLED
+
+config SCENEHUB_NODE_DRIVER_PN532_I2C_SDA_GPIO
+    int "PN532 I2C SDA GPIO"
+    default -1
+
+config SCENEHUB_NODE_DRIVER_PN532_I2C_SCL_GPIO
+    int "PN532 I2C SCL GPIO"
+    default -1
+
+config SCENEHUB_NODE_DRIVER_PN532_RESET_GPIO
+    int "PN532 reset GPIO"
+    default -1
+    help
+        Optional PN532 reset pin. Leave -1 when the module reset line is not
+        connected.
+
+config SCENEHUB_NODE_DRIVER_PN532_I2C_ADDRESS
+    hex "PN532 I2C address"
+    default 0x24
+    help
+        Default 7-bit PN532 I2C address.
+
+config SCENEHUB_NODE_DRIVER_PN532_POLL_INTERVAL_MS
+    int "PN532 poll interval ms"
+    range 20 5000
+    default 100
+
+config SCENEHUB_NODE_DRIVER_PN532_DEBOUNCE_MS
+    int "PN532 debounce ms"
+    range 0 5000
+    default 250
+
+endif
+
+endmenu

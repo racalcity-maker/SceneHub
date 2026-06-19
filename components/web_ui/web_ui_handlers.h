@@ -66,6 +66,7 @@ esp_err_t gm_quest_devices_handler(httpd_req_t *req);
 esp_err_t gm_quest_device_save_handler(httpd_req_t *req);
 esp_err_t gm_quest_device_delete_handler(httpd_req_t *req);
 esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req);
+esp_err_t gm_quest_device_admin_command_run_handler(httpd_req_t *req);
 esp_err_t gm_quest_devices_export_handler(httpd_req_t *req);
 esp_err_t gm_quest_devices_import_handler(httpd_req_t *req);
 esp_err_t gm_quest_devices_save_handler(httpd_req_t *req);

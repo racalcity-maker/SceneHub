@@ -1,10 +1,12 @@
 #include "node_mqtt_internal.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "esp_timer.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "node_driver_nfc_reader_runtime.h"
 #include "node_protocol.h"
 
 static char s_tx_payload[NODE_MQTT_PAYLOAD_MAX];
@@ -146,17 +148,46 @@ esp_err_t node_mqtt_publish_result_reliable(const char *request_id,
 
 esp_err_t node_mqtt_publish_status_locked(void)
 {
+    node_nfc_reader_runtime_status_t nfc_status = {0};
+    const char *node_health = "ok";
+
     ++s_status_seq;
+    node_driver_nfc_reader_runtime_get_status(&nfc_status);
+    if (nfc_status.enabled) {
+        if (strcmp(nfc_status.health, "error") == 0 ||
+            strcmp(nfc_status.health, "degraded") == 0) {
+            node_health = "degraded";
+        }
+    }
     if (node_protocol_status_topic(s_topic, sizeof(s_topic), g_node_mqtt_config.node_id) != ESP_OK) {
         return ESP_ERR_NO_MEM;
     }
     int n = snprintf(s_tx_payload,
                      sizeof(s_tx_payload),
                      "{\"ts_ms\":%lld,\"fw_version\":\"0.1.0\",\"mode\":\"normal\","
-                     "\"state\":\"idle\",\"health\":\"ok\","
-                     "\"capabilities\":[\"heartbeat\",\"status\",\"describe_interface\",\"node.identify\",\"node.get_status\",\"relay.set\",\"relay.pulse\",\"relay.all_off\",\"mosfet.set\",\"mosfet.fade\",\"mosfet.pulse\",\"mosfet.blink\",\"mosfet.breathe\",\"mosfet.all_off\",\"mosfet.effect\",\"io.set\",\"io.all_off\",\"node.all_off\",\"led.off\",\"led.solid\",\"led.blink\",\"led.breathe\",\"led.effect\",\"input.changed\"],"
-                     "\"runtime\":{\"active\":false},\"status_seq\":%u}",
+                     "\"state\":\"idle\",\"health\":\"%s\","
+                     "\"capabilities\":[\"heartbeat\",\"status\",\"describe_interface\",\"node.identify\",\"node.get_status\","
+                     "\"relay.set\",\"relay.pulse\",\"relay.all_off\",\"mosfet.set\",\"mosfet.fade\",\"mosfet.pulse\","
+                      "\"mosfet.blink\",\"mosfet.breathe\",\"mosfet.all_off\",\"mosfet.effect\",\"io.set\",\"io.all_off\","
+                      "\"node.all_off\",\"led.off\",\"led.solid\",\"led.blink\",\"led.breathe\",\"led.effect\","
+                      "\"node.rules.validate\",\"node.rules.apply\",\"node.rules.get\",\"node.rules.clear\","
+                      "\"node.rules.pause\",\"node.rules.resume\",\"node.reboot\",\"node.nfc.reinit\","
+                      "\"input.changed\",\"rules.changed\"],"
+                      "\"runtime\":{\"active\":false,\"drivers\":{\"nfc_reader\":{\"enabled\":%s,\"driver_ready\":%s,"
+                      "\"health\":\"%s\",\"state\":\"%s\",\"error_code\":\"%s\",\"reader_id\":\"%s\","
+                      "\"card_present\":%s,\"token_id\":%ld,\"uid\":\"%s\",\"last_seen_uid\":\"%s\"}}},\"status_seq\":%u}",
                      (long long)node_mqtt_now_ms(),
+                     node_health,
+                     nfc_status.enabled ? "true" : "false",
+                     nfc_status.driver_ready ? "true" : "false",
+                     nfc_status.health,
+                     nfc_status.state,
+                     nfc_status.error_code,
+                     nfc_status.reader_id,
+                     nfc_status.card_present ? "true" : "false",
+                     (long)nfc_status.token_id,
+                     nfc_status.uid,
+                     nfc_status.last_seen_uid,
                      (unsigned)s_status_seq);
     if (n < 0 || n >= (int)sizeof(s_tx_payload)) {
         return ESP_ERR_NO_MEM;
@@ -201,4 +232,53 @@ void node_mqtt_publish_heartbeat_and_status(bool include_status)
         node_mqtt_publish_status_locked();
     }
     node_mqtt_publish_unlock();
+}
+
+bool node_mqtt_transport_is_connected(void)
+{
+    return g_node_mqtt_connected;
+}
+
+esp_err_t node_mqtt_transport_publish_event(const char *event_name, const char *args_json)
+{
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+
+    if (!g_node_mqtt_connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!node_mqtt_publish_lock(pdMS_TO_TICKS(100))) {
+        return ESP_ERR_TIMEOUT;
+    }
+    err = node_mqtt_publish_event_locked(event_name, args_json);
+    node_mqtt_publish_unlock();
+    return err;
+}
+
+esp_err_t node_mqtt_transport_publish_input_change(uint8_t channel, int32_t value)
+{
+    char args_json[64];
+    int n = 0;
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+
+    if (!g_node_mqtt_connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    n = snprintf(args_json,
+                 sizeof(args_json),
+                 "{\"channel\":%u,\"value\":%ld}",
+                 (unsigned)channel,
+                 (long)value);
+    if (n <= 0 || n >= (int)sizeof(args_json)) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (!node_mqtt_publish_lock(pdMS_TO_TICKS(100))) {
+        return ESP_ERR_TIMEOUT;
+    }
+    err = node_mqtt_publish_event_locked("input.changed", args_json);
+    if (err == ESP_OK) {
+        err = node_mqtt_publish_status_locked();
+    }
+    node_mqtt_publish_unlock();
+    return err;
 }

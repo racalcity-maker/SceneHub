@@ -31,6 +31,17 @@ typedef enum {
     NODE_LED_COLOR_ORDER_BGR,
 } node_led_color_order_t;
 
+typedef enum {
+    NODE_OPERATION_MODE_SCENEHUB = 0,
+    NODE_OPERATION_MODE_STANDALONE,
+    NODE_OPERATION_MODE_FALLBACK,
+} node_operation_mode_t;
+
+typedef enum {
+    NODE_CONFIG_FALLBACK_RETURN_POLICY_AUTO_ON_STABLE_MQTT = 0,
+    NODE_CONFIG_FALLBACK_RETURN_POLICY_MANUAL_STAY_ACTIVE,
+} node_config_fallback_return_policy_t;
+
 typedef struct {
     bool enabled;
     uint8_t channel;
@@ -58,6 +69,7 @@ typedef struct {
     int gpio;
     node_pin_role_t role;
     bool active_low;
+    uint16_t debounce_ms;
     char label[24];
 } node_universal_pin_config_t;
 
@@ -133,6 +145,11 @@ typedef struct node_config_t {
     char mqtt_client_id[NODE_MQTT_CLIENT_ID_MAX_LEN];
     int reset_gpio;
     bool pin_config_locked;
+    uint8_t operation_mode;
+    bool standalone_mqtt_enabled;
+    uint32_t fallback_timeout_ms;
+    uint32_t fallback_return_delay_ms;
+    uint8_t fallback_return_policy;
     node_output_pin_config_t relays[NODE_RELAY_MAX];
     node_output_pin_config_t mosfets[NODE_MOSFET_MAX];
     node_universal_pin_config_t universal_io[NODE_UNIVERSAL_IO_MAX];

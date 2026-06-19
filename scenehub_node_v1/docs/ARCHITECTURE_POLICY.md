@@ -82,6 +82,9 @@ code.
 - Driver instances own their device protocol state.
 - Storage owns durable config and rule bundles.
 - Read model owns exported status/diag snapshots.
+- Large admin/export payload scratch is an owner concern of the admin/control
+  path; it must not be pushed into generic steady-state runtime/read-model
+  structs just to carry occasional wide JSON responses.
 
 If two modules need the same information, prefer a copied DTO or event over a
 shared mutable struct.

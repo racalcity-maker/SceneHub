@@ -17,8 +17,8 @@
 #define MQTT_MAX_CLIENTS       CONFIG_SCENEHUB_MQTT_MAX_CLIENTS
 #define MQTT_MAX_SUBS          16
 #define MQTT_MAX_TOPIC         96
-#define MQTT_MAX_PAYLOAD       12288
 #define MQTT_MAX_PACKET        14336
+#define MQTT_MAX_PAYLOAD       MQTT_MAX_PACKET
 #define MQTT_RETAIN_MAX        32
 #define MQTT_CLIENT_STACK      8192
 #define MQTT_ACCEPT_STACK      4096
@@ -120,6 +120,7 @@ esp_err_t mqtt_core_start_server(int port);
 
 bool acl_can_publish(const char *client_id, const char *topic);
 bool acl_can_subscribe(const char *client_id, const char *topic);
+bool acl_is_static_client_id(const char *client_id);
 bool topic_matches_filter(const char *filter, const char *topic);
 uint16_t mqtt_next_packet_id(void);
 uint8_t mqtt_effective_delivery_qos(uint8_t publish_qos, uint8_t subscription_qos);

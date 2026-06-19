@@ -11,6 +11,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "lwip/ip4_addr.h"
 #include "mqtt_core.h"
 #include "network.h"
@@ -27,6 +28,64 @@ static esp_err_t web_http_check(esp_err_t err, const char *context)
 }
 
 #define WEB_HTTP_CHECK(call) web_http_check((call), __func__)
+#define STATUS_SD_INFO_REFRESH_US (30LL * 1000000LL)
+
+typedef struct {
+    bool valid;
+    bool ok;
+    uint64_t total_kb;
+    uint64_t free_kb;
+    int64_t updated_at_us;
+} status_sd_cache_t;
+
+static status_sd_cache_t s_status_sd_cache;
+
+static bool status_get_sd_info(bool audio_active, uint64_t *kb_total, uint64_t *kb_free)
+{
+    int64_t now_us = esp_timer_get_time();
+    bool cache_fresh = s_status_sd_cache.valid &&
+                       (now_us - s_status_sd_cache.updated_at_us) < STATUS_SD_INFO_REFRESH_US;
+
+    if (cache_fresh || (audio_active && s_status_sd_cache.valid)) {
+        if (kb_total) {
+            *kb_total = s_status_sd_cache.ok ? s_status_sd_cache.total_kb : 0;
+        }
+        if (kb_free) {
+            *kb_free = s_status_sd_cache.ok ? s_status_sd_cache.free_kb : 0;
+        }
+        return s_status_sd_cache.ok;
+    }
+
+    if (audio_active) {
+        if (kb_total) {
+            *kb_total = 0;
+        }
+        if (kb_free) {
+            *kb_free = 0;
+        }
+        return false;
+    }
+
+    uint64_t total = 0;
+    uint64_t free = 0;
+    if (!sd_storage_available()) {
+        (void)sd_storage_mount();
+    }
+    bool ok = (sd_storage_info(&total, &free) == ESP_OK);
+    s_status_sd_cache.valid = true;
+    s_status_sd_cache.ok = ok;
+    s_status_sd_cache.total_kb = ok ? total : 0;
+    s_status_sd_cache.free_kb = ok ? free : 0;
+    s_status_sd_cache.updated_at_us = now_us;
+
+    if (kb_total) {
+        *kb_total = s_status_sd_cache.total_kb;
+    }
+    if (kb_free) {
+        *kb_free = s_status_sd_cache.free_kb;
+    }
+    return ok;
+}
 
 static cJSON *build_mqtt_users_json(const app_mqtt_config_t *mqtt_cfg)
 {
@@ -69,16 +128,22 @@ esp_err_t status_handler(httpd_req_t *req)
     audio_player_status_t a_status;
     audio_player_get_status(&a_status);
     uint64_t kb_total = 0, kb_free = 0;
-    if (!sd_storage_available()) {
-        (void)sd_storage_mount();
-    }
-    bool sd_ok = (sd_storage_info(&kb_total, &kb_free) == ESP_OK);
+    bool audio_active = a_status.playing || a_status.paused;
+    bool sd_ok = status_get_sd_info(audio_active, &kb_total, &kb_free);
     uint64_t sd_total = sd_ok ? kb_total : 0;
     uint64_t sd_free = sd_ok ? kb_free : 0;
     uint32_t dram_free_kb = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024);
     uint32_t dram_total_kb = (uint32_t)(heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024);
+    uint32_t dram_largest_free_kb =
+        (uint32_t)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024);
+    uint32_t dram_min_free_kb =
+        (uint32_t)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024);
     uint32_t psram_free_kb = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) / 1024);
     uint32_t psram_total_kb = (uint32_t)(heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) / 1024);
+    uint32_t psram_largest_free_kb =
+        (uint32_t)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) / 1024);
+    uint32_t psram_min_free_kb =
+        (uint32_t)(heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) / 1024);
     service_status_entry_t network_status = {0};
     service_status_entry_t mqtt_status = {0};
     service_status_entry_t audio_service_status = {0};
@@ -153,8 +218,12 @@ esp_err_t status_handler(httpd_req_t *req)
 
     cJSON_AddNumberToObject(dram, "free_kb", dram_free_kb);
     cJSON_AddNumberToObject(dram, "total_kb", dram_total_kb);
+    cJSON_AddNumberToObject(dram, "largest_free_kb", dram_largest_free_kb);
+    cJSON_AddNumberToObject(dram, "min_free_kb", dram_min_free_kb);
     cJSON_AddNumberToObject(psram, "free_kb", psram_free_kb);
     cJSON_AddNumberToObject(psram, "total_kb", psram_total_kb);
+    cJSON_AddNumberToObject(psram, "largest_free_kb", psram_largest_free_kb);
+    cJSON_AddNumberToObject(psram, "min_free_kb", psram_min_free_kb);
 
     cJSON_AddNumberToObject(clients, "total", stats.total);
 

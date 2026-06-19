@@ -166,6 +166,15 @@ Current practical limits:
   identity and treat further growth as temporary budget pressure, not a final
   architecture.
 
+Practical admin-path rule:
+
+- Large admin responses such as `node.rules.get` and rich
+  `describe_interface` metadata may use a dedicated transient cached-response
+  path.
+- Ordinary runtime result summaries must stay bounded and small; do not expand
+  every steady-state command/result slot just to carry rare large admin JSON
+  payloads.
+
 Oversize payloads must be rejected cleanly.
 
 ## Security Baseline
@@ -180,12 +189,20 @@ Oversize payloads must be rejected cleanly.
 
 Rule APIs should be admin/config APIs, not scenario/runtime commands:
 
+- `node.reboot`
 - `node.rules.validate`
 - `node.rules.apply`
 - `node.rules.get`
 - `node.rules.clear`
 - `node.rules.pause`
 - `node.rules.resume`
+
+For MQTT admin transport:
+
+- `node.rules.validate` and `node.rules.apply` use the standalone bundle itself
+  as the `args` object, not as an escaped JSON string field;
+- `node.rules.get`, `node.rules.clear`, `node.rules.pause`,
+  `node.rules.resume` and `node.reboot` use an empty `{}` args object.
 
 Rule APIs must validate and compile bundles before activation. Runtime rule
 actions must call `node_control_execute()` or typed command handlers, never

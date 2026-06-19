@@ -312,6 +312,30 @@ gmRegisterAction('quest.device.discover',async()=>{
 await discoverQuestDeviceInterface();
 });
 
+gmRegisterAction('quest.device.admin.load_bundle',async()=>{
+await loadQuestDeviceStoredBundle();
+});
+
+gmRegisterAction('quest.device.admin.format_bundle',async()=>{
+formatQuestDeviceBundleJson();
+});
+
+gmRegisterAction('quest.device.admin.validate_bundle',async()=>{
+await validateQuestDeviceBundle();
+});
+
+gmRegisterAction('quest.device.admin.apply_bundle',async()=>{
+await applyQuestDeviceBundle();
+});
+
+gmRegisterAction('quest.device.admin.clear_bundle',async()=>{
+await clearQuestDeviceBundle();
+});
+
+gmRegisterAction('quest.device.admin.quick',async(el,_e,confirmed)=>{
+await runQuestDeviceQuickAdmin(el.dataset.deviceId||'',el.dataset.commandId||'',confirmed);
+});
+
 gmRegisterAction('quest.discovery.apply',async()=>{
 applyQuestDeviceDiscovery();
 });

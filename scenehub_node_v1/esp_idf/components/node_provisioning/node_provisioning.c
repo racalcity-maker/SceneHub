@@ -26,12 +26,38 @@ static void make_ap_credentials(const node_config_t *config,
                                 char *password,
                                 size_t password_size);
 static esp_err_t ensure_auto_close_task(void);
+static esp_err_t ensure_got_ip_task(void);
 static void arm_auto_close_timer(void);
 static StaticTask_t s_sta_retry_task_storage;
 static StackType_t s_sta_retry_task_stack[2048];
 static TaskHandle_t s_sta_retry_task;
 static volatile bool s_sta_retry_enabled;
 static uint32_t s_sta_retry_delay_ms = 2000;
+
+static void got_ip_task(void *arg)
+{
+    (void)arg;
+    while (true) {
+        uint32_t notify = 0;
+
+        if (xTaskNotifyWait(0, UINT32_MAX, &notify, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        (void)notify;
+
+        if (!g_node_prov.status.sta_got_ip) {
+            continue;
+        }
+
+        esp_err_t err = start_web_server();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "STA web server start failed: %s", esp_err_to_name(err));
+        }
+        if (g_node_prov.callbacks.got_ip_cb) {
+            g_node_prov.callbacks.got_ip_cb(&g_node_prov.config, g_node_prov.callbacks.got_ip_ctx);
+        }
+    }
+}
 
 static void provisioning_auto_close_task(void *arg)
 {
@@ -79,6 +105,22 @@ static esp_err_t ensure_auto_close_task(void)
                                                     g_node_prov.auto_close_task_stack,
                                                     &g_node_prov.auto_close_task_storage);
     return g_node_prov.auto_close_task ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t ensure_got_ip_task(void)
+{
+    if (g_node_prov.got_ip_task) {
+        return ESP_OK;
+    }
+    g_node_prov.got_ip_task = xTaskCreateStatic(got_ip_task,
+                                                "node_prov_ip",
+                                                sizeof(g_node_prov.got_ip_task_stack) /
+                                                    sizeof(g_node_prov.got_ip_task_stack[0]),
+                                                NULL,
+                                                tskIDLE_PRIORITY + 2,
+                                                g_node_prov.got_ip_task_stack,
+                                                &g_node_prov.got_ip_task_storage);
+    return g_node_prov.got_ip_task ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 static void arm_auto_close_timer(void)
@@ -195,6 +237,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         g_node_prov.status.sta_disconnected = true;
         g_node_prov.status.sta_got_ip = false;
         g_node_prov.status.sta_disconnect_reason = reason;
+        if (g_node_prov.callbacks.sta_disconnected_cb) {
+            g_node_prov.callbacks.sta_disconnected_cb(&g_node_prov.config,
+                                                      reason,
+                                                      g_node_prov.callbacks.sta_disconnected_ctx);
+        }
         ESP_LOGW(TAG,
                  "STA disconnected reason=%u (%s); scheduling reconnect",
                  (unsigned)reason,
@@ -217,13 +264,12 @@ static void ip_event_handler(void *arg, esp_event_base_t base, int32_t id, void 
     s_sta_retry_delay_ms = 2000;
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
     ESP_LOGI(TAG, "STA got IP");
-    esp_err_t err = start_web_server();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "STA web server start failed: %s", esp_err_to_name(err));
+    if (ensure_got_ip_task() != ESP_OK) {
+        ESP_LOGE(TAG, "got-ip worker task init failed");
+        return;
     }
-    if (g_node_prov.callbacks.got_ip_cb) {
-        g_node_prov.callbacks.got_ip_cb(&g_node_prov.config, g_node_prov.callbacks.got_ip_ctx);
-    }
+    // esp_event/sys_evt must stay light; defer heavy startup work to a dedicated task.
+    xTaskNotify(g_node_prov.got_ip_task, 1, eSetBits);
 }
 
 static esp_err_t start_web_server(void)
@@ -240,7 +286,7 @@ static esp_err_t start_web_server(void)
     config.server_port = 80;
     config.lru_purge_enable = true;
     config.stack_size = 4096;
-    config.max_uri_handlers = 14;
+    config.max_uri_handlers = 24;
 
     esp_err_t err = httpd_start(&g_node_prov.httpd, &config);
     if (err != ESP_OK) {
@@ -385,6 +431,7 @@ esp_err_t node_provisioning_start(const node_config_t *config, const node_provis
     g_node_prov.config = *config;
     g_node_prov.callbacks = callbacks ? *callbacks : (node_provisioning_callbacks_t){0};
     g_node_prov.auto_close_closed_for_boot = false;
+    ESP_ERROR_CHECK(ensure_got_ip_task());
     ESP_ERROR_CHECK(node_admin_control_init(&g_node_prov.config));
 
     static bool initialized = false;

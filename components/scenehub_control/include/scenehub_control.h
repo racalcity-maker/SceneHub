@@ -57,6 +57,12 @@ typedef struct {
 } scenehub_control_device_command_info_t;
 
 typedef struct {
+    char device_name[QUEST_DEVICE_NAME_MAX_LEN];
+    char command_label[QUEST_DEVICE_NAME_MAX_LEN];
+    cJSON *result_data;
+} scenehub_control_device_admin_info_t;
+
+typedef struct {
     char request_id[SCENEHUB_CONTROL_REQUEST_ID_MAX_LEN];
     cJSON *device_description;
 } scenehub_control_device_interface_info_t;
@@ -194,6 +200,14 @@ esp_err_t scenehub_control_device_command_run(const char *source,
                                               bool confirmed,
                                               scenehub_control_device_command_info_t *out_info,
                                               scenehub_control_result_t *out_result);
+esp_err_t scenehub_control_device_admin_command_run(
+    const char *source,
+    const char *device_id,
+    const char *command_id,
+    const char *params_json,
+    bool confirmed,
+    scenehub_control_device_admin_info_t *out_info,
+    scenehub_control_result_t *out_result);
 esp_err_t scenehub_control_device_describe_interface(
     const char *source,
     const char *client_id,

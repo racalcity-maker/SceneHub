@@ -76,6 +76,12 @@ typedef struct {
     char last_diag_message[DEVICE_CONTROL_INGEST_MESSAGE_MAX_LEN];
     char last_result_status[DEVICE_CONTROL_INGEST_RESULT_STATUS_MAX_LEN];
     char last_result_error_code[DEVICE_CONTROL_INGEST_ERROR_CODE_MAX_LEN];
+    bool runtime_driver_enabled;
+    bool runtime_driver_ready;
+    char runtime_driver_id[QUEST_ID_MAX_LEN];
+    char runtime_driver_health[DEVICE_CONTROL_INGEST_HEALTH_MAX_LEN];
+    char runtime_driver_state[DEVICE_CONTROL_INGEST_STATE_MAX_LEN];
+    char runtime_driver_error_code[DEVICE_CONTROL_INGEST_ERROR_CODE_MAX_LEN];
     char badges[ORCH_REGISTRY_DEVICE_MAX_BADGES][ORCH_REGISTRY_DEVICE_BADGE_MAX_LEN];
     uint8_t badge_count;
     bool compact_manifest;
@@ -102,6 +108,12 @@ typedef struct {
     char boot_id[DEVICE_CONTROL_INGEST_BOOT_ID_MAX_LEN];
     char mode[DEVICE_CONTROL_INGEST_MODE_MAX_LEN];
     char state[DEVICE_CONTROL_INGEST_STATE_MAX_LEN];
+    bool runtime_driver_enabled;
+    bool runtime_driver_ready;
+    char runtime_driver_id[QUEST_ID_MAX_LEN];
+    char runtime_driver_health[DEVICE_CONTROL_INGEST_HEALTH_MAX_LEN];
+    char runtime_driver_state[DEVICE_CONTROL_INGEST_STATE_MAX_LEN];
+    char runtime_driver_error_code[DEVICE_CONTROL_INGEST_ERROR_CODE_MAX_LEN];
     bool has_heartbeat;
     bool has_status;
     bool has_diag;

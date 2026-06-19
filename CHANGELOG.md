@@ -6,6 +6,11 @@ All notable project changes are documented in this file.
 
 ### Added
 
+- Added the first SceneHub Node v2 runtime-mode skeleton: `operation_mode`
+  persists in node config version `10`, local provisioning can select
+  `scenehub`/`standalone`/reserved `fallback`, and status plus
+  `device_description.v2` report the active mode while rule execution remains
+  disabled.
 - Added bootstrap web-auth hardening with salted password hashes, an explicit
   `password_initialized` flag, and a forced first-login password-change flow
   for the local admin account.
@@ -60,6 +65,18 @@ All notable project changes are documented in this file.
 
 ### Changed
 
+- Hardened SceneHub Node MQTT overload behavior so terminal command results are
+  no longer silently lost when both the command queue and deferred-result queue
+  are saturated. The node now attempts a non-blocking overflow rejection publish
+  and otherwise schedules MQTT reconnect so the hub sees a transport failure
+  instead of hidden command loss.
+- Changed MQTT device admission so only `QUEST_DEVICE_MAX_DEVICES` active
+  SceneHub Node contract clients are accepted. A 21st new device client now
+  gets CONNECT refused instead of forcing control-state eviction, while
+  duplicate replacement for an existing client ID remains allowed.
+- Stopped `device_control_ingest` from evicting an existing device slot on
+  overflow; unexpected telemetry beyond the device limit is now refused without
+  rotating the 20 active device states.
 - Changed manual HTTP device-command responses to use a dispatch-envelope
   model. Successful async remote dispatch now returns `status=accepted` plus
   `request_id`; hub audit and timeline entries carry that same correlation key.

@@ -71,5 +71,11 @@ bool node_config_needs_provisioning(const node_config_t *config)
     if (!config) {
         return true;
     }
-    return config->wifi_ssid[0] == '\0' || config->controller_host[0] == '\0';
+    if (config->wifi_ssid[0] == '\0') {
+        return true;
+    }
+    if (config->operation_mode == NODE_OPERATION_MODE_STANDALONE) {
+        return false;
+    }
+    return config->controller_host[0] == '\0';
 }

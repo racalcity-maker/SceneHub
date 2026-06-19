@@ -15,15 +15,16 @@ documents.
 - [ ] Move idempotency/cache ownership from `mqtt_transport` into `node_control` or another explicit runtime owner.
 - [ ] Reconcile node v1 documented payload targets with current enlarged `device_description` and provisioning buffer sizes.
 - [ ] Add focused node-side regression coverage for duplicate `request_id`, result delivery, input-event publishing, reset paths, and config validation.
-- [ ] Finish the memory-policy cleanup for large scratch/config/editor structs:
-  no wide stack-local copies in boot/admin paths, and a PSRAM-first with
-  internal-RAM fallback plan for large non-DMA scratch owners.
-- [x] Verify the LED worker task under PSRAM-enabled builds:
-  owner-held effect snapshot, PSRAM-first task stack, internal-RAM fallback,
-  and no stack overflows in `node_led_fx`.
+- [ ] Add node-side stress coverage for terminal-result overflow so command
+  overload is verified as explicit rejection/reconnect behavior, not silent
+  loss.
 
 ## Done
 
+- [x] Prevent silent terminal-result loss when the node command queue and
+  deferred-result queue are both saturated: the transport now tries one
+  non-blocking overflow publish and otherwise schedules MQTT reconnect so the
+  hub observes a transport failure instead of hidden command loss.
 - [x] Move input polling/event publish flow out of MQTT transport lock scope.
 - [x] Ensure MQTT command handling does not silently drop terminal results when a publish mutex is busy.
 - [x] Move command execution off the MQTT event callback path into a bounded owner-task/queue model.
@@ -44,3 +45,10 @@ documents.
 - [x] Move provisioning write/reset/apply/restart actions behind the dedicated
   `node_admin_control` owner path instead of mutating config/storage directly
   in HTTP handlers.
+- [x] Finish the memory-policy cleanup for large scratch/config/editor/admin
+  owners: no wide stack-local copies in boot/admin paths, PSRAM-first scratch
+  with internal-RAM fallback, and large transient admin payloads kept out of
+  ordinary steady-state result slots.
+- [x] Verify the LED worker task under PSRAM-enabled builds:
+  owner-held effect snapshot, PSRAM-first task stack, internal-RAM fallback,
+  and no stack overflows in `node_led_fx`.

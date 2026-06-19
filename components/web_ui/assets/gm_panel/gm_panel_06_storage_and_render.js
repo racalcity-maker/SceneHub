@@ -48,7 +48,8 @@ const resources=manifest.resources&&typeof manifest.resources==='object'?manifes
 const count=key=>Array.isArray(resources[key])?resources[key].length:0;
 const templates=Array.isArray(manifest.command_templates)?manifest.command_templates:[];
 const eventTemplates=Array.isArray(manifest.event_templates)?manifest.event_templates:[];
-return `<div class='builder-step'><div class='card-head'><div><h2 class='section-title'>${esc(title||'Compact node interface')}</h2><div class='row-meta'>manifest v${esc(manifest.manifest_version)} / ${esc(manifest.node_kind||'node')} / ${esc(manifest.capability_contract||'')}</div></div></div><div class='kvs'><div class='kv'><span class='k'>Resources</span><span class='v'>Relays ${count('relays')}, MOSFETs ${count('mosfets')}, inputs ${count('inputs')}, outputs ${count('outputs')}, LED strips ${count('led_strips')}</span></div><div class='kv'><span class='k'>Templates</span><span class='v'>${templates.length} commands / ${eventTemplates.length} events</span></div></div><details class='scenario-advanced'><summary>Manifest JSON</summary><pre class='code-block'>${esc(JSON.stringify(manifest,null,2))}</pre></details></div>`;
+const adminTemplates=Array.isArray(manifest.admin_command_templates)?manifest.admin_command_templates:[];
+return `<div class='builder-step'><div class='card-head'><div><h2 class='section-title'>${esc(title||'Compact node interface')}</h2><div class='row-meta'>manifest v${esc(manifest.manifest_version)} / ${esc(manifest.node_kind||'node')} / ${esc(manifest.capability_contract||'')}</div></div></div><div class='kvs'><div class='kv'><span class='k'>Resources</span><span class='v'>Relays ${count('relays')}, MOSFETs ${count('mosfets')}, inputs ${count('inputs')}, outputs ${count('outputs')}, LED strips ${count('led_strips')}</span></div><div class='kv'><span class='k'>Templates</span><span class='v'>${templates.length} commands / ${eventTemplates.length} events / ${adminTemplates.length} admin</span></div></div><details class='scenario-advanced'><summary>Manifest JSON</summary><pre class='code-block'>${esc(JSON.stringify(manifest,null,2))}</pre></details></div>`;
 }
 
 function renderQuestDiscoveryPreview(){
@@ -86,6 +87,56 @@ const meta=manifest?`${(manifest.command_templates||[]).length} templates / comp
 return `<div class='row-card admin-item-card'><div class='admin-item-main'><div class='admin-item-title-row'><div class='row-title'>${esc(d.name||d.id)}</div>${d.enabled===false?`<span class='badge'>disabled</span>`:''}</div><div class='admin-item-meta'><span>${meta}</span><span>${esc(questDeviceStatusText(d))}</span></div></div><div class='admin-item-side'><div>${status(health)}</div><div class='actions'>${uiButton({label:'Edit',action:'quest.device.edit',dataset:{'device-id':d.id||''}})}${uiButton({label:'Delete',action:'quest.device.delete',kind:'danger',dataset:{'device-id':d.id||''},confirm:`Delete device ${d.id||''}?`})}</div></div></div>`;
 }
 
+function renderQuestDeviceOperationStatus(){
+const state=currentStatusState();
+const badgeClass=state.className||'status state-unknown';
+const badgeText=state.text?healthLabel(badgeClass.replace(/^status\s+/,'').replace(/^state-/,'')):'idle';
+return `<div class='builder-step'><div class='card-head'><div><h2 class='section-title'>Operation status</h2><div class='row-meta'>Latest response for import, save and node admin actions in this modal.</div></div><span class='${esc(badgeClass)}' data-gm-inline-status-badge='1'>${esc(badgeText)}</span></div><div class='row-meta' data-gm-inline-status-text='1'>${esc(state.text||'No recent action yet.')}</div></div>`;
+}
+
+function renderQuestDeviceAdminPanel(draft){
+const compact=compactManifest(draft);
+if(!compact)return '';
+const adminDetailsKey=`quest-device-admin:${draft&&draft.id||'new'}`;
+const canLoad=!!questDeviceAdminCommandById(draft,'node.rules.get');
+const canValidate=!!questDeviceAdminCommandById(draft,'node.rules.validate');
+const canApply=!!questDeviceAdminCommandById(draft,'node.rules.apply');
+const canClear=!!questDeviceAdminCommandById(draft,'node.rules.clear');
+const canReboot=!!questDeviceAdminCommandById(draft,'node.reboot');
+if(!canLoad&&!canValidate&&!canApply&&!canClear&&!canReboot)return '';
+const adminState=questDeviceAdminState();
+const metadata=adminState.metadata&&typeof adminState.metadata==='object'?adminState.metadata:null;
+const lastResult=adminState.last_result&&typeof adminState.last_result==='object'?adminState.last_result:null;
+const bundleText=String(adminState.bundle_text||'');
+const runtimeMeta=metadata?`<pre class='code-block'>${esc(JSON.stringify({metadata,paused:!!adminState.paused},null,2))}</pre>`:`<div class='manual-empty'>Bundle state is not loaded yet. Use "Load stored bundle".</div>`;
+const resultMeta=lastResult?`<details class='scenario-advanced' open><summary>Last admin result</summary><pre class='code-block'>${esc(JSON.stringify(lastResult,null,2))}</pre></details>`:'';
+const rebootButton=canReboot?uiButton({label:'Reboot node',action:'quest.device.admin.quick',kind:'danger',dataset:{'device-id':draft.id||'', 'command-id':'node.reboot'},confirm:'Reboot this node?' }):'';
+const clearButton=canClear?uiButton({label:'Clear bundle',action:'quest.device.admin.clear_bundle',kind:'danger',confirm:'Clear the stored standalone bundle from this node?' }):'';
+return `<details class='scenario-advanced compact-advanced' ${detailsAttrs(adminDetailsKey,false)}><summary>Standalone Rule Engine</summary><div class='form-section'><div class='row-meta'>Admin-only workflow for stored standalone bundle JSON. This stays separate from scenario/device-control commands.</div><div class='actions'>${canLoad?uiButton({label:'Load stored bundle',action:'quest.device.admin.load_bundle'}):''}${uiButton({label:'Format JSON',action:'quest.device.admin.format_bundle'})}</div><div class='field-stack'><span>Bundle JSON</span><textarea class='json-editor' data-quest-admin-bundle='1' rows='18' placeholder='Paste standalone bundle JSON here'>${esc(bundleText)}</textarea></div><div class='actions'>${canValidate?uiButton({label:'Validate bundle',action:'quest.device.admin.validate_bundle'}):''}${canApply?uiButton({label:'Apply bundle',action:'quest.device.admin.apply_bundle',kind:'danger',confirm:'Apply this standalone bundle to the node?' }):''}${clearButton}${rebootButton}</div><div class='builder-step'><div class='builder-step-head'><div class='builder-step-title'>Stored bundle metadata</div></div>${runtimeMeta}${resultMeta}</div></div></details>`;
+}
+
+function renderQuestDeviceAdminQuickActions(){
+const devices=questEditableDevices().filter(device=>{
+const ids=questDeviceAdminCommandList(device).map(command=>String(command&&command.id||''));
+return ids.includes('node.rules.pause')||ids.includes('node.rules.resume')||ids.includes('node.reboot');
+});
+if(!devices.length)return '';
+const renderAction=(device,commandId,labelOverride,confirmText)=>{
+const command=questDeviceAdminCommandById(device,commandId);
+if(!command)return '';
+const policy=command.policy&&typeof command.policy==='object'?command.policy:{};
+return uiButton({
+label:labelOverride||command.label||commandId,
+action:'quest.device.admin.quick',
+kind:policy.requires_confirmation||String(policy.danger_level||'normal')!=='normal'?'danger':'',
+dataset:{'device-id':device.id||'','command-id':commandId},
+confirm:confirmText||(policy.requires_confirmation?`Run "${command.label||commandId}"?`:'')
+});
+};
+const cards=devices.map(device=>`<section class='manual-group admin-item-card preset-device-group'><div class='manual-group-head'><div><div class='manual-title'>${esc(device.name||device.id)}</div><div class='manual-meta'>${esc(questDeviceStatusText(device))}</div></div>${status(questDeviceHealth(device))}</div><div class='actions'>${renderAction(device,'node.rules.pause','Pause rules','Pause standalone rules on this node?')}${renderAction(device,'node.rules.resume','Resume rules')}${renderAction(device,'node.reboot','Restart node','Restart this node?')}</div></section>`).join('');
+return `<section class='card'><div class='card-head'><div><h2 class='section-title'>Node Admin Actions</h2><div class='card-sub'>Quick admin-only controls exposed from node admin templates. They are not mixed into operator sidebar presets.</div></div></div><div class='admin-entity-grid'>${cards}</div></section>`;
+}
+
 function renderQuestDeviceEditor(draft){
 if(!draft){
 return `<div class='card empty-state'><h2 class='section-title'>Device editor</h2><div class='empty-title'>Select a quest device or create a new one</div><div class='row-meta'>Quest devices are physical client capabilities: commands, events and manual buttons. They are used later in room scenarios.</div><div class='actions'>${uiButton({label:'Add device',action:'quest.device.new'})}</div></div>`;
@@ -95,6 +146,8 @@ const compact=compactManifest(draft);
 const commandRows=!compact&&((draft.commands||[]).length?draft.commands.map(renderQuestCommandRow).join(''):`<div class='empty'>No commands. Import config from the client or add a command manually.</div>`);
 const eventRows=!compact&&((draft.events||[]).length?draft.events.map(renderQuestEventRow).join(''):`<div class='empty'>No events. Import config from the client or add an event manually.</div>`);
 const compactSummary=compact?(renderQuestDiscoveryPreview()||renderCompactQuestDeviceSummary(draft,'Compact node interface')):'';
+const operationStatus=renderQuestDeviceOperationStatus();
+const adminPanel=compact?renderQuestDeviceAdminPanel(draft):'';
 const flatEditors=compact?'':`<div class='form-section'><div class='card-head'><div><h2 class='section-title'>Commands</h2><div class='row-meta'>Commands can become scenario actions and manual buttons.</div></div><div class='actions'>${uiButton({label:'Add command',action:'quest.command.add'})}</div></div><div>${commandRows}</div></div><div class='form-section'><div class='card-head'><div><h2 class='section-title'>Events</h2><div class='row-meta'>Events are available as scenario waits.</div></div><div class='actions'>${uiButton({label:'Add event',action:'quest.event.add'})}</div></div><div>${eventRows}</div></div>`;
 return uiOverlayCard({
 title:`${questDeviceEditor.device_id?'Edit quest device':'New quest device'}${questDeviceEditor.dirty?' *':''}`,
@@ -102,7 +155,7 @@ subtitle:'Define what this physical client can do and report.',
 closeAction:'quest.device.cancel',
 className:'card editor-modal-card',
 dataset:{'quest-device-editor-modal':'1'},
-content:`<div data-quest-device-editor='1'><label class='row-meta'><input data-quest-device-field='enabled' type='checkbox' ${draft.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label><div class='form-section'><h2 class='section-title'>Basics</h2><div class='field-grid'><label class='field-stack'><span>Device name</span><input data-quest-device-field='name' placeholder='Altar controller' value='${esc(draft.name||'')}'></label><label class='field-stack'><span>Physical client</span>${clientControl}</label></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-device-field='id' placeholder='Device ID' value='${esc(draft.id||'')}'></div></details></div><div class='form-section import-panel'><div><h2 class='section-title'>Import capabilities</h2><div class='row-meta'>Ask the selected physical client for its supported commands and events.</div></div><div class='actions'>${uiButton({label:'Get config',action:'quest.device.discover',kind:'approve'})}</div></div>${compactSummary||renderQuestDiscoveryPreview()}${flatEditors}<div class='actions sticky-actions'>${uiButton({label:'Save device',action:'quest.device.save'})}${questDeviceEditor.device_id?uiButton({label:'Delete',action:'quest.device.delete',kind:'danger',dataset:{'device-id':questDeviceEditor.device_id},confirm:`Delete device ${questDeviceEditor.device_id}?`}):''}${uiButton({label:'Cancel',action:'quest.device.cancel'})}</div></div>`
+content:`<div data-quest-device-editor='1'>${operationStatus}<label class='row-meta'><input data-quest-device-field='enabled' type='checkbox' ${draft.enabled!==false?'checked':''} style='min-width:auto'> Enabled</label><div class='form-section'><h2 class='section-title'>Basics</h2><div class='field-grid'><label class='field-stack'><span>Device name</span><input data-quest-device-field='name' placeholder='Altar controller' value='${esc(draft.name||'')}'></label><label class='field-stack'><span>Physical client</span>${clientControl}</label></div><details class='scenario-advanced'><summary>Advanced</summary><div class='row'><input data-quest-device-field='id' placeholder='Device ID' value='${esc(draft.id||'')}'></div></details></div><div class='form-section import-panel'><div><h2 class='section-title'>Import capabilities</h2><div class='row-meta'>Ask the selected physical client for its supported commands and events.</div></div><div class='actions'>${uiButton({label:'Get config',action:'quest.device.discover',kind:'approve'})}</div></div>${compactSummary||renderQuestDiscoveryPreview()}${adminPanel}${flatEditors}<div class='actions sticky-actions'>${uiButton({label:'Save device',action:'quest.device.save'})}${questDeviceEditor.device_id?uiButton({label:'Delete',action:'quest.device.delete',kind:'danger',dataset:{'device-id':questDeviceEditor.device_id},confirm:`Delete device ${questDeviceEditor.device_id}?`}):''}${uiButton({label:'Cancel',action:'quest.device.cancel'})}</div></div>`
 });
 }
 

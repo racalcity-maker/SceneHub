@@ -28,10 +28,15 @@ typedef struct {
 } node_provisioning_status_t;
 
 typedef void (*node_provisioning_got_ip_cb_t)(const node_config_t *config, void *ctx);
+typedef void (*node_provisioning_sta_disconnected_cb_t)(const node_config_t *config,
+                                                        uint16_t reason,
+                                                        void *ctx);
 
 typedef struct {
     node_provisioning_got_ip_cb_t got_ip_cb;
     void *got_ip_ctx;
+    node_provisioning_sta_disconnected_cb_t sta_disconnected_cb;
+    void *sta_disconnected_ctx;
 } node_provisioning_callbacks_t;
 
 esp_err_t node_provisioning_start(const node_config_t *config, const node_provisioning_callbacks_t *callbacks);

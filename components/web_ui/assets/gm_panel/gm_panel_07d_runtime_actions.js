@@ -25,6 +25,13 @@ await gmExpectOk(res);
 setGMStatus('Button sent','gm-ok');
 }
 
+async function runDeviceAdminCommand(deviceId,commandId,paramsOverride,confirmed,statusText){
+if(!deviceId||!commandId)throw new Error('Admin action is incomplete');
+setGMStatus(statusText||'Running admin action...');
+const res=await api.device.runAdminCommand(deviceId,commandId,paramsOverride,!!confirmed);
+return await gmReadJson(res);
+}
+
 async function createRoomFromPrompt(){
 if(!isAdmin())return;
 const name=(prompt('Room name')||'').trim();

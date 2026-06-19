@@ -78,6 +78,10 @@ If a bundle exceeds limits, reject it before activation.
 - MQTT command payload may be parsed from a fixed RX buffer.
 - Rule upload/admin paths may use a parser, but must validate size first.
 - Provisioning web UI may allocate bounded request/response buffers.
+- Large admin/export payloads such as `describe_interface` metadata and
+  `node.rules.get` bundle reads must use owner-held transient scratch/cache
+  storage instead of widening ordinary per-device steady-state DTO/result
+  slots.
 - Do not store parser object pointers after validation.
 - Do not run rules from raw JSON trees.
 - Generate heartbeat/status/result/event JSON into bounded output buffers.

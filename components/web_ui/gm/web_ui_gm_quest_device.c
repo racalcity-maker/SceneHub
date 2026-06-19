@@ -2,12 +2,18 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "cJSON.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+#include "freertos/semphr.h"
 #include "orch_device_view.h"
 #include "orchestrator_registry.h"
+#include "quest_common_utils.h"
 #include "quest_device.h"
 #include "room_scenario.h"
 #include "scenehub_control.h"
@@ -18,6 +24,10 @@
 #define GM_QUEST_DEVICE_SAVE_BODY_MAX_BYTES (32 * 1024)
 #define GM_QUEST_DEVICE_LIST_MAX (QUEST_DEVICE_MAX_DEVICES + 4)
 #define GM_QUEST_DEVICE_ISSUES_MAX 8
+EXT_RAM_BSS_ATTR static char s_gm_qd_body_scratch[GM_QUEST_DEVICE_SAVE_BODY_MAX_BYTES + 1];
+static SemaphoreHandle_t s_gm_qd_body_scratch_mutex = NULL;
+static StaticSemaphore_t s_gm_qd_body_scratch_mutex_storage;
+static portMUX_TYPE s_gm_qd_body_scratch_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void *gm_qd_alloc(size_t size)
 {
@@ -26,6 +36,45 @@ static void *gm_qd_alloc(size_t size)
         ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
     return ptr;
+}
+
+static esp_err_t gm_qd_body_scratch_lock(void)
+{
+    if (!s_gm_qd_body_scratch_mutex) {
+        portENTER_CRITICAL(&s_gm_qd_body_scratch_mutex_init_lock);
+        if (!s_gm_qd_body_scratch_mutex) {
+            s_gm_qd_body_scratch_mutex =
+                xSemaphoreCreateMutexStatic(&s_gm_qd_body_scratch_mutex_storage);
+        }
+        portEXIT_CRITICAL(&s_gm_qd_body_scratch_mutex_init_lock);
+    }
+    if (!s_gm_qd_body_scratch_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_gm_qd_body_scratch_mutex, portMAX_DELAY) == pdTRUE
+               ? ESP_OK
+               : ESP_ERR_TIMEOUT;
+}
+
+static void gm_qd_body_scratch_unlock(void)
+{
+    if (s_gm_qd_body_scratch_mutex) {
+        xSemaphoreGive(s_gm_qd_body_scratch_mutex);
+    }
+}
+
+static void gm_qd_append_text(char *dst, size_t dst_size, const char *text)
+{
+    size_t used = 0;
+
+    if (!dst || dst_size == 0 || !text || !text[0]) {
+        return;
+    }
+    used = strlen(dst);
+    if (used >= dst_size - 1) {
+        return;
+    }
+    quest_str_copy(dst + used, dst_size - used, text);
 }
 
 static bool gm_qd_read_query_value(httpd_req_t *req,
@@ -58,21 +107,34 @@ static bool gm_qd_query_bool(httpd_req_t *req, const char *key, bool fallback)
 static esp_err_t gm_qd_read_body(httpd_req_t *req,
                                  size_t max_len,
                                  char **out_body,
-                                 size_t *out_len)
+                                 size_t *out_len,
+                                 bool *out_uses_scratch)
 {
     char *body = NULL;
     size_t received = 0;
-    if (!req || !out_body || !out_len) {
+    bool uses_scratch = false;
+    if (!req || !out_body || !out_len || !out_uses_scratch) {
         return ESP_ERR_INVALID_ARG;
     }
     *out_body = NULL;
     *out_len = 0;
+    *out_uses_scratch = false;
     if (req->content_len <= 0 || req->content_len > (int)max_len) {
         return ESP_ERR_INVALID_SIZE;
     }
-    body = gm_qd_alloc((size_t)req->content_len + 1);
-    if (!body) {
-        return ESP_ERR_NO_MEM;
+    if (max_len <= GM_QUEST_DEVICE_SAVE_BODY_MAX_BYTES &&
+        req->content_len <= GM_QUEST_DEVICE_SAVE_BODY_MAX_BYTES) {
+        esp_err_t lock_err = gm_qd_body_scratch_lock();
+        if (lock_err != ESP_OK) {
+            return lock_err;
+        }
+        body = s_gm_qd_body_scratch;
+        uses_scratch = true;
+    } else {
+        body = gm_qd_alloc((size_t)req->content_len + 1);
+        if (!body) {
+            return ESP_ERR_NO_MEM;
+        }
     }
     while (received < (size_t)req->content_len) {
         int r = httpd_req_recv(req, body + received, req->content_len - received);
@@ -80,7 +142,11 @@ static esp_err_t gm_qd_read_body(httpd_req_t *req,
             if (r == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
-            heap_caps_free(body);
+            if (uses_scratch) {
+                gm_qd_body_scratch_unlock();
+            } else {
+                heap_caps_free(body);
+            }
             return ESP_FAIL;
         }
         received += (size_t)r;
@@ -88,7 +154,20 @@ static esp_err_t gm_qd_read_body(httpd_req_t *req,
     body[received] = '\0';
     *out_body = body;
     *out_len = received;
+    *out_uses_scratch = uses_scratch;
     return ESP_OK;
+}
+
+static void gm_qd_release_body(char *body, bool uses_scratch)
+{
+    if (!body) {
+        return;
+    }
+    if (uses_scratch) {
+        gm_qd_body_scratch_unlock();
+        return;
+    }
+    heap_caps_free(body);
 }
 
 static esp_err_t gm_qd_read_json(httpd_req_t *req,
@@ -97,18 +176,19 @@ static esp_err_t gm_qd_read_json(httpd_req_t *req,
 {
     char *body = NULL;
     size_t body_len = 0;
+    bool uses_scratch = false;
     cJSON *root = NULL;
     esp_err_t err = ESP_OK;
     if (!out_root) {
         return ESP_ERR_INVALID_ARG;
     }
     *out_root = NULL;
-    err = gm_qd_read_body(req, max_len, &body, &body_len);
+    err = gm_qd_read_body(req, max_len, &body, &body_len, &uses_scratch);
     if (err != ESP_OK) {
         return err;
     }
     root = cJSON_ParseWithLength(body, body_len);
-    heap_caps_free(body);
+    gm_qd_release_body(body, uses_scratch);
     if (!root) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -185,6 +265,7 @@ static esp_err_t gm_qd_add_backend_presentation(cJSON *item,
 {
     orch_device_entry_t live = {0};
     cJSON *issues = NULL;
+    char status_text[96] = {0};
     esp_err_t err = ESP_OK;
 
     if (!item || !device) {
@@ -207,13 +288,40 @@ static esp_err_t gm_qd_add_backend_presentation(cJSON *item,
     if (err != ESP_OK) {
         return err;
     }
+    if (live.runtime_driver_enabled &&
+        live.runtime_driver_health[0] &&
+        strcmp(live.runtime_driver_health, "ok") != 0) {
+        if (live.state[0]) {
+            gm_qd_append_text(status_text, sizeof(status_text), live.state);
+            gm_qd_append_text(status_text, sizeof(status_text), " / ");
+        }
+        gm_qd_append_text(status_text,
+                          sizeof(status_text),
+                          live.runtime_driver_id[0] ? live.runtime_driver_id : "nfc_reader");
+        if (live.runtime_driver_state[0]) {
+            gm_qd_append_text(status_text, sizeof(status_text), " / ");
+            gm_qd_append_text(status_text, sizeof(status_text), live.runtime_driver_state);
+        }
+        if (live.runtime_driver_error_code[0]) {
+            gm_qd_append_text(status_text, sizeof(status_text), " / ");
+            gm_qd_append_text(status_text, sizeof(status_text), live.runtime_driver_error_code);
+        }
+    }
     cJSON_AddStringToObject(item, "health", live.health_text);
     cJSON_AddStringToObject(item,
                             "status_text",
-                            live.state[0] ? live.state : live.connectivity_text);
+                            status_text[0]
+                                ? status_text
+                                : (live.state[0] ? live.state : live.connectivity_text));
     cJSON_AddStringToObject(item, "connectivity", live.connectivity_text);
     cJSON_AddStringToObject(item, "runtime_state", live.runtime_state_text);
     cJSON_AddStringToObject(item, "state_text", live.state);
+    cJSON_AddBoolToObject(item, "runtime_driver_enabled", live.runtime_driver_enabled);
+    cJSON_AddBoolToObject(item, "runtime_driver_ready", live.runtime_driver_ready);
+    cJSON_AddStringToObject(item, "runtime_driver_id", live.runtime_driver_id);
+    cJSON_AddStringToObject(item, "runtime_driver_health", live.runtime_driver_health);
+    cJSON_AddStringToObject(item, "runtime_driver_state", live.runtime_driver_state);
+    cJSON_AddStringToObject(item, "runtime_driver_error_code", live.runtime_driver_error_code);
     return gm_qd_add_backend_issues(item, device->id);
 }
 
@@ -370,6 +478,66 @@ static esp_err_t gm_qd_params_to_json_string(const cJSON *root, char *out, size_
     return ESP_OK;
 }
 
+static esp_err_t gm_qd_params_to_json_heap(const cJSON *root, char **out_json)
+{
+    const cJSON *params = NULL;
+    char *printed = NULL;
+
+    if (!out_json || !cJSON_IsObject(root)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_json = NULL;
+    params = cJSON_GetObjectItemCaseSensitive(root, "params");
+    if (!params || cJSON_IsNull(params)) {
+        return ESP_OK;
+    }
+    if (!cJSON_IsObject(params)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    printed = cJSON_PrintUnformatted(params);
+    if (!printed) {
+        return ESP_ERR_NO_MEM;
+    }
+    *out_json = printed;
+    return ESP_OK;
+}
+
+static esp_err_t gm_qd_send_admin_command_result(httpd_req_t *req,
+                                                 const char *device_id,
+                                                 scenehub_control_device_admin_info_t *info,
+                                                 const char *command_id,
+                                                 const scenehub_control_result_t *result)
+{
+    cJSON *root = cJSON_CreateObject();
+
+    if (!root) {
+        return web_ui_http_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+    }
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root,
+                            "status",
+                            result ? scenehub_control_status_str(result->status) : "done");
+    cJSON_AddStringToObject(root, "device_id", device_id ? device_id : "");
+    cJSON_AddStringToObject(root,
+                            "device_name",
+                            (info && info->device_name[0]) ? info->device_name : "");
+    cJSON_AddStringToObject(root, "command_id", command_id ? command_id : "");
+    cJSON_AddStringToObject(root,
+                            "command_label",
+                            (info && info->command_label[0]) ? info->command_label : "");
+    if (result && result->has_request_id) {
+        cJSON_AddStringToObject(root, "request_id", result->request_id);
+    }
+    if (result && result->has_remote_status) {
+        cJSON_AddStringToObject(root, "remote_status", result->remote_status);
+    }
+    if (info && info->result_data) {
+        cJSON_AddItemToObject(root, "data", info->result_data);
+        info->result_data = NULL;
+    }
+    return web_ui_send_json(req, root);
+}
+
 esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
 {
     cJSON *root = NULL;
@@ -424,6 +592,71 @@ esp_err_t gm_quest_device_command_run_handler(httpd_req_t *req)
                                                   command_id_buf,
                                                   info.command_label,
                                                   &result);
+}
+
+esp_err_t gm_quest_device_admin_command_run_handler(httpd_req_t *req)
+{
+    cJSON *root = NULL;
+    const cJSON *device_id_item = NULL;
+    const cJSON *command_id_item = NULL;
+    const cJSON *confirmed_item = NULL;
+    const char *device_id = NULL;
+    const char *command_id = NULL;
+    char *params_json = NULL;
+    bool confirmed = false;
+    char device_id_buf[QUEST_DEVICE_ID_MAX_LEN] = {0};
+    char command_id_buf[QUEST_DEVICE_COMMAND_ID_MAX_LEN] = {0};
+    scenehub_control_device_admin_info_t info = {0};
+    scenehub_control_result_t result = {0};
+    esp_err_t err = gm_qd_read_json(req, GM_QUEST_DEVICE_SAVE_BODY_MAX_BYTES, &root);
+    if (err != ESP_OK) {
+        return gm_qd_send_error(req, err);
+    }
+    device_id_item = cJSON_GetObjectItemCaseSensitive(root, "device_id");
+    command_id_item = cJSON_GetObjectItemCaseSensitive(root, "command_id");
+    confirmed_item = cJSON_GetObjectItemCaseSensitive(root, "confirmed");
+    device_id = cJSON_IsString(device_id_item) ? device_id_item->valuestring : NULL;
+    command_id = cJSON_IsString(command_id_item) ? command_id_item->valuestring : NULL;
+    confirmed = cJSON_IsTrue(confirmed_item);
+    if (!device_id || !device_id[0] || !command_id || !command_id[0]) {
+        cJSON_Delete(root);
+        return gm_qd_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+
+    snprintf(device_id_buf, sizeof(device_id_buf), "%s", device_id);
+    snprintf(command_id_buf, sizeof(command_id_buf), "%s", command_id);
+    err = gm_qd_params_to_json_heap(root, &params_json);
+    if (err != ESP_OK) {
+        cJSON_Delete(root);
+        return gm_qd_send_error(req, err);
+    }
+    err = scenehub_control_device_admin_command_run("http",
+                                                    device_id_buf,
+                                                    command_id_buf,
+                                                    params_json,
+                                                    confirmed,
+                                                    &info,
+                                                    &result);
+    if (!web_ui_scenehub_control_is_done(err, &result)) {
+        if (info.result_data) {
+            cJSON_Delete(info.result_data);
+        }
+        if (params_json) {
+            cJSON_free(params_json);
+        }
+        cJSON_Delete(root);
+        return gm_qd_send_control_error(req, err, &result);
+    }
+
+    if (params_json) {
+        cJSON_free(params_json);
+    }
+    cJSON_Delete(root);
+    return gm_qd_send_admin_command_result(req,
+                                           device_id_buf,
+                                           &info,
+                                           command_id_buf,
+                                           &result);
 }
 
 esp_err_t gm_quest_devices_export_handler(httpd_req_t *req)

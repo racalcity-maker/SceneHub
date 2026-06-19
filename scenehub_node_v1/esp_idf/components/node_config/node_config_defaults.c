@@ -268,7 +268,12 @@ void node_config_set_factory_defaults(node_config_t *config)
     node_config_copy_text(config->node_name, sizeof(config->node_name), "SceneHub Node S3");
     node_config_copy_text(config->mqtt_client_id, sizeof(config->mqtt_client_id), "dcc-scenehub-node-s3");
     config->mqtt_port = 1883;
-    config->reset_gpio = 0;
+    config->reset_gpio = -1;
+    config->operation_mode = NODE_OPERATION_MODE_SCENEHUB;
+    config->standalone_mqtt_enabled = false;
+    config->fallback_timeout_ms = 0;
+    config->fallback_return_delay_ms = 3000;
+    config->fallback_return_policy = NODE_CONFIG_FALLBACK_RETURN_POLICY_AUTO_ON_STABLE_MQTT;
 
     for (uint8_t i = 0; i < NODE_RELAY_MAX; ++i) {
         config->relays[i].channel = i + 1;
@@ -310,6 +315,7 @@ void node_config_set_factory_defaults(node_config_t *config)
         config->universal_io[i].channel = i + 1;
         config->universal_io[i].gpio = -1;
         config->universal_io[i].role = NODE_PIN_DISABLED;
+        config->universal_io[i].debounce_ms = 0;
         snprintf(config->universal_io[i].label, sizeof(config->universal_io[i].label), "IO %u", (unsigned)(i + 1));
     }
     for (uint8_t i = 0; i < NODE_LED_STRIP_MAX; ++i) {

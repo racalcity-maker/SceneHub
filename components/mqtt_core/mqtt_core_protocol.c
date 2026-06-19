@@ -4,8 +4,16 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "quest_device.h"
 
 static const char *TAG = "mqtt_core";
+
+#define MQTT_CONNACK_ACCEPTED             0x00
+#define MQTT_CONNACK_IDENTIFIER_REJECTED  0x02
+#define MQTT_CONNACK_SERVER_UNAVAILABLE   0x03
+#define MQTT_CONNACK_BAD_USERNAME_PASSWORD 0x04
+#define MQTT_CONNACK_NOT_AUTHORIZED       0x05
+#define MQTT_DEVICE_CLIENT_ID_PREFIX      "dcc-"
 
 typedef struct {
     size_t slot;
@@ -54,6 +62,54 @@ static bool mqtt_authenticate_client(const char *client_id, const char *username
         return true;
     }
     return false;
+}
+
+static bool mqtt_is_device_contract_client_id(const char *client_id)
+{
+    size_t prefix_len = strlen(MQTT_DEVICE_CLIENT_ID_PREFIX);
+    if (!client_id || !client_id[0]) {
+        return false;
+    }
+    if (strncmp(client_id, MQTT_DEVICE_CLIENT_ID_PREFIX, prefix_len) == 0 &&
+        client_id[prefix_len] != '\0') {
+        return true;
+    }
+    return !acl_is_static_client_id(client_id);
+}
+
+static size_t mqtt_active_device_client_count_locked(const char *exclude_client_id)
+{
+    size_t count = 0;
+
+    if (!s_sessions) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < MQTT_MAX_CLIENTS; ++i) {
+        const mqtt_session_t *candidate = &s_sessions[i];
+        if (!candidate->active ||
+            candidate->closing ||
+            candidate->retiring ||
+            !candidate->client_id[0]) {
+            continue;
+        }
+        if (exclude_client_id && strcmp(candidate->client_id, exclude_client_id) == 0) {
+            continue;
+        }
+        if (mqtt_is_device_contract_client_id(candidate->client_id)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static bool mqtt_device_client_capacity_available_locked(const char *client_id, const mqtt_session_t *replacement)
+{
+    if (!mqtt_is_device_contract_client_id(client_id)) {
+        return true;
+    }
+    const char *exclude_client_id = replacement ? client_id : NULL;
+    return mqtt_active_device_client_count_locked(exclude_client_id) < QUEST_DEVICE_MAX_DEVICES;
 }
 
 int mqtt_parse_connect_client_id(const uint8_t *buf,
@@ -166,13 +222,13 @@ int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
     size_t off = 0;
     char proto[8];
     if (parse_utf8_str(buf, len, &off, proto, sizeof(proto)) != 0) {
-        return -1;
+        return MQTT_CONNACK_IDENTIFIER_REJECTED;
     }
     if (strcmp(proto, "MQTT") != 0 && strcmp(proto, "MQIsdp") != 0) {
-        return -1;
+        return MQTT_CONNACK_IDENTIFIER_REJECTED;
     }
     if (off + 4 > len) {
-        return -1;
+        return MQTT_CONNACK_IDENTIFIER_REJECTED;
     }
     uint8_t level = buf[off++];
     uint8_t flags = buf[off++];
@@ -181,18 +237,26 @@ int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
 
     char client_id[CONFIG_STORE_CLIENT_ID_MAX];
     if (mqtt_parse_connect_client_id(buf, len, client_id, sizeof(client_id)) != 0) {
-        return -1;
+        return MQTT_CONNACK_IDENTIFIER_REJECTED;
     }
     off += 2 + strlen(client_id);
 
     if (level != 4) {
         ESP_LOGE(TAG, "Unsupported MQTT protocol level %u. Only 3.1.1 is supported.", level);
-        return -1;
+        return MQTT_CONNACK_IDENTIFIER_REJECTED;
     }
 
     int old_sock = -1;
     lock();
     mqtt_session_t *old = find_session_by_client_id(client_id);
+    if (!mqtt_device_client_capacity_available_locked(client_id, old)) {
+        unlock();
+        ESP_LOGW(TAG,
+                 "MQTT CONNECT rejected: device client capacity full client_id=%s limit=%u",
+                 client_id,
+                 (unsigned)QUEST_DEVICE_MAX_DEVICES);
+        return MQTT_CONNACK_SERVER_UNAVAILABLE;
+    }
     if (old && old != sess) {
         old->suppress_will = true;
         old_sock = request_session_prepare_close_locked(old, "duplicate client_id", 0);
@@ -210,10 +274,10 @@ int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
     uint8_t will_qos = (flags >> 3) & 0x03;
     if (will_flag) {
         if (parse_utf8_str(buf, len, &off, sess->will.topic, sizeof(sess->will.topic)) != 0) {
-            return -1;
+            return MQTT_CONNACK_IDENTIFIER_REJECTED;
         }
         if (parse_utf8_str(buf, len, &off, sess->will.payload, sizeof(sess->will.payload)) != 0) {
-            return -1;
+            return MQTT_CONNACK_IDENTIFIER_REJECTED;
         }
         sess->will.has = true;
         sess->will.qos = will_qos;
@@ -224,19 +288,19 @@ int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
     char password[CONFIG_STORE_PASSWORD_MAX] = {0};
     if (flags & 0x80) {
         if (parse_utf8_str(buf, len, &off, username, sizeof(username)) != 0) {
-            return -1;
+            return MQTT_CONNACK_BAD_USERNAME_PASSWORD;
         }
     }
     if (flags & 0x40) {
         if (parse_utf8_str(buf, len, &off, password, sizeof(password)) != 0) {
-            return -1;
+            return MQTT_CONNACK_BAD_USERNAME_PASSWORD;
         }
     }
     if (!mqtt_authenticate_client(client_id, username, password)) {
         ESP_LOGW(TAG, "MQTT auth failed for client_id=%s", client_id);
-        return -1;
+        return MQTT_CONNACK_NOT_AUTHORIZED;
     }
-    return 0;
+    return MQTT_CONNACK_ACCEPTED;
 }
 
 int handle_subscribe(mqtt_session_t *sess, const uint8_t *buf, size_t len)
@@ -350,7 +414,13 @@ int handle_publish(mqtt_session_t *sess, uint8_t header, uint8_t *buf, size_t le
     }
     size_t payload_len = len - off;
     if (payload_len >= MQTT_MAX_PAYLOAD) {
-        payload_len = MQTT_MAX_PAYLOAD - 1;
+        ESP_LOGW(TAG,
+                 "publish payload too large client=%s topic=%s len=%u max=%u",
+                 sess && sess->client_id[0] ? sess->client_id : "<unknown>",
+                 topic,
+                 (unsigned)payload_len,
+                 (unsigned)(MQTT_MAX_PAYLOAD - 1));
+        return -1;
     }
     buf[off + payload_len] = 0;
     char *payload = (char *)(buf + off);

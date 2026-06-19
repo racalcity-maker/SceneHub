@@ -12,6 +12,8 @@ typedef struct {
     size_t value_len;
 } dci_json_pair_t;
 
+#define DCI_JSON_NESTING_MAX 32
+
 static esp_err_t dci_json_iterate_object(const char *json, size_t json_len, const char **cursor, const char **end);
 
 static const char *dci_json_skip_ws(const char *p, const char *end)
@@ -58,7 +60,7 @@ static esp_err_t dci_json_skip_value(const char **cursor, const char *end)
         return err;
     }
     if (*p == '{' || *p == '[') {
-        char stack[8] = {0};
+        char stack[DCI_JSON_NESTING_MAX] = {0};
         int depth = 1;
         stack[0] = *p;
         for (++p; p < end; ++p) {
@@ -390,6 +392,83 @@ static esp_err_t dci_json_validate_consumed(const char *cursor, const char *end)
     return (tail == end) ? ESP_OK : ESP_ERR_INVALID_ARG;
 }
 
+static void dci_clear_runtime_driver_fields(device_control_ingest_device_t *state)
+{
+    if (!state) {
+        return;
+    }
+    state->status_driver_nfc_enabled = false;
+    state->status_driver_nfc_ready = false;
+    state->status_driver_nfc_health[0] = '\0';
+    state->status_driver_nfc_state[0] = '\0';
+    state->status_driver_nfc_error_code[0] = '\0';
+    state->status_driver_nfc_reader_id[0] = '\0';
+}
+
+static void dci_apply_runtime_driver_fields(device_control_ingest_device_t *state,
+                                            const char *runtime_json,
+                                            size_t runtime_json_len)
+{
+    dci_json_pair_t drivers_pair = {0};
+    dci_json_pair_t reader_pair = {0};
+    dci_json_pair_t field_pair = {0};
+
+    if (!state || !runtime_json || runtime_json_len == 0) {
+        return;
+    }
+
+    dci_clear_runtime_driver_fields(state);
+    if (dci_json_find_pair_in_object(runtime_json, runtime_json_len, "drivers", &drivers_pair) != ESP_OK) {
+        return;
+    }
+    if (dci_json_find_pair_in_object(drivers_pair.value,
+                                     drivers_pair.value_len,
+                                     "nfc_reader",
+                                     &reader_pair) != ESP_OK) {
+        return;
+    }
+
+    if (dci_json_find_pair_in_object(reader_pair.value, reader_pair.value_len, "enabled", &field_pair) == ESP_OK) {
+        (void)dci_json_parse_bool_value(field_pair.value,
+                                        field_pair.value_len,
+                                        &state->status_driver_nfc_enabled);
+    }
+    if (dci_json_find_pair_in_object(reader_pair.value,
+                                     reader_pair.value_len,
+                                     "driver_ready",
+                                     &field_pair) == ESP_OK) {
+        (void)dci_json_parse_bool_value(field_pair.value,
+                                        field_pair.value_len,
+                                        &state->status_driver_nfc_ready);
+    }
+    if (dci_json_find_pair_in_object(reader_pair.value, reader_pair.value_len, "health", &field_pair) == ESP_OK) {
+        (void)dci_json_copy_string_field(&field_pair,
+                                         state->status_driver_nfc_health,
+                                         sizeof(state->status_driver_nfc_health));
+    }
+    if (dci_json_find_pair_in_object(reader_pair.value, reader_pair.value_len, "state", &field_pair) == ESP_OK) {
+        (void)dci_json_copy_string_field(&field_pair,
+                                         state->status_driver_nfc_state,
+                                         sizeof(state->status_driver_nfc_state));
+    }
+    if (dci_json_find_pair_in_object(reader_pair.value,
+                                     reader_pair.value_len,
+                                     "error_code",
+                                     &field_pair) == ESP_OK) {
+        (void)dci_json_copy_string_field(&field_pair,
+                                         state->status_driver_nfc_error_code,
+                                         sizeof(state->status_driver_nfc_error_code));
+    }
+    if (dci_json_find_pair_in_object(reader_pair.value,
+                                     reader_pair.value_len,
+                                     "reader_id",
+                                     &field_pair) == ESP_OK) {
+        (void)dci_json_copy_string_field(&field_pair,
+                                         state->status_driver_nfc_reader_id,
+                                         sizeof(state->status_driver_nfc_reader_id));
+    }
+}
+
 esp_err_t dci_apply_heartbeat_text_locked(dci_slot_t *slot, const char *json, uint64_t rx_ms)
 {
     const char *cursor = NULL;
@@ -450,6 +529,7 @@ esp_err_t dci_apply_status_text_locked(dci_slot_t *slot, const char *json, uint6
     }
     slot->state.has_status = true;
     slot->state.status_rx_ms = rx_ms;
+    dci_clear_runtime_driver_fields(&slot->state);
     for (;;) {
         dci_json_pair_t pair = {0};
         uint64_t value = 0;
@@ -493,6 +573,7 @@ esp_err_t dci_apply_status_text_locked(dci_slot_t *slot, const char *json, uint6
                                              &flag) == ESP_OK) {
                 slot->state.status_runtime_active = flag;
             }
+            dci_apply_runtime_driver_fields(&slot->state, pair.value, pair.value_len);
         } else if (dci_json_key_equals(&pair, "runtime_active")) {
             if (dci_json_parse_bool_value(pair.value, pair.value_len, &flag) == ESP_OK) {
                 slot->state.status_runtime_active = flag;
@@ -629,10 +710,24 @@ esp_err_t dci_apply_result_text_locked(dci_slot_t *slot, const char *json, uint6
                 return cache_err;
             }
         } else {
-            (void)dci_json_copy_raw_value(data_value,
-                                          data_value_len,
-                                          slot->state.result_data_json,
-                                          sizeof(slot->state.result_data_json));
+            esp_err_t copy_err = dci_json_copy_raw_value(data_value,
+                                                         data_value_len,
+                                                         slot->state.result_data_json,
+                                                         sizeof(slot->state.result_data_json));
+            if (copy_err == ESP_ERR_INVALID_ARG) {
+                return copy_err;
+            }
+            if (copy_err == ESP_ERR_INVALID_SIZE) {
+                esp_err_t cache_err = dci_store_result_data_locked(slot->state.device_id,
+                                                                   slot->state.result_request_id,
+                                                                   slot->state.result_command,
+                                                                   data_value,
+                                                                   data_value_len,
+                                                                   rx_ms);
+                if (cache_err != ESP_OK) {
+                    return cache_err;
+                }
+            }
         }
     }
     if (error_pair.value && (!slot->state.result_error_code[0] || !slot->state.result_message[0])) {

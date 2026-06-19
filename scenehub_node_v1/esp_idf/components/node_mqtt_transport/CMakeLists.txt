@@ -7,5 +7,5 @@ idf_component_register(
         "node_mqtt_command.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
-    REQUIRES mqtt esp_timer node_common node_config node_control node_protocol
+    REQUIRES mqtt esp_timer node_common node_config node_control node_protocol node_admin_control node_rule_engine node_runtime_mode node_fallback_runtime
 )

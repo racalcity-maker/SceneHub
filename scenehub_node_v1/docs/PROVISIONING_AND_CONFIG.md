@@ -138,7 +138,9 @@ Store config as versioned data:
   },
   "runtime": {
     "operation_mode": "scenehub",
-    "fallback_timeout_ms": 0
+    "fallback_timeout_ms": 0,
+    "fallback_return_delay_ms": 3000,
+    "fallback_return_policy": "auto_on_stable_mqtt"
   },
   "rules": {
     "active_bundle_id": "",
@@ -165,6 +167,14 @@ Rule bundle storage follows the same principle:
 - compile candidate tables before activation;
 - swap active bundle only after compile succeeds;
 - keep the previous last-known-good bundle on failure.
+
+Fallback config notes:
+
+- `fallback_timeout_ms = 0` means local fallback runtime is disabled.
+- `fallback_return_delay_ms` is the stability window before returning from
+  local fallback to normal hub-primary control.
+- Initial first-slice policy is `auto_on_stable_mqtt` only.
+- These fields belong to runtime policy, not to the standalone bundle itself.
 
 ## Config API Commands
 

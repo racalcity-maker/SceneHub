@@ -22,6 +22,8 @@ typedef struct {
     char label[24];
 } node_universal_pin_config_v1_t;
 
+typedef node_universal_pin_config_v1_t node_universal_pin_config_v11_t;
+
 typedef struct {
     bool enabled;
     uint8_t channel;
@@ -85,7 +87,7 @@ typedef struct {
     bool pin_config_locked;
     node_output_pin_config_v2_t relays[NODE_RELAY_MAX];
     node_output_pin_config_v2_t mosfets[NODE_MOSFET_MAX];
-    node_universal_pin_config_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
     node_led_strip_config_v2_t led_strips[NODE_LED_STRIP_MAX];
 } node_config_v2_t;
 
@@ -102,7 +104,7 @@ typedef struct {
     bool pin_config_locked;
     node_output_pin_config_v3_t relays[NODE_RELAY_MAX];
     node_output_pin_config_v3_t mosfets[NODE_MOSFET_MAX];
-    node_universal_pin_config_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
     node_led_strip_config_v3_t led_strips[NODE_LED_STRIP_MAX];
 } node_config_v3_t;
 
@@ -149,7 +151,7 @@ typedef struct {
     bool pin_config_locked;
     node_output_pin_config_v3_t relays[NODE_RELAY_MAX];
     node_output_pin_config_v3_t mosfets[NODE_MOSFET_MAX];
-    node_universal_pin_config_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
     node_led_strip_config_v4_t led_strips[NODE_LED_STRIP_MAX];
 } node_config_v4_t;
 
@@ -166,7 +168,7 @@ typedef struct {
     bool pin_config_locked;
     node_output_pin_config_v3_t relays[NODE_RELAY_MAX];
     node_output_pin_config_v3_t mosfets[NODE_MOSFET_MAX];
-    node_universal_pin_config_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
     node_led_strip_config_v5_t led_strips[NODE_LED_STRIP_MAX];
 } node_config_v5_t;
 
@@ -231,7 +233,7 @@ typedef struct {
     bool pin_config_locked;
     node_output_pin_config_v3_t relays[NODE_RELAY_MAX];
     node_output_pin_config_v3_t mosfets[NODE_MOSFET_MAX];
-    node_universal_pin_config_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
     node_led_strip_config_v6_t led_strips[NODE_LED_STRIP_MAX];
 } node_config_v6_t;
 
@@ -262,7 +264,7 @@ typedef struct {
     bool pin_config_locked;
     node_output_pin_config_v3_t relays[NODE_RELAY_MAX];
     node_output_pin_config_v3_t mosfets[NODE_MOSFET_MAX];
-    node_universal_pin_config_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
     node_led_strip_config_v7_t led_strips[NODE_LED_STRIP_MAX];
 } node_config_v7_t;
 
@@ -293,9 +295,82 @@ typedef struct {
     bool pin_config_locked;
     node_output_pin_config_t relays[NODE_RELAY_MAX];
     node_output_pin_config_t mosfets[NODE_MOSFET_MAX];
-    node_universal_pin_config_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
     node_led_strip_config_v8_t led_strips[NODE_LED_STRIP_MAX];
 } node_config_v8_t;
+
+typedef struct {
+    uint32_t version;
+    char node_id[NODE_ID_MAX_LEN];
+    char node_name[NODE_NAME_MAX_LEN];
+    char wifi_ssid[NODE_WIFI_SSID_MAX_LEN];
+    char wifi_password[NODE_WIFI_PASSWORD_MAX_LEN];
+    char controller_host[NODE_HOST_MAX_LEN];
+    uint16_t mqtt_port;
+    char mqtt_client_id[NODE_MQTT_CLIENT_ID_MAX_LEN];
+    int reset_gpio;
+    bool pin_config_locked;
+    node_output_pin_config_t relays[NODE_RELAY_MAX];
+    node_output_pin_config_t mosfets[NODE_MOSFET_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_led_strip_config_t led_strips[NODE_LED_STRIP_MAX];
+} node_config_v9_t;
+
+typedef struct {
+    uint32_t version;
+    char node_id[NODE_ID_MAX_LEN];
+    char node_name[NODE_NAME_MAX_LEN];
+    char wifi_ssid[NODE_WIFI_SSID_MAX_LEN];
+    char wifi_password[NODE_WIFI_PASSWORD_MAX_LEN];
+    char controller_host[NODE_HOST_MAX_LEN];
+    uint16_t mqtt_port;
+    char mqtt_client_id[NODE_MQTT_CLIENT_ID_MAX_LEN];
+    int reset_gpio;
+    bool pin_config_locked;
+    uint8_t operation_mode;
+    node_output_pin_config_t relays[NODE_RELAY_MAX];
+    node_output_pin_config_t mosfets[NODE_MOSFET_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_led_strip_config_t led_strips[NODE_LED_STRIP_MAX];
+} node_config_v10_t;
+
+typedef struct {
+    uint32_t version;
+    char node_id[NODE_ID_MAX_LEN];
+    char node_name[NODE_NAME_MAX_LEN];
+    char wifi_ssid[NODE_WIFI_SSID_MAX_LEN];
+    char wifi_password[NODE_WIFI_PASSWORD_MAX_LEN];
+    char controller_host[NODE_HOST_MAX_LEN];
+    uint16_t mqtt_port;
+    char mqtt_client_id[NODE_MQTT_CLIENT_ID_MAX_LEN];
+    int reset_gpio;
+    bool pin_config_locked;
+    uint8_t operation_mode;
+    bool standalone_mqtt_enabled;
+    node_output_pin_config_t relays[NODE_RELAY_MAX];
+    node_output_pin_config_t mosfets[NODE_MOSFET_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_led_strip_config_t led_strips[NODE_LED_STRIP_MAX];
+} node_config_v11_t;
+
+typedef struct {
+    uint32_t version;
+    char node_id[NODE_ID_MAX_LEN];
+    char node_name[NODE_NAME_MAX_LEN];
+    char wifi_ssid[NODE_WIFI_SSID_MAX_LEN];
+    char wifi_password[NODE_WIFI_PASSWORD_MAX_LEN];
+    char controller_host[NODE_HOST_MAX_LEN];
+    uint16_t mqtt_port;
+    char mqtt_client_id[NODE_MQTT_CLIENT_ID_MAX_LEN];
+    int reset_gpio;
+    bool pin_config_locked;
+    uint8_t operation_mode;
+    bool standalone_mqtt_enabled;
+    node_output_pin_config_t relays[NODE_RELAY_MAX];
+    node_output_pin_config_t mosfets[NODE_MOSFET_MAX];
+    node_universal_pin_config_v11_t universal_io[NODE_UNIVERSAL_IO_MAX];
+    node_led_strip_config_t led_strips[NODE_LED_STRIP_MAX];
+} node_config_v12_t;
 
 typedef struct {
     uint32_t version;

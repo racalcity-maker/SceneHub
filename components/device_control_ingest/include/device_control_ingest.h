@@ -27,8 +27,10 @@ extern "C" {
 #define DEVICE_CONTROL_INGEST_ERROR_CODE_MAX_LEN 32
 #define DEVICE_CONTROL_INGEST_RESULT_DATA_JSON_MAX_LEN 2048
 #define DEVICE_CONTROL_INGEST_EVENT_ARGS_JSON_MAX_LEN 512
-#define DEVICE_CONTROL_INGEST_DESCRIBE_INTERFACE_DATA_JSON_MAX_LEN \
+#define DEVICE_CONTROL_INGEST_CACHED_RESULT_DATA_JSON_MAX_LEN \
     (QUEST_DEVICE_DESCRIPTION_JSON_MAX_LEN + 256)
+#define DEVICE_CONTROL_INGEST_DESCRIBE_INTERFACE_DATA_JSON_MAX_LEN \
+    DEVICE_CONTROL_INGEST_CACHED_RESULT_DATA_JSON_MAX_LEN
 #define DEVICE_CONTROL_INGEST_DEFAULT_ONLINE_TIMEOUT_MS 15000
 
 typedef enum {
@@ -59,6 +61,12 @@ typedef struct {
     char status_state[DEVICE_CONTROL_INGEST_STATE_MAX_LEN];
     char status_health[DEVICE_CONTROL_INGEST_HEALTH_MAX_LEN];
     bool status_runtime_active;
+    bool status_driver_nfc_enabled;
+    bool status_driver_nfc_ready;
+    char status_driver_nfc_health[DEVICE_CONTROL_INGEST_HEALTH_MAX_LEN];
+    char status_driver_nfc_state[DEVICE_CONTROL_INGEST_STATE_MAX_LEN];
+    char status_driver_nfc_error_code[DEVICE_CONTROL_INGEST_ERROR_CODE_MAX_LEN];
+    char status_driver_nfc_reader_id[QUEST_ID_MAX_LEN];
     bool has_diag;
     uint64_t diag_ts_ms;
     uint64_t diag_rx_ms;
@@ -99,6 +107,11 @@ esp_err_t device_control_ingest_take_describe_interface_data(const char *device_
                                                              const char *request_id,
                                                              char *out,
                                                              size_t out_size);
+esp_err_t device_control_ingest_take_result_data(const char *device_id,
+                                                 const char *request_id,
+                                                 const char *command,
+                                                 char *out,
+                                                 size_t out_size);
 size_t device_control_ingest_count(void);
 uint32_t device_control_ingest_generation(void);
 esp_err_t device_control_ingest_get_last_changed_device_id(char *out_device_id, size_t out_device_id_size);
