@@ -131,7 +131,7 @@ StackType_t *allocate_effect_task_stack(size_t idx)
                                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (s_led_task_stack_ext[idx]) {
             memset(s_led_task_stack_ext[idx], 0, stack_bytes);
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "led fx stack strip=%u source=psram bytes=%u",
                      (unsigned)(idx + 1U),
                      (unsigned)stack_bytes);
@@ -200,7 +200,7 @@ void led_effect_task(void *arg)
         strip->worker_effect_seq = strip->effect_seq;
         give_strip_lock(strip);
 
-        ESP_LOGI(TAG,
+        ESP_LOGD(TAG,
                  "effect start strip=%u source=%s effect=%s duration_ms=%lu step_ms=%lu count=%lu brightness=%u",
                  (unsigned)strip->channel,
                  effect_source_name(&strip->worker_config),
@@ -291,14 +291,14 @@ void led_effect_task(void *arg)
                      effect_name(strip->worker_effect),
                      esp_err_to_name(err));
         } else if (effect_cancelled(strip, strip->worker_effect_seq)) {
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "effect cancelled strip=%u source=%s effect=%s",
                      (unsigned)strip->channel,
                      effect_source_name(&strip->worker_config),
                      effect_name(strip->worker_effect));
         } else {
             clear_effect_active_if_current(strip, strip->worker_effect_seq);
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "effect done strip=%u source=%s effect=%s",
                      (unsigned)strip->channel,
                      effect_source_name(&strip->worker_config),

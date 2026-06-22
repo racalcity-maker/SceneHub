@@ -83,7 +83,7 @@ Memory policy:
   documented byte budget before implementation.
 - DMA-facing buffers must remain static DMA-capable internal storage.
 - Track/source start may use only bounded static/fixed-pool state. If a new
-  allocation class is proposed, update `MEMORY_ALLOCATION_POLICY.md` before
+  allocation class is proposed, update `../policies/MEMORY_ALLOCATION_POLICY.md` before
   accepting it.
 
 Locking policy:
@@ -299,7 +299,7 @@ Goal: stop treating metadata validation as audio warmup.
   - background switch while old background is active;
   - effect prime before active.
 - Keep hardware validation explicit in `docs/TESTING.md`.
-- Update `README.md`, `ARCHITECTURE.md`, and `MEMORY_ALLOCATION_POLICY.md`
+- Update `README.md`, `../ARCHITECTURE.md`, and `../policies/MEMORY_ALLOCATION_POLICY.md`
   after the refactor lands.
 - Acceptance:
   - no known pop/click reproduction remains in the field test matrix;

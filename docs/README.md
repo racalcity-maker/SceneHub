@@ -3,9 +3,10 @@
 ## Core References
 
 - `ARCHITECTURE.md` - high-level firmware architecture.
+- `ARCHITECTURE_MAP.md` - compact hub component map and runtime flow diagram.
 - `device_control_contract_v1.md` - SceneHub-native physical device MQTT contract.
 - `COMMAND_RESULT_SEMANTICS.md` - terminal vs pending command status rules.
-- `API_HTTP_POLICY.md` - HTTP method/payload hygiene policy for hub and node surfaces.
+- `policies/API_HTTP_POLICY.md` - HTTP method/payload hygiene policy for hub and node surfaces.
 - `reactive_branch_v_2_design.md` - current Reactive Branch v2 contract and runtime rules.
 - `TESTING.md` - test layout and local test guidance.
 - `KNOWN_ISSUES.md` - single active backlog for open product/runtime/architecture issues.
@@ -13,9 +14,14 @@
 - `ALPHA_RELEASE_CHECKLIST.md` - minimum alpha sign-off gate for hub and node.
 - `SUPPORT_RUNBOOK.md` - first-response guide for alpha support and triage.
 - `VERSION_COMPATIBILITY_MATRIX.md` - tested hub/node pairing rules and contract versions.
+- `RELEASE_NOTES_TEMPLATE.md` - template for concrete release notes.
+- `RELEASE_SIGNOFF_REPORT_TEMPLATE.md` - final manual sign-off report template.
 
 ## Setup And Operations
 
+- `FIRMWARE_FLASH_RECOVERY_RUS.md` - flashing, monitor, OTA and recovery flow.
+- `HARDWARE_INSTALLATION_RUS.md` - hub/node hardware installation checklist.
+- `CONFIG_REFERENCE.md` - release-facing hub configuration reference.
 - `ROOM_SCENARIO_SETUP_RUS.md` - room scenario setup guide.
 - `QUEST_DEVICE_SETUP_RUS.md` - Quest Device setup guide.
 - `BACKUP_AND_RESTORE.md` - minimum backup/restore workflow before risky maintenance.
@@ -26,11 +32,15 @@
 ## Policies And Architecture
 
 - `ARCHITECTURE_LAYER_RISK_MAP.md` - practical dependency risk map for the SceneHub layering contract.
-- `MEMORY_ALLOCATION_POLICY.md` - runtime/audio allocation policy, audit and cleanup checklist.
-- `LOCKING_POLICY.md` - lock ownership, ordering and external-call rules.
-- `HUB_AUDIT_P0_P1_PLAN.md` - hub-side audit status plus remaining follow-up for write boundaries, policy enforcement and result lifecycle.
-- `AUDIO_PIPELINE_REFACTOR_PLAN.md` - active audio pipeline refactor plan for pop-free background/effect playback.
-- `NODE_DESCRIBE_INTERFACE_REFACTOR_PLAN.md` - deferred node manifest size/budget refactor plan.
+- `policies/MEMORY_ALLOCATION_POLICY.md` - runtime/audio allocation policy, audit and cleanup checklist.
+- `policies/LOCKING_POLICY.md` - lock ownership, ordering and external-call rules.
+
+## Plans
+
+- `plans/HUB_AUDIT_P0_P1_PLAN.md` - hub-side audit status plus remaining follow-up for write boundaries, policy enforcement and result lifecycle.
+- `plans/AUDIO_PIPELINE_REFACTOR_PLAN.md` - active audio pipeline refactor plan for pop-free background/effect playback.
+- `plans/NODE_DESCRIBE_INTERFACE_REFACTOR_PLAN.md` - deferred node manifest size/budget refactor plan.
+- `plans/NODE_V2_HUB_ADMIN_UI_PLAN.md` - hub GM/admin UI support for Node v2 import and bundle flows.
 
 ## Completed Plans Retired Into Durable Docs
 
@@ -57,3 +67,7 @@ baseline has already shipped and the durable contract/docs were updated:
 ## Assets
 
 - `Pics/` - screenshots used by README and GM panel docs.
+
+## Release Notes
+
+- `releases/` - concrete release notes generated from `RELEASE_NOTES_TEMPLATE.md`.

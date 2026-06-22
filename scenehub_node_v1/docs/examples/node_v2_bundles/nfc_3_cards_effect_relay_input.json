@@ -1,0 +1,449 @@
+{
+  "version": 2,
+  "bundle_id": "nfc_3_cards_effect_relay_input",
+  "generation": 3,
+  "mode": "standalone",
+  "emits": [
+    "nfc_card_1_effect_started",
+    "nfc_card_1_effect_stopped",
+    "nfc_card_2_effect_started",
+    "nfc_card_2_effect_stopped",
+    "nfc_card_3_effect_started",
+    "nfc_card_3_relay_started",
+    "nfc_card_3_input_confirmed",
+    "nfc_card_3_effect_stopped",
+    "nfc_card_3_input_timeout"
+  ],
+  "limits": {
+    "max_action_ms": 50,
+    "max_parallel_timers": 3
+  },
+  "initial_state": {
+    "waiting_input_1": false
+  },
+  "rules": [
+    {
+      "id": "boot_init",
+      "enabled": true,
+      "trigger": {
+        "kind": "boot"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "set_state",
+          "key": "waiting_input_1",
+          "value": false
+        },
+        {
+          "kind": "cancel_timer",
+          "timer": "card_3_input_wait"
+        },
+        {
+          "kind": "command",
+          "command": "relay.set",
+          "args": {
+            "output": "relay_1",
+            "on": false
+          }
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_1_start_effect",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_seen"
+      },
+      "conditions": {
+        "kind": "event_field_equals",
+        "field": "token_id",
+        "value": 1
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "card_3_input_wait"
+        },
+        {
+          "kind": "set_state",
+          "key": "waiting_input_1",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "card_1_present"
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "rainbow_cycle"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_1_effect_started",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 1,
+            "effect": "rainbow_cycle"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_1_stop_on_removed",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_removed"
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "card_1_present"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_1_effect_stopped",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 1,
+            "reason": "card_removed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_2_start_effect",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_seen"
+      },
+      "conditions": {
+        "kind": "event_field_equals",
+        "field": "token_id",
+        "value": 2
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "card_3_input_wait"
+        },
+        {
+          "kind": "set_state",
+          "key": "waiting_input_1",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "card_2_present"
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "scanner"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_2_effect_started",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 2,
+            "effect": "scanner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_2_stop_on_removed",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_removed"
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "card_2_present"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_2_effect_stopped",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 2,
+            "reason": "card_removed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_3_start_effect_pulse_relay_wait_input",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_seen"
+      },
+      "conditions": {
+        "kind": "event_field_equals",
+        "field": "token_id",
+        "value": 3
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "card_3_input_wait"
+        },
+        {
+          "kind": "set_phase",
+          "phase": "card_3_waiting_input_1"
+        },
+        {
+          "kind": "set_state",
+          "key": "waiting_input_1",
+          "value": true
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "theater_chase"
+          }
+        },
+        {
+          "kind": "command",
+          "command": "relay.pulse",
+          "args": {
+            "output": "relay_1",
+            "duration_ms": 3000
+          }
+        },
+        {
+          "kind": "start_timer",
+          "timer": "card_3_input_wait",
+          "mode": "oneshot",
+          "duration_ms": 15000
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_3_effect_started",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 3,
+            "effect": "theater_chase"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_3_relay_started",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 3,
+            "relay": "relay_1",
+            "duration_ms": 3000,
+            "wait_input": "input_1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_3_input_1_confirmed",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 1
+      },
+      "conditions": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "card_3_waiting_input_1"
+          },
+          {
+            "kind": "state_equals",
+            "key": "waiting_input_1",
+            "value": true
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "card_3_input_wait"
+        },
+        {
+          "kind": "set_state",
+          "key": "waiting_input_1",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "card_3_input_1_confirmed"
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "twinkle_random"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_3_input_confirmed",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 3,
+            "input": "input_1",
+            "effect": "twinkle_random"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_3_stop_on_removed",
+      "enabled": true,
+      "trigger": {
+        "kind": "local_event",
+        "event": "reader_1_card_removed"
+      },
+      "conditions": {
+        "kind": "any",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "card_3_waiting_input_1"
+          },
+          {
+            "kind": "phase_is",
+            "phase": "card_3_input_1_confirmed"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "card_3_input_wait"
+        },
+        {
+          "kind": "set_state",
+          "key": "waiting_input_1",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_3_effect_stopped",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 3,
+            "reason": "card_removed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_3_input_wait_timeout",
+      "enabled": true,
+      "trigger": {
+        "kind": "timer",
+        "timer": "card_3_input_wait"
+      },
+      "conditions": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "phase_is",
+            "phase": "card_3_waiting_input_1"
+          },
+          {
+            "kind": "state_equals",
+            "key": "waiting_input_1",
+            "value": true
+          }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "set_state",
+          "key": "waiting_input_1",
+          "value": false
+        },
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "nfc_card_3_input_timeout",
+          "args": {
+            "reader": "reader_1",
+            "token_id": 3,
+            "input": "input_1",
+            "timeout_ms": 15000
+          }
+        }
+      ]
+    }
+  ]
+}

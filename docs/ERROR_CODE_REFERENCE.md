@@ -16,7 +16,7 @@ Meaning:
 - standalone bundle JSON exceeds the current shipped node bundle budget.
 - the current stable alpha contract is still `8 KB`, even though `32 KB`
   support is now tracked as a separate rollout plan in
-  `scenehub_node_v1/docs/NODE_V2_LARGE_BUNDLE_32KB_PLAN.md`.
+  `scenehub_node_v1/docs/plans/NODE_V2_LARGE_BUNDLE_32KB_PLAN.md`.
 
 First action:
 

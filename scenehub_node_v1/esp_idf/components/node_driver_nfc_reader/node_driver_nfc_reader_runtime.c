@@ -129,7 +129,7 @@ static StackType_t *allocate_runtime_task_stack(void)
                                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (s_runtime_task_stack_mem) {
         memset(s_runtime_task_stack_mem, 0, stack_bytes);
-        ESP_LOGI(TAG, "nfc runtime stack source=psram bytes=%u", (unsigned)stack_bytes);
+        ESP_LOGD(TAG, "nfc runtime stack source=psram bytes=%u", (unsigned)stack_bytes);
         return s_runtime_task_stack_mem;
     }
     ESP_LOGW(TAG, "nfc runtime stack psram alloc failed; using internal heap fallback");
@@ -137,7 +137,7 @@ static StackType_t *allocate_runtime_task_stack(void)
     s_runtime_task_stack_mem = (StackType_t *)heap_caps_malloc(stack_bytes, MALLOC_CAP_8BIT);
     if (s_runtime_task_stack_mem) {
         memset(s_runtime_task_stack_mem, 0, stack_bytes);
-        ESP_LOGI(TAG, "nfc runtime stack source=internal_heap bytes=%u", (unsigned)stack_bytes);
+        ESP_LOGD(TAG, "nfc runtime stack source=internal_heap bytes=%u", (unsigned)stack_bytes);
     }
     return s_runtime_task_stack_mem;
 }
@@ -405,14 +405,14 @@ static void commit_observation(bool present, const char *uid)
 
     if (present) {
         emit_card_seen(uid);
-        ESP_LOGI(TAG,
+        ESP_LOGD(TAG,
                  "reader event seen id=%s uid=%s token=%ld count=%lu",
                  s_runtime_config ? s_runtime_config->id : "",
                  s_runtime.stable_uid,
                  (long)s_runtime.stable_token_id,
                  (unsigned long)s_runtime.seen_count);
     } else {
-        ESP_LOGI(TAG, "reader event removed id=%s", s_runtime_config ? s_runtime_config->id : "");
+        ESP_LOGD(TAG, "reader event removed id=%s", s_runtime_config ? s_runtime_config->id : "");
     }
 }
 

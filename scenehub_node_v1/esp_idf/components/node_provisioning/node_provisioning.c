@@ -34,6 +34,16 @@ static TaskHandle_t s_sta_retry_task;
 static volatile bool s_sta_retry_enabled;
 static uint32_t s_sta_retry_delay_ms = 2000;
 
+static void quiet_idf_wifi_logs(void)
+{
+    esp_log_level_set("wifi", ESP_LOG_WARN);
+    esp_log_level_set("wifi_init", ESP_LOG_WARN);
+    esp_log_level_set("phy_init", ESP_LOG_WARN);
+    esp_log_level_set("net80211", ESP_LOG_WARN);
+    esp_log_level_set("pp", ESP_LOG_WARN);
+    esp_log_level_set("esp_netif_handlers", ESP_LOG_WARN);
+}
+
 static void got_ip_task(void *arg)
 {
     (void)arg;
@@ -436,6 +446,7 @@ esp_err_t node_provisioning_start(const node_config_t *config, const node_provis
 
     static bool initialized = false;
     if (!initialized) {
+        quiet_idf_wifi_logs();
         ESP_ERROR_CHECK(esp_netif_init());
         ESP_ERROR_CHECK(esp_event_loop_create_default());
         ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event_handler, NULL));

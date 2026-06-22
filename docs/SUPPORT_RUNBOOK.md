@@ -77,7 +77,7 @@ Common error meanings:
 - `bundle_too_large`: bundle exceeds the current shipped node bundle contract.
   Today that stable alpha contract is still `8 KB`; the tracked `32 KB`
   rollout is documented in
-  `scenehub_node_v1/docs/NODE_V2_LARGE_BUNDLE_32KB_PLAN.md`.
+  `scenehub_node_v1/docs/plans/NODE_V2_LARGE_BUNDLE_32KB_PLAN.md`.
 - `bundle_too_large_for_mqtt_admin`: bundle may fit the node storage/HTTP
   path, but does not fit the compact MQTT admin transport budget.
 - `runtime_emit_not_supported`: bundle uses a runtime feature not yet shipped.

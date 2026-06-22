@@ -11,11 +11,11 @@ The concrete rule schema draft and AI-generation contract live in
 `NODE_V2_RULE_SCHEMA_DRAFT.md`.
 
 The transition plan from v1 firmware to v2 modules lives in
-`NODE_V2_TRANSITION_PLAN.md`.
+`plans/NODE_V2_TRANSITION_PLAN.md`.
 
 The frozen engine semantics live in `NODE_V2_ENGINE_CONTRACT.md`.
 
-The driver rollout plan lives in `NODE_V2_DRIVER_PLAN.md`.
+The driver rollout plan lives in `plans/NODE_V2_DRIVER_PLAN.md`.
 
 Node v2 may also expose a small set of firmware-built device drivers such as
 digital sensors, NFC readers, audio players and LED strips. Driver support is

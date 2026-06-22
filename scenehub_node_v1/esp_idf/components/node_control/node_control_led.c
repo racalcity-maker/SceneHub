@@ -47,7 +47,7 @@ esp_err_t execute_led_off(const node_control_command_t *command, node_control_re
     if (!read_int_arg(command->args_json, "channel", &strip)) {
         return result_rejected(result, "missing_channel");
     }
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "led.off strip=%d source=%s request_id=%s",
              strip,
              command_source_safe(command),
@@ -84,7 +84,7 @@ esp_err_t execute_led_solid(const node_control_command_t *command, node_control_
     if (!read_optional_pwm_arg(command->args_json, "brightness", 255, &brightness)) {
         return result_rejected(result, "invalid_args");
     }
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "led.solid strip=%d source=%s request_id=%s color=%02x%02x%02x%02x brightness=%u",
              strip,
              command_source_safe(command),
@@ -175,7 +175,7 @@ esp_err_t execute_led_blink(const node_control_command_t *command,
         return result_rejected(result, "invalid_args");
     }
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "led.blink strip=%d source=%s request_id=%s color=%02x%02x%02x%02x on_ms=%lu off_ms=%lu times=%lu",
              strip,
              command_source_safe(command),
@@ -256,7 +256,7 @@ esp_err_t execute_led_breathe(const node_control_command_t *command,
         return result_rejected(result, "invalid_args");
     }
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "led.breathe strip=%d source=%s request_id=%s color=%02x%02x%02x%02x duration_ms=%lu step_ms=%lu count=%lu",
              strip,
              command_source_safe(command),
@@ -487,7 +487,7 @@ esp_err_t execute_led_effect(const node_control_command_t *command,
         return result_rejected(result, "invalid_args");
     }
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "led.effect strip=%d source=%s request_id=%s effect=%s color=%02x%02x%02x%02x secondary=%02x%02x%02x%02x background=%02x%02x%02x%02x brightness=%u duration_ms=%lu step_ms=%lu count=%lu size=%u intensity=%u density=%u fade=%u palette=%s",
              strip,
              command_source_safe(command),

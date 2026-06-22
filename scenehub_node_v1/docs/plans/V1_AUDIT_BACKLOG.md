@@ -2,10 +2,10 @@
 
 This file tracks the remaining v1 cleanup work found during the audit against:
 
-- `MEMORY_POLICY.md`
-- `LOCKING_POLICY.md`
-- `ARCHITECTURE_POLICY.md`
-- `API_POLICY.md`
+- `../policies/MEMORY_POLICY.md`
+- `../policies/LOCKING_POLICY.md`
+- `../policies/ARCHITECTURE_POLICY.md`
+- `../policies/API_POLICY.md`
 
 Only v1 scope is tracked here. Node v2 work stays in the dedicated v2 design
 documents.

@@ -28,6 +28,10 @@ Use this section format for every alpha pairing that support may encounter.
 - Node repo subtree: `scenehub_node_v1`
 - Recommended source: same repo commit for hub and node
 - Status: baseline
+- Supported node board: ESP32-S3 N16R8 only
+- Verified node count: 4 identical ESP32-S3 N16R8 boards
+- Pin profile: current configured/factory profile; changed pin profiles require
+  a new sign-off entry
 
 Expected capabilities:
 

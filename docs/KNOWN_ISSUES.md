@@ -7,9 +7,9 @@ Do not duplicate closed work here. Durable rules and completed baseline fixes
 belong in the contract and policy documents instead:
 
 - `ARCHITECTURE.md`
-- `LOCKING_POLICY.md`
-- `MEMORY_ALLOCATION_POLICY.md`
-- `API_HTTP_POLICY.md`
+- `policies/LOCKING_POLICY.md`
+- `policies/MEMORY_ALLOCATION_POLICY.md`
+- `policies/API_HTTP_POLICY.md`
 - `COMMAND_RESULT_SEMANTICS.md`
 - `device_control_contract_v1.md`
 - `reactive_branch_v_2_design.md`
@@ -28,7 +28,7 @@ the wrong physical effect.
 
 - Audio playback can still pop/click when starting background audio, switching
   background tracks, or starting MP3 effects over active background audio.
-  Tracking doc: `AUDIO_PIPELINE_REFACTOR_PLAN.md`.
+  Tracking doc: `plans/AUDIO_PIPELINE_REFACTOR_PLAN.md`.
 - Re-run the GM node-admin persistence path after the latest modal/import/admin
   changes:
   - `Get config`
@@ -64,7 +64,7 @@ the wrong physical effect.
   under cable, power or intermittent-reader faults.
 - Node standalone bundle support is still on the shipped `8 KB` alpha contract.
   Honest `32 KB` support now has its own rollout plan:
-  `scenehub_node_v1/docs/NODE_V2_LARGE_BUNDLE_32KB_PLAN.md`.
+  `scenehub_node_v1/docs/plans/NODE_V2_LARGE_BUNDLE_32KB_PLAN.md`.
   Until that plan lands end to end, support should treat `bundle_too_large`
   as expected behavior for oversized bundles rather than a storage bug.
 - Re-check that degraded NFC reader state never blocks unrelated node

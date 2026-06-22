@@ -67,6 +67,12 @@ The release is considered alpha-ready only when:
 
 - `docs/SUPPORT_RUNBOOK.md` is current for the shipped build.
 - `docs/VERSION_COMPATIBILITY_MATRIX.md` lists the tested hub/node pairing.
+- `docs/RELEASE_SIGNOFF_REPORT_TEMPLATE.md` has been copied and filled for the release.
+- `docs/RELEASE_NOTES_TEMPLATE.md` has been copied into `docs/releases/` and filled.
+- `docs/FIRMWARE_FLASH_RECOVERY_RUS.md` matches the tested flashing/recovery path.
+- `docs/HARDWARE_INSTALLATION_RUS.md` matches the tested hardware profile.
+- `docs/CONFIG_REFERENCE.md` and `scenehub_node_v1/docs/CONFIG_REFERENCE.md`
+  match the shipped config fields and defaults.
 - `scenehub_node_v1/docs/README.md` links the active node v2 docs and examples.
 - example bundles open and remain valid reference assets.
 

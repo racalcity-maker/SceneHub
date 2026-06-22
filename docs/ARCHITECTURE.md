@@ -475,6 +475,6 @@ an unseen client is degraded/warning until it sends the first valid telemetry.
   domain logic.
 - UI should show names first and hide ids behind advanced/debug sections.
 - Scenario step editors should be schema-driven where practical.
-- HTTP API behavior should follow `API_HTTP_POLICY.md`; route-level reference
+- HTTP API behavior should follow `policies/API_HTTP_POLICY.md`; route-level reference
   docs must be regenerated from current Web UI handlers instead of maintained
   as stale hand-written snapshots.

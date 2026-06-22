@@ -325,7 +325,7 @@ Near-term driver target:
 The first planned reader direction is a minimal `pn532`-class reader contract
 with bounded events and no broad smart-card scripting behavior.
 
-See `NODE_V2_DRIVER_PLAN.md`.
+See `plans/NODE_V2_DRIVER_PLAN.md`.
 
 ## RFID/NFC Identity Handling
 

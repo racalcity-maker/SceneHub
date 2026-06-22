@@ -28,7 +28,7 @@ Recent operational changes worth knowing:
   async remote work returns `accepted` plus `request_id`, not fake terminal
   `done`.
 - State-changing hub endpoints are being converged to `POST` plus request body
-  under [docs/API_HTTP_POLICY.md](docs/API_HTTP_POLICY.md).
+  under [docs/policies/API_HTTP_POLICY.md](docs/policies/API_HTTP_POLICY.md).
 
 The firmware is designed for stand-alone escape room and interactive exhibit setups where the controller acts as both the game control plane and the local integration point for field devices. MQTT broker functionality is one module inside the product, not the product identity.
 
@@ -62,6 +62,24 @@ general room/scenario/device architecture.
 - Local status LED and fault monitoring
 - Registered offline quest devices treated as critical room/system faults
 - System audio can be used from room scenarios through `DEVICE_COMMAND system_audio play/stop/pause/resume/set_volume`; audio has separate background/effect channels with one I2S mixer owner.
+
+## SceneHub Node Firmware
+
+The repository also contains a separate physical node firmware in
+`scenehub_node_v1/`. It is not part of the controller build. The node connects
+to SceneHub over the device-control MQTT contract and owns local relay, MOSFET,
+input, LED and NFC hardware.
+
+Current node docs:
+
+- `scenehub_node_v1/README.md` - node scope, folder layout and ESP-IDF entry point.
+- `scenehub_node_v1/docs/HOW_TO_RUN_RUS.md` - practical run/flash/provisioning checklist.
+- `scenehub_node_v1/docs/ARCHITECTURE_MAP.md` - component map and runtime links.
+- `scenehub_node_v1/docs/NFC_PN532_SETUP_AND_DIAGNOSTICS_RUS.md` - PN532 setup notes.
+
+The current reference standalone bundle for PN532 + LED + relay + input is:
+
+- `scenehub_node_v1/docs/examples/node_v2_bundles/nfc_3_cards_effect_relay_input.json`
 
 ## Current Architecture
 
@@ -102,9 +120,10 @@ The important components are:
 
 Detailed architecture notes are in:
 
+- `docs/ARCHITECTURE_MAP.md`
 - `docs/ARCHITECTURE.md`
 - `docs/COMMAND_RESULT_SEMANTICS.md`
-- `docs/API_HTTP_POLICY.md`
+- `docs/policies/API_HTTP_POLICY.md`
 - `docs/QUEST_DEVICE_SETUP_RUS.md`
 - `docs/ROOM_SCENARIO_SETUP_RUS.md`
 
@@ -549,7 +568,7 @@ main/
 - `docs/README.md` - index of current firmware and desktop documentation
 - `docs/ARCHITECTURE.md` - module boundaries and layered design
 - `docs/COMMAND_RESULT_SEMANTICS.md` - command lifecycle and dispatch-envelope semantics
-- `docs/API_HTTP_POLICY.md` - HTTP method/payload hygiene policy
+- `docs/policies/API_HTTP_POLICY.md` - HTTP method/payload hygiene policy
 - `docs/device_control_contract_v1.md` - MQTT control contract and interface discovery
 - `docs/KNOWN_ISSUES.md` - active backlog for open product/runtime/architecture work
 - `docs/QUEST_DEVICE_SETUP_RUS.md` - Quest Device setup guide

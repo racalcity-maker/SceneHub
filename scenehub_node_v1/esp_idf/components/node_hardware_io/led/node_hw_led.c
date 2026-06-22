@@ -146,7 +146,7 @@ esp_err_t node_hw_led_off(uint8_t strip)
         return ESP_ERR_NOT_FOUND;
     }
     stop_effect(runtime);
-    ESP_LOGI(TAG, "off strip=%u", (unsigned)strip);
+    ESP_LOGD(TAG, "off strip=%u", (unsigned)strip);
     return clear_strip_locked(runtime);
 }
 
@@ -162,7 +162,7 @@ esp_err_t node_hw_led_solid(uint8_t strip,
         return ESP_ERR_NOT_FOUND;
     }
     stop_effect(runtime);
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "solid strip=%u color=%02x%02x%02x%02x brightness=%u",
              (unsigned)strip,
              (unsigned)red,

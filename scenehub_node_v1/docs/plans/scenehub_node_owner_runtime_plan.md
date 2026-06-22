@@ -359,9 +359,9 @@ if (node_control_is_owner_task()) {
 Обновить:
 
 ```text
-scenehub_node_v1/docs/ARCHITECTURE_POLICY.md
-scenehub_node_v1/docs/LOCKING_POLICY.md
-scenehub_node_v1/docs/NODE_V1_RUNTIME_AUDIT_PLAN.md
+scenehub_node_v1/docs/policies/ARCHITECTURE_POLICY.md
+scenehub_node_v1/docs/policies/LOCKING_POLICY.md
+scenehub_node_v1/docs/plans/NODE_V1_RUNTIME_AUDIT_PLAN.md
 scenehub_node_v1/docs/NODE_V2_ENGINE_CONTRACT.md
 ```
 
@@ -464,7 +464,7 @@ uint32_t startup_grace_ms;
 Обновить:
 
 ```text
-scenehub_node_v1/docs/NODE_V2_TRANSITION_PLAN.md
+scenehub_node_v1/docs/plans/NODE_V2_TRANSITION_PLAN.md
 scenehub_node_v1/docs/PROVISIONING_AND_CONFIG.md
 docs/VERSION_COMPATIBILITY_MATRIX.md
 docs/SUPPORT_RUNBOOK.md
@@ -573,7 +573,7 @@ unsupported command -> rejected
 ```text
 docs/COMMAND_RESULT_SEMANTICS.md
 docs/device_control_contract_v1.md
-scenehub_node_v1/docs/API_POLICY.md
+scenehub_node_v1/docs/policies/API_POLICY.md
 scenehub_node_v1/docs/NODE_V2_ENGINE_CONTRACT.md
 ```
 
@@ -769,7 +769,7 @@ driver id
 Обновить:
 
 ```text
-scenehub_node_v1/docs/API_POLICY.md
+scenehub_node_v1/docs/policies/API_POLICY.md
 scenehub_node_v1/docs/NODE_V2_RULE_SCHEMA_DRAFT.md
 docs/VERSION_COMPATIBILITY_MATRIX.md
 ```
