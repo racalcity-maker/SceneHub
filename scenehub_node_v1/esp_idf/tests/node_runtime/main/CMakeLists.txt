@@ -1,0 +1,24 @@
+idf_component_register(
+    SRCS
+        "test_main.c"
+        "test_node_control_policy.c"
+        "test_node_rule_engine.c"
+        "test_node_fallback_runtime.c"
+        "test_node_capability_json.c"
+    INCLUDE_DIRS "."
+    WHOLE_ARCHIVE
+    REQUIRES
+        unity
+        json
+        node_common
+        node_config
+        node_runtime_mode
+        node_capability
+        node_control
+        node_rule_schema
+        node_rule_compile
+        node_rule_engine
+        node_fallback_runtime
+        node_runtime_snapshot
+        node_driver_nfc_contract
+)

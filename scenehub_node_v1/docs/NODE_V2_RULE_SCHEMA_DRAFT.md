@@ -36,6 +36,32 @@ Driver instances are also logical names, for example `reader_1` or `music_1`.
 Rules may use only commands and events that the firmware declares for that
 driver instance.
 
+## Identifier Policy
+
+Technical ids are not free-form text.
+
+Current rule:
+
+- command ids
+- event ids
+- emitted local-event names
+- state keys
+- phase names
+- timer names
+- driver ids
+
+must match the bounded identifier whitelist:
+
+```text
+[A-Za-z0-9_.:-]{1,32}
+```
+
+Practical effect:
+
+- use names such as `open_room_2`, `reader_1_master_card`, `phase.locked`;
+- do not use spaces, quotes or slash-separated ad hoc ids;
+- labels remain human-facing and may use normal printable text.
+
 ## Engine Model
 
 This schema is authored as JSON, but the runtime target is a compiled reactive
@@ -160,6 +186,7 @@ Initial export rules:
 - exported command ids must be stable and unique within the bundle;
 - exported event ids must be stable and unique within the bundle;
 - exported event ids should also be present in `emits[]`;
+- exported command/event ids must satisfy the identifier whitelist;
 - `claims[]` may reference logical resources such as `relay_2`, `mosfet_1`,
   `strip_1` or driver ids;
 - exports are metadata for `device_description`, not a separate scripting
@@ -222,6 +249,7 @@ Initial `known_cards` policy:
 - `token_id` is the preferred bounded identity value exposed to the engine;
 - `event` is optional and lets the driver emit a more specific logical event for
   known cards.
+- if `event` is set, it must satisfy the identifier whitelist.
 
 The core engine should usually branch on `token_id` or on the logical event
 name, not on raw UID string comparison.

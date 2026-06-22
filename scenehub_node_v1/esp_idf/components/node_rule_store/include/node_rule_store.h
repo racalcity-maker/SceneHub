@@ -10,7 +10,7 @@
 
 typedef struct {
     node_rule_bundle_metadata_t metadata;
-    char raw_json[NODE_RULE_BUNDLE_MAX_LEN + 1];
+    char raw_json[NODE_RULE_BUNDLE_STORE_MAX_LEN + 1];
 } node_rule_store_entry_t;
 
 esp_err_t node_rule_store_load(node_rule_store_entry_t *out_entry);

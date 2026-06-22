@@ -83,6 +83,37 @@ idf.py build
 idf.py flash monitor
 ```
 
+### `scenehub_node_v1/esp_idf/tests/node_runtime`
+
+Node v2 owner-runtime coverage app. This app was introduced early as a stable
+home for narrow node-side tests and now contains the first live assertions.
+
+Current intended domains:
+
+- `node_control_submit()` source/owner policy
+- rule-engine exported-command and timer behavior
+- fallback runtime transition policy
+- compact manifest/status JSON escaping and identifier filtering
+
+Current status:
+
+- live Unity coverage exists for:
+  - `node_control_submit()` source-policy guardrails
+  - rule-schema validation for exported command ids
+  - fallback transition policy in a pure helper path
+  - compact capability/status JSON parseability with escaped labels
+- runtime-snapshot and deeper fallback boot-policy coverage are still partial
+  and need to be expanded
+
+Planned run path:
+
+```powershell
+cd D:\Projects\SceneHub\scenehub_node_v1\esp_idf\tests\node_runtime
+idf.py set-target esp32s3
+idf.py -DSDKCONFIG_DEFAULTS=sdkconfig.defaults build
+idf.py flash monitor
+```
+
 ## GM Panel Checks
 
 ![GM Panel timeline](Pics/timeline.jpg)

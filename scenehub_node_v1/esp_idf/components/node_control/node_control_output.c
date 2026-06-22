@@ -1,5 +1,7 @@
 #include "node_control_internal.h"
 
+#include <string.h>
+
 #include "node_hardware_io.h"
 
 esp_err_t execute_output_set(node_hw_output_kind_t kind,
@@ -37,6 +39,33 @@ esp_err_t execute_output_pulse(node_hw_output_kind_t kind,
     esp_err_t err = node_hardware_io_pulse_output(kind, (uint8_t)channel, duration_ms);
     if (err != ESP_OK) {
         return result_rejected(result, err == ESP_ERR_NOT_FOUND ? "not_configured" : "invalid_channel");
+    }
+    result_started(result);
+    return ESP_OK;
+}
+
+esp_err_t execute_relay_effect(const char *args_json, node_control_result_t *result)
+{
+    int channel = 0;
+    char effect[32] = {0};
+    esp_err_t err = ESP_OK;
+
+    if (!read_int_arg(args_json, "channel", &channel)) {
+        return result_rejected(result, "missing_channel");
+    }
+    if (!read_string_arg(args_json, "effect", effect, sizeof(effect))) {
+        return result_rejected(result, "missing_effect");
+    }
+    if (strcmp(effect, "broken_fluorescent") != 0) {
+        return result_rejected(result, "invalid_args");
+    }
+
+    err = node_hardware_io_relay_broken_fluorescent((uint8_t)channel);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NOT_FOUND) {
+            return result_rejected(result, "not_configured");
+        }
+        return result_rejected(result, "relay_effect_failed");
     }
     result_started(result);
     return ESP_OK;

@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-06-20
+
+- Completed the active SceneHub Node v2 dependency-boundary cleanup plan and
+  retired the transitional `NODE_V2_DEPENDENCY_REFACTOR_PLAN.md` into durable
+  architecture docs.
+- Split the Node provisioning/admin surface into narrower owner files:
+  shared internal scratch/header plus dedicated body, admin JSON, admin API,
+  rules API, rules context API, NFC API, LED API and status API slices.
+- Added `node_runtime_snapshot` as the bounded read-side owner for rule/fallback
+  status projection, exported bundle metadata and standalone emit names used by
+  manifest/status/admin flows.
+- Replaced borrowed-pointer runtime snapshot reads with
+  `node_runtime_snapshot_capture(...)` so manifest, status and admin paths now
+  serialize caller-owned DTO copies instead of depending on rotating internal
+  buffers.
+- Added narrow NFC-domain facades:
+  - `node_driver_nfc_api` for runtime status plus admin reinit/reload paths
+  - `node_driver_nfc_config_api` for NFC factory-config projection and
+    known-card persistence
+- Stopped adapter/admin/config paths from depending directly on concrete
+  `node_driver_nfc_reader` runtime headers where a narrow NFC-domain facade is
+  sufficient.
+- Hardened fallback diagnostics by protecting status reads/writes with a
+  dedicated mutex instead of reading the live status struct lock-free.
+- Made rules admin responses honest about reboot-activated bundle changes:
+  `rules.apply` and `rules.clear` now surface `applied`/`cleared` and
+  `restart_required` semantics consistently through the node admin path.
+- Blocked `NODE_CONTROL_SOURCE_LOCAL_RULE` from re-entering exported MQTT rule
+  command dispatch, closing a local-rule recursion/re-entry path.
+- Added a real `scenehub_node_v1/esp_idf/tests/node_runtime` ESP32-S3 + PSRAM
+  test app baseline. Current passing coverage includes control source-policy,
+  rule-schema identifier guards, fallback transition policy through the pure
+  `node_fallback_policy` helper, and compact capability/status JSON parsing.
+
 ## 2026-06-17
 
 - Hardened SceneHub Node MQTT overload behavior so terminal command results are

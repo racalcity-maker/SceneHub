@@ -44,8 +44,8 @@ Hybrid mode.
 - When the hub returns, policy decides whether to stay in fallback until manual
   reset or return to SceneHub-managed operation.
 
-The first implementation may ship only `scenehub` and `standalone`, but the
-stored model should not block `fallback`.
+The current alpha firmware already includes the first owner-driven `fallback`
+runtime slice, but it is not yet field-stable or production-ready.
 
 ## Two JSON Contracts
 
@@ -88,6 +88,29 @@ must not traverse the raw JSON tree.
 Detailed engine semantics are frozen in `NODE_V2_ENGINE_CONTRACT.md`.
 
 Driver rollout is tracked in `NODE_V2_DRIVER_PLAN.md`.
+
+## Current Implementation Snapshot
+
+Current alpha baseline on top of the original plan:
+
+- `scenehub`, `standalone` and an alpha first-slice `fallback` runtime are all
+  implemented. `fallback` still requires broader hardware/fault confidence
+  before it should be treated as field-stable.
+- Standalone bundle export metadata is projected back into
+  `describe_interface`, so SceneHub can prefer exported scenario-facing
+  command/event names over raw channel names.
+- Provisioning/admin/routes were split into narrower owner files instead of one
+  large mixed config/admin/rules/NFC/LED file.
+- Runtime/status/manifest/admin readers consume copied runtime DTOs through
+  `runtime_snapshot_capture(...)` rather than borrowed internal snapshot
+  pointers.
+- Bundle store/apply/clear flows explicitly report reboot-required semantics,
+  because activation still happens on restart.
+- Local rule execution is prevented from re-entering exported MQTT rule
+  command dispatch through `node_control`.
+
+Remaining near-term work is product hardening, NFC product slice completion,
+GM/node admin UX verification and fallback fault/soak testing.
 
 ## Bundle Export Projection
 
@@ -244,7 +267,7 @@ Maps rule actions to existing local commands.
 
 Responsibilities:
 
-- build a bounded args DTO or JSON scratch for `node_control_execute()`;
+- build a bounded args DTO or JSON scratch for `node_control_submit()`;
 - preserve existing command validation;
 - prevent rules from touching hardware drivers directly.
 
@@ -316,7 +339,7 @@ Implementation status, 2026-06-16:
   or network settings.
 - `node_runtime_mode` owns mode names and startup policy.
 - Local provisioning API/UI can read and write `scenehub`, `standalone` and
-  reserved `fallback`.
+  alpha `fallback`.
 - `node.get_status` and `device_description.v2` expose the current mode.
 - `standalone` no longer requires `controller_host` for provisioning
   completion and skips MQTT startup.
@@ -408,12 +431,12 @@ First executable slice:
 - basic state set/check;
 - `set_phase`.
 
-All actions go through `node_control_execute()`.
+All actions go through `node_control_submit()`.
 
 Implementation status, 2026-06-17:
 
 - Added `node_action_router` so rule-driven commands use the existing
-  `node_control_execute()` path with source `local_rule`.
+  `node_control_submit()` path with source `local_rule`.
 - Added `node_rule_engine` boot-time runtime owner with bounded local state and
   phase storage.
 - Boot-triggered compiled rules can now execute `command`, `set_state`,
@@ -492,7 +515,7 @@ Implementation status, 2026-06-18:
 - MQTT transport now routes `node.rules.validate`, `node.rules.apply`,
   `node.rules.get`, `node.rules.clear`, `node.rules.pause` and
   `node.rules.resume`, plus `node.reboot`, through a dedicated admin path instead of
-  `node_control_execute()`, keeping runtime scenario commands separate from
+  `node_control_submit()`, keeping runtime scenario commands separate from
   rule-edit operations.
 - MQTT status capability advertisement now includes the rule-admin commands and
   `rules.changed`.
@@ -525,7 +548,7 @@ Implementation update, 2026-06-20:
   `device_manifest_too_large` error instead of failing as a silent generic
   persistence problem.
 - Phase 7 is functionally in place. Remaining work after this point is product
-  hardening, NFC product-slice completion and Phase 8 fallback policy/runtime.
+  hardening, NFC product-slice completion and wider fallback field testing.
 - The current mandatory Hub slice does not require centralized NFC card
   editing. For Node v2 baseline, SceneHub only needs:
   - reader health/status visibility;
@@ -541,15 +564,20 @@ Implementation update, 2026-06-20:
 - Activate fallback bundle when SceneHub is unavailable.
 - Define return-to-hub policy.
 
-Current implementation note, 2026-06-19:
+Implementation status, 2026-06-20:
 
-- `fallback` is still reserved for Phase 8 policy work.
-- The node must not run local rule bundles in `fallback` simply because the
-  saved mode says `fallback`.
-- Until bounded hub-offline detection exists, local rules remain enabled only
-  in explicit `standalone` mode.
+- `node_fallback_runtime` now owns the first bounded fallback state machine
+  and policy evaluation path instead of spreading hub-offline logic across MQTT
+  and rule-engine modules.
+- The runtime already honors configured offline timeout, return delay and
+  return policy, and the current owner-model test app covers the baseline
+  transition cases.
+- This slice is still alpha only:
+  - wider real-hardware fault testing is still required;
+  - support should not treat fallback as production-ready;
+  - follow-up work is hardening, not first implementation.
 
-Planned first runtime contract:
+Current first-slice runtime contract:
 
 - `fallback` has its own owner state machine, not ad-hoc `if` branches spread
   across MQTT and rule-engine modules.
@@ -583,20 +611,25 @@ Owner/runtime rules:
 - leaving fallback must execute a defined cleanup path instead of merely
   ignoring further local events.
 
-Practical first implementation slice:
+First-slice baseline now in place:
 
-1. Add `node_fallback_runtime` owner scaffold with static queue/task/state.
-2. Route Wi-Fi and MQTT connectivity edges into that owner.
-3. Add config fields for:
+1. `node_fallback_runtime` owns static queue/task/state and policy evaluation.
+2. Wi-Fi and MQTT connectivity edges are routed into that owner.
+3. Config fields exist for:
    - `fallback_timeout_ms`
    - `fallback_return_delay_ms`
    - `fallback_return_policy`
-4. On fallback entry:
-   - `node_rule_engine_reset()`
-   - `node_rule_engine_resume()`
-5. On fallback exit:
-   - `node_rule_engine_pause()`
-6. Only after that expose fallback tuning in provisioning/SceneHub UI.
+4. Fallback entry uses the rule-engine owner API.
+5. Fallback exit uses the rule-engine owner API.
+6. Provisioning and status surfaces already expose the current fallback tuning
+   and runtime state.
+
+Remaining Phase 8 work:
+
+1. re-run real-hardware fault testing around Wi-Fi/MQTT loss and recovery;
+2. confirm fallback never regresses unrelated node control/admin flows;
+3. decide whether more return-policy variants are needed beyond the current
+   first slice.
 
 ## Current Phase Summary
 
@@ -605,9 +638,12 @@ Status snapshot, 2026-06-20:
 - Phases 1 through 7 are implemented as the current working Node v2 baseline:
   runtime mode separation, durable bundle storage, schema/compile/runtime,
   timers/holds/phases and the SceneHub admin/export split are all present.
-- The main unimplemented phase is Phase 8 `fallback`.
+- Phase 8 `fallback` is implemented as an alpha first slice, but it is not yet
+  field-stable or production-ready.
 - Near-term work is no longer "build the engine from scratch", but:
   - product-hardening the existing bundle/admin/export flow;
+  - widening fallback hardware/fault verification before it graduates from
+    alpha;
   - finishing the NFC product slice around local reader/cards/status/UI/export
     and health propagation;
   - keeping documentation/policies aligned with the implemented ownership
@@ -637,5 +673,6 @@ Status snapshot, 2026-06-20:
 - Maximum nesting depth for `sequence` and `choose`.
 - Whether standalone mode still connects to MQTT when Wi-Fi and hub are
   configured.
-- Whether fallback returns to hub automatically or requires manual reset.
+- Whether fallback needs more return-policy variants beyond the current alpha
+  baseline.
 - Whether AI context is served only by local HTTP or also by SceneHub admin API.

@@ -1,203 +1,184 @@
-добавить к нодам возможность кастомного джейсон, и при этом возможность работать автономно без хаба
-выставив настройку в интерфейсе либо кастомный джейсон на автомате либо через сценхаб
 # Known Issues
 
+This file is the single active backlog for open alpha-phase product, runtime,
+support and architecture issues.
 
-This file is the single active backlog for open product, runtime and
-architecture issues.
-
-Policies and durable rules live in dedicated policy/reference documents:
+Do not duplicate closed work here. Durable rules and completed baseline fixes
+belong in the contract and policy documents instead:
 
 - `ARCHITECTURE.md`
 - `LOCKING_POLICY.md`
 - `MEMORY_ALLOCATION_POLICY.md`
 - `API_HTTP_POLICY.md`
+- `COMMAND_RESULT_SEMANTICS.md`
 - `device_control_contract_v1.md`
 - `reactive_branch_v_2_design.md`
-
-Temporary plan files were consolidated here. Closed work from those plans is
-not repeated; only unresolved risks and deferred work are tracked below.
 
 ## Active Backlog
 
 ### P0 - Correctness And Runtime Safety
 
-No active P0 defects are currently tracked.
+No active P0 defect is currently tracked.
 
-Closed P0 baseline lives in `docs/HUB_AUDIT_P0_P1_PLAN.md`,
-`docs/LOCKING_POLICY.md`, `docs/COMMAND_RESULT_SEMANTICS.md`, and
-`docs/device_control_contract_v1.md`. Reopen P0 here only for a concrete
-runtime correctness bug, unsafe lock/IO regression, or broken command-result
-ordering.
+Reopen P0 only for a concrete crash, data corruption, broken command-result
+ordering, unsafe lock/IO regression, or a node/hub flow that silently applies
+the wrong physical effect.
 
-### P1 - Runtime Performance
+### P1 - Alpha Runtime And Support Risk
 
-Active P1 defects:
+- Audio playback can still pop/click when starting background audio, switching
+  background tracks, or starting MP3 effects over active background audio.
+  Tracking doc: `AUDIO_PIPELINE_REFACTOR_PLAN.md`.
+- Re-run the GM node-admin persistence path after the latest modal/import/admin
+  changes:
+  - `Get config`
+  - `Import`
+  - `Save device`
+  - reopen modal and confirm imported counts persisted
+  - `Load stored bundle`
+  - `Validate bundle`
+  - `Apply bundle`
+  - reboot if required
+- Re-check that the current node-admin HTTP responses stay visible in GM after
+  the latest backend honesty fixes:
+  - `rules.apply` should surface `applied=true`
+  - `rules.apply` should surface `restart_required=true`
+  - `rules.clear` should surface `cleared=true`
+  - GM modal status should make those results visible without guessing from
+    button state alone
+- Re-run wide runtime-noise verification on the current WS-first refresh model
+  before adding any waiter indexes or other broad runtime structures.
+- Keep watching memory pressure on heavy admin/UI paths. `httpd` 500
+  `no memory` events should be treated as active alpha regressions if they
+  reappear during device-edit or bundle-admin flows.
 
-- Audio playback can pop/click when starting background audio, switching
-  background tracks, or starting MP3 effects over active background audio. This
-  is tracked in `docs/AUDIO_PIPELINE_REFACTOR_PLAN.md`. The target model is a
-  mixer-owned output lifecycle, continuous I2S writer behavior while running,
-  and source priming before a track/effect becomes audible.
+### P2 - Node V2 Product Slice Gaps
 
-Remaining verification work:
+- `fallback` mode is now implemented as an alpha first slice, not a deferred
+  placeholder. It still needs wider hardware/fault testing before support can
+  treat it as field-stable or production-ready.
+- Centralized NFC known-card CRUD in SceneHub GM is intentionally deferred.
+  Current owner surface is node-local provisioning.
+- PN532 runtime recovery is implemented in layers, but the transport still
+  needs more real-hardware confidence before being treated as field-stable
+  under cable, power or intermittent-reader faults.
+- Node standalone bundle support is still on the shipped `8 KB` alpha contract.
+  Honest `32 KB` support now has its own rollout plan:
+  `scenehub_node_v1/docs/NODE_V2_LARGE_BUNDLE_32KB_PLAN.md`.
+  Until that plan lands end to end, support should treat `bundle_too_large`
+  as expected behavior for oversized bundles rather than a storage bug.
+- Re-check that degraded NFC reader state never blocks unrelated node
+  operations or hides otherwise valid exported commands/events in GM.
+- Keep exported bundle-facing names as the preferred scenario contract. Any
+  regression where GM falls back to raw channel names instead of exported
+  command/event labels is an active product bug.
 
-- Run larger device-count / heartbeat-noise testing against the current
-  WS-first runtime refresh, narrowed invalidation, and `include_assets=0`
-  default runtime detail.
-- After that test, decide whether command-result waiters, flag waiters or
-  device-event waiters need indexes. Do not add index structures without a
-  measured broad-scan problem.
-- Recheck `/api/gm/state` after frontend/runtime stabilization. It should stay
-  bootstrap, structural refresh or recovery only, not the normal live-runtime
-  path.
+### P3 - Hub Admin UX And Visibility
 
-### P2 - Architecture Boundaries
+- Keep polishing inline feedback in the quest-device modal so import/save/admin
+  failures are visible without guessing from button color or modal close
+  behavior.
+- Re-check that modal rendering does not aggressively rerender or poll in ways
+  that obscure in-flight admin results or interfere with editing.
+- Add a normal `Refresh interface` workflow for node manifest refresh so new
+  effect names or exported bundle capabilities do not depend on manual reimport
+  habits.
+- NFC-specific GM admin surfaces are deferred. If later added, they must stay
+  in `Devices -> Edit device`, not in scenario builders or quick operator
+  actions.
 
-Open architecture work:
+### P4 - Node LED Follow-Up
 
-- Measure prepared event-ref snapshot copy time during scenario start on the
-  target board. The current bounded static PSRAM model avoids heap churn and
-  runtime lookup, but copies approximately `104 KB` under `gm_session_lock`
-  when committing a scenario start.
+- Add clearer preview-state indication in provisioning UI.
+- Tighten effect-control rendering so each effect shows only the controls it
+  actually uses.
+- Re-run full LED persistence verification after the latest config/runtime
+  splits:
+  - save base LED wiring
+  - save presets
+  - reboot
+  - reload provisioning UI
+  - run command from hub
+- Re-check that strip wiring and LED presets never overwrite each other.
+- Add explicit logs for LED preset save/apply paths, not only effect runtime
+  start/done/cancel/fail.
+
+### P5 - Node V1 / Transport Cleanup Debt
+
+- Move duplicate-request idempotency/cache ownership out of
+  `mqtt_transport` into an explicit runtime/control owner.
+- Reconcile old documented payload targets with the current compact manifest
+  and provisioning/admin buffer sizes.
+- Add focused node-side regression coverage for duplicate `request_id`, result
+  delivery, input-event publishing, reset paths, config validation, and the
+  remaining owner-runtime test gaps described in
+  `scenehub_node_v1/docs/scenehub_node_owner_runtime_plan.md`.
+- Add stress coverage for terminal-result overflow so overload remains explicit
+  rejection/reconnect behavior, not silent loss.
+
+### P6 - Architecture And Test Debt
+
+- Measure prepared event-ref snapshot copy time during scenario start on target
+  hardware. The current static PSRAM model is acceptable, but the bounded
+  commit copy under `gm_session_lock` is still broad enough to keep watching.
+- The `node_provisioning` god-file reduction is in progress but not fully
+  complete yet. Keep the remaining core config file narrow and continue moving
+  mixed parser/serializer/admin helpers out if it starts growing again.
+- Node v2 dependency cleanup is now in durable policy/docs. Keep the remaining
+  watch item narrow:
+  - if more hardware slices appear, revisit whether a single NFC status facade
+    should expand into a compact multi-driver read-model rather than teaching
+    transport/admin code per-driver details.
 - Replace the transitional scenario-layout path with a compact read-model DTO.
-  The public lookup path is now read-model based, but the isolated layout
-  writer still serializes from `room_scenario_t`.
-- Narrow `device_control_ingest` consumers where operational paths only need
-  focused questions such as presence, result summary or command availability.
-  The full ingest snapshot should remain diagnostic/read-side data.
-- Watch `scenehub_control` as the next center of gravity after the `gm_core`
-  cleanup. It is acceptable as the write-side facade, but future growth should
-  split public APIs by family instead of expanding one broad umbrella header.
-- Watch `gm_room_session.h` as a remaining broad public runtime header. It
-  still groups control entrypoints, view DTOs, command-plan ports,
-  prepared-start DTOs and runtime-shaped structs; future work should split it
-  before adding more public surface.
+- Narrow `device_control_ingest` consumers where they only need focused
+  questions instead of the whole ingest snapshot.
 - Add isolated domain tests for GM wait/reaction/state transitions, command
-  planning without transport/hardware, `scenehub_events`, and
-  `room_scenario` validation.
-- Introduce fakeable ports where they reduce test cost: time, event post,
-  command dispatch, and prepared runtime inputs.
-- Regenerate a compact current HTTP API reference from the Web UI route table
-  and handler contracts. The old broad `gm_api_contract.md` was removed because
-  it lagged behind the implementation and still described retired `gm_control`
-  paths.
+  planning without hardware, `scenehub_events`, and `room_scenario`
+  validation.
+- Introduce fakeable ports only where they materially reduce test cost:
+  time, event post, command dispatch, prepared runtime inputs.
 
-### P3 - UI And Application Behavior
+### P7 - Manifest / Admin Payload Budget
 
-No active P3 UI defect is currently tracked.
-
-Deferred UI hygiene:
-
-- Remove remaining legacy reactive first-step-trigger UI assumptions from the
-  GM Panel editor. Live code should treat reactive branches as Reactive Branch
-  v2 only (`trigger`, `guard_flags`, `policy`, `variants[]`,
-  `result_policy`) and keep any old `steps[]` compatibility at explicit
-  import/normalization boundaries.
-- Continue splitting GM panel JavaScript only when ownership is clear:
-  static-data loaders, room runtime refresh/render, scenario/profile/device
-  refresh, quest-device editor actions, runtime actions, and editor
-  save/validate flows.
-- Add read-only operator hardware diagnostics only if an operator workflow
-  actually needs it.
-
-### P4 - Hardware IO
-
-Remaining hardware IO work:
-
-- Add focused hardware IO state-machine tests with a mockable backend.
-- Add scenario/GM API integration tests for local relay, MOSFET and IO commands
-  plus input events.
-- Expose more hardware IO detail through read-model/operator views only if a
-  real operator workflow needs it. The current GM view already has channel
-  labels, basic status, effect-active state and bounded operator commands.
-
-### P5 - Command Executor
-
-Remaining command-executor work:
-
-- Define batch result policy before enabling result-required command groups:
-  all-success vs any-success, first-failure behavior, per-command timeout and
-  aggregate result shape.
-- Keep retry policy out until command execution metrics and failure modes are
-  clearer.
-
-### P6 - Component Layout And God Files
-
-- `scenehub_config` is now the shared build-time config component. Keep it
-  limited to compile-time defaults; do not let it grow into a runtime settings
-  owner or service locator.
-- Split the broad `scenehub_control.h` public surface into family headers when
-  the next real caller pressure appears: GM/session, scenarios, devices,
-  profiles, sidebar presets and hardware IO. Avoid churn until there is a
-  concrete consumer or dependency problem.
-- Split the broad `gm_room_session.h` public surface when useful into control
-  entrypoints, view DTOs, command-plan port types and shared runtime enums.
-  Avoid a mechanical split until a caller or dependency cleanup benefits from
-  it.
-- Reorganize `scenehub_read_model` source layout if it continues to grow:
-  views, builders/cache, and a small shared helper area.
-- Reorganize `audio_player` internals only if maintenance cost justifies it;
-  do not churn the Helix third-party code.
-- Split large files when there is a clear ownership seam:
-  `orchestrator_registry.c`, `web_ui_utils.c`, `room_catalog.c`,
-  `hardware_io_io.c`, `web_ui_auth.c` and `gm_panel_08_editor_actions.js`.
-- Lower-priority codec/validation splits should wait until they block feature
-  work: `room_scenario_validation.c`, `quest_device_json.c` and
-  `gm_panel_05a_scenario_model.js`.
-- Do not move component directories into umbrella folders unless it becomes a
-  dedicated migration with include path, CMake, tests and docs updated in one
-  pass.
-
-### P7 - Scenario Validation And Storage/Admin Paths
-
-- Audit `scenehub_scenario_validation.c` for avoidable transient parse work and
-  broad command lookup scans.
-- Consider bounded scanners or command lookup caches for repeated
-  save/validate paths, while keeping admin/import correctness first.
-- Keep admin/storage handlers free of large stack-local snapshots. Prefer
-  owner-held scratch or PSRAM-first temporary buffers for import/export/list
-  paths instead of repeating wide fixed arrays in `httpd` call stacks.
-- Keep admin/storage-heavy paths clearly separated from runtime-hot rules.
-
-### P8 - Node Describe Interface Size Budget
-
-Large `describe_interface` / node-admin metadata handling was refactored so
-wide payloads no longer live in ordinary steady-state ingest/result storage,
-and oversize compact-manifest saves now fail with an explicit
-`device_manifest_too_large` error. Remaining work is tracked in
-`docs/NODE_DESCRIBE_INTERFACE_REFACTOR_PLAN.md`:
-
-- Review whether current MQTT transport ceilings are still appropriate after
-  the metadata split.
 - Keep `quest_device.device_description_json` as the only durable manifest
   owner after save/import flows.
-- Decide whether the transient metadata cache should stay inside ingest or move
-  further toward a narrower control-owned pending-response path.
-- Design compact runtime manifest vs rich UI metadata only if node channel
-  counts or LED/effect catalogs keep growing.
+- Revisit current MQTT transport ceilings only if compact-manifest growth or
+  richer node metadata starts pushing the current budget again.
+- Decide later whether transient node-admin metadata should stay in ingest or
+  move into a narrower control-owned pending-response path.
+- Design a two-layer compact runtime manifest vs richer UI metadata split only
+  if channel counts, LED schemas or bundle-export metadata grow enough to force
+  it.
 
-### P9 - Deferred Product Work
+### P8 - Deferred Product Work
 
 - Optional `system_led` support remains deferred.
-- Universal Node remains future work. Keep it aligned with the same Quest
-  Device/device-control contract instead of creating a separate scenario model.
-- ESP-NOW and RS485/MAX485 remain deferred transports. Revisit only after the
-  base SceneHub controller, local hardware and MQTT paths are stable.
+- Universal Node remains future work and must stay on the same Quest
+  Device/device-control contract rather than fork a second scenario model.
+- ESP-NOW and RS485/MAX485 remain deferred transports.
 
-## Resolved
+## Verification Hotspots
 
-### Audio output could turn into loud noise around OTA confirmation
+When touching current alpha surfaces, re-check these end-to-end flows:
 
-Observed on 2026-05-06: playback could become harsh noise/scrape around the
-log line `ota_manager: OTA image confirmed`. Restarting the device cleared the
-issue.
+- GM `Get config` -> `Import` -> `Save device`
+- node `Validate bundle` -> `Apply bundle` -> reboot -> `Load stored bundle`
+- PN532 enabled but absent: node remains usable, GM shows degraded reader state
+- exported bundle commands/events appear in GM with the intended names
+- LED wiring + preset persistence after reboot
 
-Status: resolved/mitigated. OTA confirmation now waits for `system_ready`, then
-confirms after a short stabilization delay instead of waiting a fixed 30 seconds
-after boot. The audio player was also hardened against timing interruptions by
-keeping output writes frame-aligned, handling partial writes, writing silence
-when needed, and resetting output on detected bad I2S write state.
+## Retired Into Durable Docs
 
-A direct DAC/I2S reset around OTA confirmation was intentionally not used as the
-primary fix.
+The following are no longer tracked here because the baseline already shipped
+and the behavior is documented elsewhere:
+
+- command-result terminal/pending semantics
+- provisioning auto-close baseline
+- compact `describe_interface` manifest baseline
+- node admin split between GM modal workflow and quick admin actions
+- PSRAM-first owner scratch migration for the large node admin/runtime objects
+- `runtime_snapshot` borrowed-pointer lifetime handling
+- fallback runtime diagnostic status lock discipline
+- local-rule re-entry guard for exported MQTT rule-command dispatch
+- shared node JSON escaping baseline for manifest/status/admin payloads
+- technical identifier whitelist for rule/schema/export/driver ids

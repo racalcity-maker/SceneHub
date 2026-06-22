@@ -5,7 +5,7 @@
 
 #include "esp_err.h"
 #include "node_config.h"
-#include "node_driver_nfc_reader.h"
+#include "node_driver_nfc_contract.h"
 #include "node_rule_model.h"
 #include "node_rule_store.h"
 

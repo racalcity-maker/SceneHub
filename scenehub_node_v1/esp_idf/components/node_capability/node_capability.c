@@ -6,10 +6,13 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
-#include "node_driver_nfc_reader.h"
-#include "node_fallback_runtime.h"
-#include "node_rule_compile.h"
-#include "node_rule_engine.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "node_driver_nfc_config_api.h"
+#include "node_hardware_io.h"
+#include "node_json.h"
+#include "node_text.h"
+#include "node_runtime_snapshot.h"
 #include "node_runtime_mode.h"
 
 typedef struct {
@@ -18,6 +21,10 @@ typedef struct {
     size_t len;
     bool failed;
 } json_writer_t;
+
+static node_runtime_snapshot_t *s_snapshot_scratch;
+static StaticSemaphore_t s_snapshot_lock_storage;
+static SemaphoreHandle_t s_snapshot_lock;
 
 static void jw_append(json_writer_t *w, const char *fmt, ...)
 {
@@ -39,6 +46,26 @@ static void jw_append(json_writer_t *w, const char *fmt, ...)
     w->len += (size_t)n;
 }
 
+static void jw_append_json_escaped(json_writer_t *w, const char *value)
+{
+    if (!w || w->failed) {
+        return;
+    }
+    if (!node_json_append_escaped(w->buf, w->cap, &w->len, value)) {
+        w->failed = true;
+    }
+}
+
+static void jw_append_json_string(json_writer_t *w, const char *value)
+{
+    if (!w || w->failed) {
+        return;
+    }
+    jw_append(w, "\"");
+    jw_append_json_escaped(w, value);
+    jw_append(w, "\"");
+}
+
 static const char *safe_text(const char *text)
 {
     return text ? text : "";
@@ -46,13 +73,12 @@ static const char *safe_text(const char *text)
 
 static bool bounded_text_present(const char *text, size_t cap)
 {
-    size_t len = 0;
+    return cap > 0U && node_text_nonempty_bounded(text, cap - 1U);
+}
 
-    if (!text) {
-        return false;
-    }
-    len = strnlen(text, cap);
-    return len > 0 && len < cap;
+static bool bounded_identifier_valid(const char *text, size_t cap)
+{
+    return cap > 0U && node_text_identifier_valid(text, cap - 1U);
 }
 
 static node_nfc_reader_config_t *alloc_nfc_reader_config_scratch(void)
@@ -67,6 +93,20 @@ static node_nfc_reader_config_t *alloc_nfc_reader_config_scratch(void)
         memset(reader, 0, sizeof(*reader));
     }
     return reader;
+}
+
+static node_runtime_snapshot_t *alloc_runtime_snapshot_scratch(void)
+{
+    node_runtime_snapshot_t *snapshot =
+        (node_runtime_snapshot_t *)heap_caps_malloc(sizeof(*snapshot),
+                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!snapshot) {
+        snapshot = (node_runtime_snapshot_t *)heap_caps_malloc(sizeof(*snapshot), MALLOC_CAP_8BIT);
+    }
+    if (snapshot) {
+        memset(snapshot, 0, sizeof(*snapshot));
+    }
+    return snapshot;
 }
 
 static const char *led_chipset_text(node_led_chipset_t chipset)
@@ -115,21 +155,45 @@ static void append_policy(json_writer_t *w, bool manual, bool scenario, bool con
               result_required ? "true" : "false");
 }
 
-static void append_claims_array(json_writer_t *w, const node_rule_exported_command_t *command)
+static const node_runtime_snapshot_t *lock_snapshot_scratch(bool *out_locked)
 {
-    bool first = true;
+    static const node_runtime_snapshot_t empty = {0};
 
-    jw_append(w, "\"claims\":[");
-    if (command) {
-        for (size_t i = 0; i < command->claim_count && i < NODE_RULE_MAX_EXPORT_CLAIMS; ++i) {
-            if (!bounded_text_present(command->claims[i], sizeof(command->claims[i]))) {
-                continue;
-            }
-            jw_append(w, "%s\"%s\"", first ? "" : ",", safe_text(command->claims[i]));
-            first = false;
-        }
+    if (out_locked) {
+        *out_locked = false;
     }
-    jw_append(w, "]");
+    if (!s_snapshot_lock) {
+        s_snapshot_lock = xSemaphoreCreateMutexStatic(&s_snapshot_lock_storage);
+    }
+    if (!s_snapshot_scratch) {
+        s_snapshot_scratch = alloc_runtime_snapshot_scratch();
+    }
+    if (!s_snapshot_lock || !s_snapshot_scratch) {
+        return &empty;
+    }
+    if (xSemaphoreTake(s_snapshot_lock, portMAX_DELAY) != pdTRUE) {
+        return &empty;
+    }
+    if (node_runtime_snapshot_capture(s_snapshot_scratch) != ESP_OK) {
+        memset(s_snapshot_scratch, 0, sizeof(*s_snapshot_scratch));
+    }
+    if (out_locked) {
+        *out_locked = true;
+    }
+    return s_snapshot_scratch;
+}
+
+static void unlock_snapshot_scratch(bool locked)
+{
+    if (locked && s_snapshot_lock) {
+        xSemaphoreGive(s_snapshot_lock);
+    }
+}
+
+static const node_runtime_snapshot_t *safe_snapshot(const node_runtime_snapshot_t *snapshot)
+{
+    static const node_runtime_snapshot_t empty = {0};
+    return snapshot ? snapshot : &empty;
 }
 
 static void append_output_resource_array(json_writer_t *w,
@@ -145,10 +209,11 @@ static void append_output_resource_array(json_writer_t *w,
             continue;
         }
         jw_append(w,
-                  "%s{\"channel\":%u,\"label\":\"%s\"}",
+                  "%s{\"channel\":%u,\"label\":",
                   first ? "" : ",",
-                  (unsigned)pin->channel,
-                  safe_text(pin->label));
+                  (unsigned)pin->channel);
+        jw_append_json_string(w, pin->label);
+        jw_append(w, "}");
         first = false;
     }
     jw_append(w, "]");
@@ -164,10 +229,11 @@ static void append_io_resource_arrays(json_writer_t *w, const node_config_t *con
             continue;
         }
         jw_append(w,
-                  "%s{\"channel\":%u,\"label\":\"%s\",\"event\":\"input.changed\"}",
+                  "%s{\"channel\":%u,\"label\":",
                   first ? "" : ",",
-                  (unsigned)pin->channel,
-                  safe_text(pin->label));
+                  (unsigned)pin->channel);
+        jw_append_json_string(w, pin->label);
+        jw_append(w, ",\"event\":\"input.changed\"}");
         first = false;
     }
     jw_append(w, "],");
@@ -180,10 +246,11 @@ static void append_io_resource_arrays(json_writer_t *w, const node_config_t *con
             continue;
         }
         jw_append(w,
-                  "%s{\"channel\":%u,\"label\":\"%s\"}",
+                  "%s{\"channel\":%u,\"label\":",
                   first ? "" : ",",
-                  (unsigned)pin->channel,
-                  safe_text(pin->label));
+                  (unsigned)pin->channel);
+        jw_append_json_string(w, pin->label);
+        jw_append(w, "}");
         first = false;
     }
     jw_append(w, "]");
@@ -199,14 +266,15 @@ static void append_led_resources(json_writer_t *w, const node_config_t *config)
             continue;
         }
         jw_append(w,
-                  "%s{\"strip\":%u,\"pixels\":%u,\"chipset\":\"%s\",\"color_order\":\"%s\",\"rgbw\":%s,\"label\":\"%s\"}",
+                  "%s{\"strip\":%u,\"pixels\":%u,\"chipset\":\"%s\",\"color_order\":\"%s\",\"rgbw\":%s,\"label\":",
                   first ? "" : ",",
                   (unsigned)pin->channel,
                   (unsigned)pin->pixel_count,
                   led_chipset_text(pin->chipset),
                   led_color_order_text(pin->color_order),
-                  pin->rgbw ? "true" : "false",
-                  safe_text(pin->label));
+                  pin->rgbw ? "true" : "false");
+        jw_append_json_string(w, pin->label);
+        jw_append(w, "}");
         first = false;
     }
     jw_append(w, "]");
@@ -217,84 +285,64 @@ static void append_driver_resources(json_writer_t *w, const node_config_t *confi
     node_nfc_reader_config_t *reader = alloc_nfc_reader_config_scratch();
 
     jw_append(w, "\"drivers\":[");
-    if (config && reader && node_driver_nfc_reader_load_factory_config(config, reader) == ESP_OK) {
+    if (config && reader &&
+        node_driver_nfc_config_api_load_factory_config(config, reader) == ESP_OK &&
+        bounded_identifier_valid(reader->id, sizeof(reader->id)) &&
+        bounded_identifier_valid(reader->driver_impl, sizeof(reader->driver_impl)) &&
+        bounded_identifier_valid(reader->bus, sizeof(reader->bus))) {
+        jw_append(w, "{\"id\":");
+        jw_append_json_string(w, reader->id);
+        jw_append(w, ",\"type\":\"nfc_reader\",\"driver\":");
+        jw_append_json_string(w, reader->driver_impl);
+        jw_append(w, ",\"bus\":");
+        jw_append_json_string(w, reader->bus);
         jw_append(w,
-                  "{\"id\":\"%s\",\"type\":\"nfc_reader\",\"driver\":\"%s\",\"bus\":\"%s\","
-                  "\"enabled\":%s,\"i2c_sda_gpio\":%d,\"i2c_scl_gpio\":%d,\"reset_gpio\":%d,"
-                  "\"i2c_address\":%u,\"poll_interval_ms\":%lu,\"debounce_ms\":%lu,"
-                  "\"known_card_count\":%lu,\"known_cards\":[",
-                  safe_text(reader->id),
-                  safe_text(reader->driver_impl),
-                  safe_text(reader->bus),
+                  ",\"enabled\":%s,\"poll_interval_ms\":%lu,\"debounce_ms\":%lu}",
                   reader->enabled ? "true" : "false",
-                  reader->i2c_sda_gpio,
-                  reader->i2c_scl_gpio,
-                  reader->reset_gpio,
-                  (unsigned)reader->i2c_address,
                   (unsigned long)reader->poll_interval_ms,
-                  (unsigned long)reader->debounce_ms,
-                  (unsigned long)reader->known_card_count);
-
-        bool first = true;
-        for (size_t i = 0; i < reader->known_card_count; ++i) {
-            const node_nfc_known_card_t *card = &reader->known_cards[i];
-
-            if (!bounded_text_present(card->uid, sizeof(card->uid))) {
-                continue;
-            }
-            jw_append(w,
-                      "%s{\"uid\":\"%s\",\"token_id\":%ld",
-                      first ? "" : ",",
-                      safe_text(card->uid),
-                      (long)card->token_id);
-            if (bounded_text_present(card->name, sizeof(card->name))) {
-                jw_append(w, ",\"name\":\"%s\"", safe_text(card->name));
-            }
-            if (bounded_text_present(card->event_name, sizeof(card->event_name))) {
-                jw_append(w, ",\"event\":\"%s\"", safe_text(card->event_name));
-            }
-            jw_append(w, "}");
-            first = false;
-        }
-        jw_append(w, "]}");
+                  (unsigned long)reader->debounce_ms);
     }
     jw_append(w, "]");
     free(reader);
 }
 
-static void append_bundle_command_templates(json_writer_t *w, const node_rule_compiled_bundle_t *compiled, bool *first)
+static void append_bundle_command_templates(json_writer_t *w,
+                                            const node_runtime_snapshot_t *snapshot,
+                                            bool *first)
 {
-    if (!w || !first || !compiled || compiled->status != NODE_RULE_COMPILE_STATUS_READY) {
+    snapshot = safe_snapshot(snapshot);
+    if (!w || !first || snapshot->export_command_count == 0) {
         return;
     }
 
-    for (size_t i = 0; i < compiled->export_command_count; ++i) {
-        const node_rule_exported_command_t *command = &compiled->export_commands[i];
+    for (size_t i = 0; i < snapshot->export_command_count; ++i) {
+        const node_runtime_snapshot_export_command_t *command = &snapshot->export_commands[i];
 
-        if (!bounded_text_present(command->id, sizeof(command->id))) {
+        if (!bounded_identifier_valid(command->id, sizeof(command->id))) {
             continue;
         }
         jw_append(w,
-                  "%s{\"id\":\"%s\",\"label\":\"%s\",\"target\":\"bundle\",\"command\":\"%s\","
-                  "\"args_schema_ref\":\"none\",\"bundle_export\":true,",
-                  *first ? "" : ",",
-                  safe_text(command->id),
-                  safe_text(command->label),
-                  safe_text(command->id));
-        append_claims_array(w, command);
-        jw_append(w, ",");
+                  "%s{\"id\":",
+                  *first ? "" : ",");
+        jw_append_json_string(w, command->id);
+        jw_append(w, ",\"label\":");
+        jw_append_json_string(w, command->label);
+        jw_append(w, ",\"target\":\"bundle\",\"command\":");
+        jw_append_json_string(w, command->id);
+        jw_append(w,
+                  ",\"args_schema_ref\":\"none\",\"bundle_export\":true,");
         append_policy(w, true, true, false, true);
         jw_append(w, "}");
         *first = false;
     }
 }
 
-static void append_command_templates(json_writer_t *w, const node_rule_compiled_bundle_t *compiled)
+static void append_command_templates(json_writer_t *w, const node_runtime_snapshot_t *snapshot)
 {
     bool first = true;
 
     jw_append(w, "\"command_templates\":[");
-    append_bundle_command_templates(w, compiled, &first);
+    append_bundle_command_templates(w, snapshot, &first);
 
     jw_append(w, "%s{\"id\":\"relay.set\",\"label\":\"Relay set\",\"target\":\"relays\",\"command\":\"relay.set\",\"args_schema_ref\":\"output_set\",\"default_args\":{\"on\":true},", first ? "" : ",");
     append_policy(w, true, true, false, false);
@@ -303,6 +351,10 @@ static void append_command_templates(json_writer_t *w, const node_rule_compiled_
 
     jw_append(w, "{\"id\":\"relay.pulse\",\"label\":\"Relay pulse\",\"target\":\"relays\",\"command\":\"relay.pulse\",\"args_schema_ref\":\"pulse\",\"default_args\":{\"duration_ms\":300},");
     append_policy(w, true, true, false, true);
+    jw_append(w, "},");
+
+    jw_append(w, "{\"id\":\"relay.effect\",\"label\":\"Relay effect\",\"target\":\"relays\",\"command\":\"relay.effect\",\"args_schema_ref\":\"relay_effect\",\"default_args\":{\"effect\":\"broken_fluorescent\"},");
+    append_policy(w, true, true, false, false);
     jw_append(w, "},");
 
     jw_append(w, "{\"id\":\"relay.all_off\",\"label\":\"Relay all off\",\"target\":\"relays\",\"command\":\"relay.all_off\",\"args_schema_ref\":\"none\",");
@@ -425,8 +477,8 @@ static bool known_card_event_duplicate(const node_nfc_reader_config_t *reader, s
     if (!reader || index >= reader->known_card_count) {
         return true;
     }
-    if (!bounded_text_present(reader->known_cards[index].event_name,
-                              sizeof(reader->known_cards[index].event_name))) {
+    if (!bounded_identifier_valid(reader->known_cards[index].event_name,
+                                  sizeof(reader->known_cards[index].event_name))) {
         return true;
     }
     snprintf(base_seen, sizeof(base_seen), "%s_card_seen", safe_text(reader->id));
@@ -446,29 +498,38 @@ static bool known_card_event_duplicate(const node_nfc_reader_config_t *reader, s
 static void append_driver_event_templates(json_writer_t *w, const node_config_t *config, bool *first)
 {
     node_nfc_reader_config_t *reader = alloc_nfc_reader_config_scratch();
+    char base_seen[NODE_DRIVER_EVENT_NAME_MAX_LEN] = {0};
+    char base_removed[NODE_DRIVER_EVENT_NAME_MAX_LEN] = {0};
 
     if (!w || !first || !config || !reader ||
-        node_driver_nfc_reader_load_factory_config(config, reader) != ESP_OK) {
+        node_driver_nfc_config_api_load_factory_config(config, reader) != ESP_OK ||
+        !bounded_identifier_valid(reader->id, sizeof(reader->id))) {
         free(reader);
         return;
     }
+    snprintf(base_seen, sizeof(base_seen), "%s_card_seen", safe_text(reader->id));
+    snprintf(base_removed, sizeof(base_removed), "%s_card_removed", safe_text(reader->id));
 
     jw_append(w,
-              "%s{\"id\":\"%s_card_seen\",\"label\":\"%s card seen\",\"source\":\"drivers\","
-              "\"event\":\"%s_card_seen\",\"args_schema_ref\":\"driver_local_event\"}",
-              *first ? "" : ",",
-              safe_text(reader->id),
-              safe_text(reader->id),
-              safe_text(reader->id));
+              "%s{\"id\":",
+              *first ? "" : ",");
+    jw_append_json_string(w, base_seen);
+    jw_append(w, ",\"label\":");
+    jw_append_json_string(w, base_seen);
+    jw_append(w, ",\"source\":\"drivers\",\"event\":");
+    jw_append_json_string(w, base_seen);
+    jw_append(w, ",\"args_schema_ref\":\"driver_local_event\"}");
     *first = false;
 
     jw_append(w,
-              "%s{\"id\":\"%s_card_removed\",\"label\":\"%s card removed\",\"source\":\"drivers\","
-              "\"event\":\"%s_card_removed\",\"args_schema_ref\":\"driver_local_event\"}",
-              *first ? "" : ",",
-              safe_text(reader->id),
-              safe_text(reader->id),
-              safe_text(reader->id));
+              "%s{\"id\":",
+              *first ? "" : ",");
+    jw_append_json_string(w, base_removed);
+    jw_append(w, ",\"label\":");
+    jw_append_json_string(w, base_removed);
+    jw_append(w, ",\"source\":\"drivers\",\"event\":");
+    jw_append_json_string(w, base_removed);
+    jw_append(w, ",\"args_schema_ref\":\"driver_local_event\"}");
     *first = false;
 
     for (size_t i = 0; i < reader->known_card_count; ++i) {
@@ -478,57 +539,66 @@ static void append_driver_event_templates(json_writer_t *w, const node_config_t 
             continue;
         }
         jw_append(w,
-                  "%s{\"id\":\"%s\",\"label\":\"",
-                  *first ? "" : ",",
-                  safe_text(card->event_name));
+                  "%s{\"id\":",
+                  *first ? "" : ",");
+        jw_append_json_string(w, card->event_name);
+        jw_append(w, ",\"label\":");
+        jw_append(w, "\"");
         if (bounded_text_present(card->name, sizeof(card->name))) {
-            jw_append(w, "%s %s", safe_text(reader->id), safe_text(card->name));
+            jw_append_json_escaped(w, reader->id);
+            jw_append(w, " ");
+            jw_append_json_escaped(w, card->name);
         } else if (card->token_id != 0) {
-            jw_append(w, "%s token %ld", safe_text(reader->id), (long)card->token_id);
+            jw_append_json_escaped(w, reader->id);
+            jw_append(w, " token %ld", (long)card->token_id);
         } else {
-            jw_append(w, "%s", safe_text(card->event_name));
+            jw_append_json_escaped(w, card->event_name);
         }
-        jw_append(w,
-                  "\",\"source\":\"drivers\",\"event\":\"%s\","
-                  "\"args_schema_ref\":\"driver_local_event\"}",
-                  safe_text(card->event_name));
+        jw_append(w, "\",\"source\":\"drivers\",\"event\":");
+        jw_append_json_string(w, card->event_name);
+        jw_append(w, ",\"args_schema_ref\":\"driver_local_event\"}");
         *first = false;
     }
 
     free(reader);
 }
 
-static void append_bundle_event_templates(json_writer_t *w, const node_rule_compiled_bundle_t *compiled, bool *first)
+static void append_bundle_event_templates(json_writer_t *w,
+                                          const node_runtime_snapshot_t *snapshot,
+                                          bool *first)
 {
-    if (!w || !first || !compiled || compiled->status != NODE_RULE_COMPILE_STATUS_READY) {
+    snapshot = safe_snapshot(snapshot);
+    if (!w || !first || snapshot->export_event_count == 0) {
         return;
     }
 
-    for (size_t i = 0; i < compiled->export_event_count; ++i) {
-        const node_rule_exported_event_t *event = &compiled->export_events[i];
+    for (size_t i = 0; i < snapshot->export_event_count; ++i) {
+        const node_runtime_snapshot_export_event_t *event = &snapshot->export_events[i];
 
-        if (!bounded_text_present(event->id, sizeof(event->id))) {
+        if (!bounded_identifier_valid(event->id, sizeof(event->id))) {
             continue;
         }
         jw_append(w,
-                  "%s{\"id\":\"%s\",\"label\":\"%s\",\"source\":\"bundle\","
-                  "\"event\":\"%s\",\"args_schema_ref\":\"none\",\"bundle_export\":true}",
-                  *first ? "" : ",",
-                  safe_text(event->id),
-                  safe_text(event->label),
-                  safe_text(event->id));
+                  "%s{\"id\":",
+                  *first ? "" : ",");
+        jw_append_json_string(w, event->id);
+        jw_append(w, ",\"label\":");
+        jw_append_json_string(w, event->label);
+        jw_append(w, ",\"source\":\"bundle\",\"event\":");
+        jw_append_json_string(w, event->id);
+        jw_append(w, ",\"args_schema_ref\":\"none\",\"bundle_export\":true}");
         *first = false;
     }
 }
 
 static void append_event_templates(json_writer_t *w,
                                    const node_config_t *config,
-                                   const node_rule_compiled_bundle_t *compiled)
+                                   const node_runtime_snapshot_t *snapshot)
 {
     bool first = true;
 
     jw_append(w, "\"event_templates\":[");
-    append_bundle_event_templates(w, compiled, &first);
+    append_bundle_event_templates(w, snapshot, &first);
     jw_append(w,
               "%s{\"id\":\"input.changed\",\"label\":\"Input changed\",\"source\":\"inputs\","
               "\"event\":\"input.changed\",\"args_schema_ref\":\"input_event\"}",
@@ -551,7 +621,8 @@ static void append_led_effect_options(json_writer_t *w)
         if (!node_led_effect_is_advanced(desc->id)) {
             continue;
         }
-        jw_append(w, "%s\"%s\"", first ? "" : ",", safe_text(desc->name));
+        jw_append(w, "%s", first ? "" : ",");
+        jw_append_json_string(w, desc->name);
         first = false;
     }
 }
@@ -567,6 +638,10 @@ static void append_schemas(json_writer_t *w)
               "\"pulse\":["
               "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
               "{\"key\":\"duration_ms\",\"type\":\"number\"}"
+              "],"
+              "\"relay_effect\":["
+              "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
+              "{\"key\":\"effect\",\"type\":\"select\",\"options\":[\"broken_fluorescent\"]}"
               "],"
               "\"mosfet_set\":["
               "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
@@ -590,7 +665,7 @@ static void append_schemas(json_writer_t *w)
               "\"mosfet_effect\":["
               "{\"key\":\"channel\",\"type\":\"resource_channel\"},"
               "{\"key\":\"effect\",\"type\":\"select\","
-              "\"options\":[\"set\",\"pulse\",\"blink\",\"fade\",\"fade_in\",\"fade_out\",\"breathe\"]},"
+              "\"options\":[\"set\",\"pulse\",\"blink\",\"fade\",\"fade_in\",\"fade_out\",\"breathe\",\"broken_fluorescent\"]},"
               "{\"key\":\"value\",\"type\":\"number\",\"optional\":true},"
               "{\"key\":\"on\",\"type\":\"checkbox\",\"optional\":true}"
               "],"
@@ -639,116 +714,45 @@ static void append_schemas(json_writer_t *w)
               "}");
 }
 
-static void append_standalone_events(json_writer_t *w, const node_rule_compiled_bundle_t *compiled)
-{
-    bool first = true;
-
-    jw_append(w, "[");
-    if (compiled && compiled->status == NODE_RULE_COMPILE_STATUS_READY) {
-        for (size_t i = 0; i < compiled->emit_count; ++i) {
-            jw_append(w,
-                      "%s\"%s\"",
-                      first ? "" : ",",
-                      safe_text(compiled->emit_names[i]));
-            first = false;
-        }
-    }
-    jw_append(w, "]");
-}
-
-static void append_exported_command_ids(json_writer_t *w, const node_rule_compiled_bundle_t *compiled)
-{
-    bool first = true;
-
-    jw_append(w, "[");
-    if (compiled && compiled->status == NODE_RULE_COMPILE_STATUS_READY) {
-        for (size_t i = 0; i < compiled->export_command_count; ++i) {
-            if (!bounded_text_present(compiled->export_commands[i].id, sizeof(compiled->export_commands[i].id))) {
-                continue;
-            }
-            jw_append(w, "%s\"%s\"", first ? "" : ",", safe_text(compiled->export_commands[i].id));
-            first = false;
-        }
-    }
-    jw_append(w, "]");
-}
-
-static void append_exported_event_ids(json_writer_t *w, const node_rule_compiled_bundle_t *compiled)
-{
-    bool first = true;
-
-    jw_append(w, "[");
-    if (compiled && compiled->status == NODE_RULE_COMPILE_STATUS_READY) {
-        for (size_t i = 0; i < compiled->export_event_count; ++i) {
-            if (!bounded_text_present(compiled->export_events[i].id, sizeof(compiled->export_events[i].id))) {
-                continue;
-            }
-            jw_append(w, "%s\"%s\"", first ? "" : ",", safe_text(compiled->export_events[i].id));
-            first = false;
-        }
-    }
-    jw_append(w, "]");
-}
-
-static void append_v2_metadata(json_writer_t *w, const node_config_t *config)
+static void append_v2_metadata(json_writer_t *w,
+                               const node_config_t *config,
+                               const node_runtime_snapshot_t *snapshot)
 {
     node_operation_mode_t mode = node_runtime_mode_normalize((node_operation_mode_t)config->operation_mode);
-    const node_rule_compiled_bundle_t *compiled = node_rule_compile_peek_active();
-    node_rule_engine_status_t runtime = {0};
-    node_fallback_runtime_status_t fallback = {0};
     const char *rules_status = "disabled";
+    bool fallback_configured = false;
 
-    node_rule_engine_get_status(&runtime);
-    node_fallback_runtime_get_status(&fallback);
+    snapshot = safe_snapshot(snapshot);
     if (node_runtime_mode_rules_enabled(config)) {
-        rules_status = node_rule_compile_status_name(compiled ? compiled->status : NODE_RULE_COMPILE_STATUS_INACTIVE);
+        rules_status = safe_text(snapshot->compile_status);
     }
+    fallback_configured =
+        (mode == NODE_OPERATION_MODE_FALLBACK && snapshot->fallback_timeout_ms > 0U);
 
+    jw_append(w, "\"v2\":{\"operation_mode\":");
+    jw_append_json_string(w, node_runtime_mode_name(mode));
     jw_append(w,
-              "\"v2\":{"
-              "\"operation_mode\":\"%s\","
-              "\"standalone_mqtt_enabled\":%s,"
+              ",\"standalone_mqtt_enabled\":%s,"
               "\"rules_supported\":%s,"
-              "\"active_bundle_id\":\"%s\","
-              "\"rules_generation\":%lu,"
-              "\"rules_status\":\"%s\","
-              "\"rules_paused\":%s,"
+              "\"active_bundle_id\":",
+              config->standalone_mqtt_enabled ? "true" : "false",
+              node_runtime_mode_rules_enabled(config) ? "true" : "false");
+    jw_append_json_string(w, snapshot->has_bundle ? snapshot->bundle_id : "");
+    jw_append(w, ",\"rules_generation\":%lu,\"rules_status\":",
+              (unsigned long)(snapshot->has_bundle ? snapshot->generation : 0U));
+    jw_append_json_string(w, rules_status);
+    jw_append(w,
+              ",\"rules_paused\":%s,"
               "\"rules_initialized\":%s,"
               "\"fallback_configured\":%s,"
               "\"fallback_enabled\":%s,"
-              "\"fallback_state\":\"%s\","
-              "\"fallback_wifi_ready\":%s,"
-              "\"fallback_mqtt_connected\":%s,"
-              "\"fallback_rules_active\":%s,"
-              "\"fallback_timeout_ms\":%lu,"
-              "\"fallback_return_delay_ms\":%lu,"
-              "\"fallback_return_policy\":\"%s\","
-              "\"exported_commands\":",
-              node_runtime_mode_name(mode),
-              config->standalone_mqtt_enabled ? "true" : "false",
-              node_runtime_mode_rules_enabled(config) ? "true" : "false",
-              (compiled && compiled->metadata.has_bundle) ? safe_text(compiled->metadata.bundle_id) : "",
-              (unsigned long)((compiled && compiled->metadata.has_bundle) ? compiled->metadata.generation : 0U),
-              rules_status,
-              runtime.paused ? "true" : "false",
-              runtime.initialized ? "true" : "false",
-              (mode == NODE_OPERATION_MODE_FALLBACK && fallback.fallback_timeout_ms > 0U) ? "true" : "false",
-              fallback.enabled ? "true" : "false",
-              node_fallback_runtime_state_name(fallback.state),
-              fallback.wifi_ready ? "true" : "false",
-              fallback.mqtt_connected ? "true" : "false",
-              fallback.fallback_rules_active ? "true" : "false",
-              (unsigned long)fallback.fallback_timeout_ms,
-              (unsigned long)fallback.fallback_return_delay_ms,
-              node_fallback_runtime_return_policy_name(fallback.return_policy));
-    append_exported_command_ids(w, compiled);
-    jw_append(w, ",\"exported_events\":");
-    append_exported_event_ids(w, compiled);
-    jw_append(w, ",\"standalone_events\":");
-    append_standalone_events(w, compiled);
-    jw_append(w, ",\"compiled_rules\":%lu,\"compiled_actions\":%lu},",
-              (unsigned long)(compiled ? compiled->rule_count : 0U),
-              (unsigned long)(compiled ? compiled->total_action_count : 0U));
+              "\"fallback_state\":",
+              snapshot->rules_paused ? "true" : "false",
+              snapshot->rules_initialized ? "true" : "false",
+              fallback_configured ? "true" : "false",
+              snapshot->fallback_enabled ? "true" : "false");
+    jw_append_json_string(w, snapshot->fallback_state);
+    jw_append(w, "},");
 }
 
 esp_err_t node_capability_write_device_description(const node_config_t *config,
@@ -761,16 +765,18 @@ esp_err_t node_capability_write_device_description(const node_config_t *config,
     }
 
     json_writer_t w = {.buf = out, .cap = out_size, .len = 0, .failed = false};
-    const node_rule_compiled_bundle_t *compiled = node_rule_compile_peek_active();
+    bool snapshot_locked = false;
+    const node_runtime_snapshot_t *snapshot = safe_snapshot(lock_snapshot_scratch(&snapshot_locked));
 
     jw_append(&w,
               "{\"manifest_version\":2,\"format\":\"compact_resources\","
               "\"node_kind\":\"scenehub_node\","
               "\"capability_contract\":\"scenehub.node.compact.v1\","
-              "\"device\":{\"id\":\"%s\",\"name\":\"%s\",\"kind\":\"scenehub_node\"},"
-              "\"resources\":{",
-              safe_text(config->node_id),
-              safe_text(config->node_name));
+              "\"device\":{\"id\":");
+    jw_append_json_string(&w, config->node_id);
+    jw_append(&w, ",\"name\":");
+    jw_append_json_string(&w, config->node_name);
+    jw_append(&w, ",\"kind\":\"scenehub_node\"},\"resources\":{");
 
     append_output_resource_array(&w, "relays", config->relays, NODE_RELAY_MAX);
     jw_append(&w, ",");
@@ -783,19 +789,99 @@ esp_err_t node_capability_write_device_description(const node_config_t *config,
     append_driver_resources(&w, config);
     jw_append(&w, "},");
 
-    append_command_templates(&w, compiled);
+    append_command_templates(&w, snapshot);
     append_admin_command_templates(&w);
-    append_event_templates(&w, config, compiled);
-    append_v2_metadata(&w, config);
+    append_event_templates(&w, config, snapshot);
+    append_v2_metadata(&w, config, snapshot);
     append_schemas(&w);
     jw_append(&w, "}");
 
     if (w.failed) {
+        unlock_snapshot_scratch(snapshot_locked);
         out[0] = '\0';
         return ESP_ERR_NO_MEM;
     }
     if (out_written) {
         *out_written = w.len;
     }
+    unlock_snapshot_scratch(snapshot_locked);
+    return ESP_OK;
+}
+
+esp_err_t node_capability_write_node_status_json(const node_config_t *config,
+                                                 char *out,
+                                                 size_t out_size,
+                                                 size_t *out_written)
+{
+    node_hardware_io_status_t status = {0};
+    const node_runtime_snapshot_t *snapshot = NULL;
+    const char *operation_mode = NULL;
+    bool snapshot_locked = false;
+    json_writer_t w = {.buf = out, .cap = out_size, .len = 0, .failed = false};
+
+    if (!config || !out || out_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    status = node_hardware_io_get_status();
+    snapshot = safe_snapshot(lock_snapshot_scratch(&snapshot_locked));
+    operation_mode = node_runtime_mode_name((node_operation_mode_t)config->operation_mode);
+
+    jw_append(&w, "{\"operation_mode\":");
+    jw_append_json_string(&w, operation_mode);
+    jw_append(&w,
+              ",\"standalone_mqtt_enabled\":%s,\"hardware\":{\"relays\":%u,\"mosfets\":%u,\"universal_inputs\":%u,"
+              "\"universal_outputs\":%u,\"led_strips\":%u},"
+              "\"rules\":{\"supported\":%s,\"enabled_by_mode\":%s,\"initialized\":%s,\"paused\":%s,"
+              "\"compile_status\":",
+              config->standalone_mqtt_enabled ? "true" : "false",
+              (unsigned)status.configured_relays,
+              (unsigned)status.configured_mosfets,
+              (unsigned)status.configured_universal_inputs,
+              (unsigned)status.configured_universal_outputs,
+              (unsigned)status.configured_led_strips,
+              node_runtime_mode_rules_enabled(config) ? "true" : "false",
+              snapshot->rules_enabled_by_mode ? "true" : "false",
+              snapshot->rules_initialized ? "true" : "false",
+              snapshot->rules_paused ? "true" : "false");
+    jw_append_json_string(&w, snapshot->compile_status);
+    jw_append(&w,
+              ",\"has_bundle\":%s,\"bundle_id\":",
+              snapshot->has_bundle ? "true" : "false");
+    jw_append_json_string(&w, snapshot->has_bundle ? snapshot->bundle_id : "");
+    jw_append(&w,
+              ",\"generation\":%lu,\"compiled_rules\":%lu,\"compiled_actions\":%lu},"
+              "\"fallback\":{\"configured\":%s,\"initialized\":%s,\"enabled\":%s,\"state\":",
+              (unsigned long)(snapshot->has_bundle ? snapshot->generation : 0U),
+              (unsigned long)snapshot->compiled_rules,
+              (unsigned long)snapshot->compiled_actions,
+              (config->operation_mode == NODE_OPERATION_MODE_FALLBACK &&
+               snapshot->fallback_timeout_ms > 0U)
+                  ? "true"
+                  : "false",
+              snapshot->fallback_initialized ? "true" : "false",
+              snapshot->fallback_enabled ? "true" : "false");
+    jw_append_json_string(&w, snapshot->fallback_state);
+    jw_append(&w,
+              ",\"wifi_ready\":%s,\"mqtt_connected\":%s,\"rules_active\":%s,"
+              "\"timeout_ms\":%lu,\"return_delay_ms\":%lu,\"return_policy\":",
+              snapshot->fallback_wifi_ready ? "true" : "false",
+              snapshot->fallback_mqtt_connected ? "true" : "false",
+              snapshot->fallback_rules_active ? "true" : "false",
+              (unsigned long)snapshot->fallback_timeout_ms,
+              (unsigned long)snapshot->fallback_return_delay_ms);
+    jw_append_json_string(&w, snapshot->fallback_return_policy);
+    jw_append(&w, "}}");
+    if (w.failed) {
+        unlock_snapshot_scratch(snapshot_locked);
+        if (out_size > 0) {
+            out[0] = '\0';
+        }
+        return ESP_ERR_NO_MEM;
+    }
+    if (out_written) {
+        *out_written = w.len;
+    }
+    unlock_snapshot_scratch(snapshot_locked);
     return ESP_OK;
 }

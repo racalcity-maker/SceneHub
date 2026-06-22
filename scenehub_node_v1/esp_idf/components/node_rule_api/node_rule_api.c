@@ -147,3 +147,39 @@ esp_err_t node_rule_api_resume(void)
 {
     return node_rule_engine_resume();
 }
+
+esp_err_t node_rule_api_dispatch_mqtt_command(const char *command_name)
+{
+    return node_rule_engine_dispatch_mqtt_command(command_name);
+}
+
+void node_rule_api_get_runtime_status(node_rule_api_runtime_status_t *out_status)
+{
+    const node_rule_compiled_bundle_t *compiled = NULL;
+    node_rule_engine_status_t runtime = {0};
+
+    if (!out_status) {
+        return;
+    }
+
+    memset(out_status, 0, sizeof(*out_status));
+    node_rule_engine_get_status(&runtime);
+    compiled = node_rule_compile_peek_active();
+
+    out_status->initialized = runtime.initialized;
+    out_status->paused = runtime.paused;
+    out_status->rules_enabled_by_mode = runtime.rules_enabled_by_mode;
+    snprintf(out_status->compile_status,
+             sizeof(out_status->compile_status),
+             "%s",
+             node_rule_compile_status_name(compiled ? compiled->status : NODE_RULE_COMPILE_STATUS_INACTIVE));
+    if (!compiled) {
+        return;
+    }
+
+    out_status->has_bundle = compiled->metadata.has_bundle;
+    out_status->generation = compiled->metadata.generation;
+    out_status->compiled_rules = compiled->rule_count;
+    out_status->compiled_actions = compiled->total_action_count;
+    snprintf(out_status->bundle_id, sizeof(out_status->bundle_id), "%s", compiled->metadata.bundle_id);
+}

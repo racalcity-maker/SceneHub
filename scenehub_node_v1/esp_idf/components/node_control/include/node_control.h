@@ -29,4 +29,4 @@ typedef struct {
 
 esp_err_t node_control_init(const node_config_t *config);
 esp_err_t node_control_update_led_config(const node_led_strip_config_t *led_strips, size_t count);
-esp_err_t node_control_execute(const node_control_command_t *command, node_control_result_t *out_result);
+esp_err_t node_control_submit(const node_control_command_t *command, node_control_result_t *out_result);

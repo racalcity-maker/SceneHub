@@ -9,4 +9,5 @@ idf_component_register(
         event_bus
         esp_timer
         freertos
+        quest_common
 )

@@ -10,11 +10,18 @@
 - `TESTING.md` - test layout and local test guidance.
 - `KNOWN_ISSUES.md` - single active backlog for open product/runtime/architecture issues.
 - `CHANGELOG.md` - durable record of completed changes worth preserving.
+- `ALPHA_RELEASE_CHECKLIST.md` - minimum alpha sign-off gate for hub and node.
+- `SUPPORT_RUNBOOK.md` - first-response guide for alpha support and triage.
+- `VERSION_COMPATIBILITY_MATRIX.md` - tested hub/node pairing rules and contract versions.
 
 ## Setup And Operations
 
 - `ROOM_SCENARIO_SETUP_RUS.md` - room scenario setup guide.
 - `QUEST_DEVICE_SETUP_RUS.md` - Quest Device setup guide.
+- `BACKUP_AND_RESTORE.md` - minimum backup/restore workflow before risky maintenance.
+- `ERROR_CODE_REFERENCE.md` - practical alpha error-code and failure-label reference.
+- `GM_NODE_V2_ADMIN_GUIDE_RUS.md` - GM workflow for compact import and standalone bundle admin.
+- `../scenehub_node_v1/docs/README.md` - index for node provisioning, rule-engine, driver and policy docs.
 
 ## Policies And Architecture
 

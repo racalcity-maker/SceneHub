@@ -273,6 +273,7 @@ Suggested initial limits:
 - max timers: `16`
 - max nested `sequence` / `choose` depth: `4`
 - max emitted local event names: `32`
+- max resource claims per exported command: `4`
 - max phase name length: `24`
 - max state keys: `32`
 

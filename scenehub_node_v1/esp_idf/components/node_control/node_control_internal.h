@@ -71,6 +71,7 @@ esp_err_t execute_output_set(node_hw_output_kind_t kind,
 esp_err_t execute_output_pulse(node_hw_output_kind_t kind,
                                const char *args_json,
                                node_control_result_t *result);
+esp_err_t execute_relay_effect(const char *args_json, node_control_result_t *result);
 esp_err_t execute_output_all_off(node_hw_output_kind_t kind,
                                  node_control_result_t *result,
                                  const char *fallback);

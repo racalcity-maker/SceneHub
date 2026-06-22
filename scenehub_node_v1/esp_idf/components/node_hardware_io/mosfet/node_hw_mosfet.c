@@ -2,6 +2,7 @@
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -11,11 +12,16 @@
 #define NODE_HW_MOSFET_PWM_FREQ_HZ 1000
 #define NODE_HW_MOSFET_FADE_TICK_US 20000ULL
 #define NODE_HW_MOSFET_EFFECT_TICK_US 20000ULL
+#define NODE_HW_MOSFET_BROKEN_ON_MIN_MS 30U
+#define NODE_HW_MOSFET_BROKEN_ON_MAX_MS 180U
+#define NODE_HW_MOSFET_BROKEN_OFF_MIN_MS 25U
+#define NODE_HW_MOSFET_BROKEN_OFF_MAX_MS 420U
 
 typedef enum {
     NODE_HW_MOSFET_EFFECT_NONE = 0,
     NODE_HW_MOSFET_EFFECT_BLINK,
     NODE_HW_MOSFET_EFFECT_BREATHE,
+    NODE_HW_MOSFET_EFFECT_BROKEN_FLUORESCENT,
 } node_hw_mosfet_effect_mode_t;
 
 typedef struct {
@@ -65,6 +71,17 @@ static SemaphoreHandle_t s_mosfet_mutex;
 static bool node_hw_mosfet_channel_valid(uint8_t channel)
 {
     return channel >= 1 && channel <= NODE_MOSFET_MAX;
+}
+
+static uint32_t node_hw_mosfet_random_range(uint32_t min_ms, uint32_t max_ms)
+{
+    uint32_t span = 0;
+
+    if (max_ms <= min_ms) {
+        return min_ms;
+    }
+    span = max_ms - min_ms + 1U;
+    return min_ms + (esp_random() % span);
 }
 
 static uint64_t node_hw_mosfet_now_ms(void)
@@ -123,6 +140,15 @@ static void node_hw_mosfet_effect_clear_locked(node_hw_mosfet_effect_t *effect)
     effect->remaining = 0;
     effect->on_phase = false;
     effect->hold_phase = false;
+}
+
+static uint32_t node_hw_mosfet_next_broken_delay_ms(bool on_phase)
+{
+    return on_phase
+               ? node_hw_mosfet_random_range(NODE_HW_MOSFET_BROKEN_ON_MIN_MS,
+                                             NODE_HW_MOSFET_BROKEN_ON_MAX_MS)
+               : node_hw_mosfet_random_range(NODE_HW_MOSFET_BROKEN_OFF_MIN_MS,
+                                             NODE_HW_MOSFET_BROKEN_OFF_MAX_MS);
 }
 
 static void node_hw_mosfet_effect_cancel_locked(uint8_t channel)
@@ -226,6 +252,17 @@ static void node_hw_mosfet_effect_timer(void *arg)
         (void)node_hw_mosfet_write_locked(channel, effect->value);
         effect->on_phase = true;
         (void)esp_timer_start_once(effect->timer, (uint64_t)effect->on_ms * 1000ULL);
+        node_hw_mosfet_unlock();
+        return;
+    }
+
+    if (effect->mode == NODE_HW_MOSFET_EFFECT_BROKEN_FLUORESCENT) {
+        uint32_t delay_ms = 0;
+
+        effect->on_phase = !effect->on_phase;
+        (void)node_hw_mosfet_write_locked(channel, effect->on_phase ? effect->value : 0);
+        delay_ms = node_hw_mosfet_next_broken_delay_ms(effect->on_phase);
+        (void)esp_timer_start_once(effect->timer, (uint64_t)delay_ms * 1000ULL);
         node_hw_mosfet_unlock();
         return;
     }
@@ -590,4 +627,48 @@ esp_err_t node_hw_mosfet_all_off(void)
     }
     node_hw_mosfet_unlock();
     return first_err;
+}
+
+esp_err_t node_hw_mosfet_broken_fluorescent(uint8_t channel, uint8_t value)
+{
+    node_hw_mosfet_t *mosfet = NULL;
+    node_hw_mosfet_effect_t *effect = NULL;
+    esp_err_t err = ESP_OK;
+    uint32_t delay_ms = 0;
+
+    if (!node_hw_mosfet_channel_valid(channel)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!node_hw_mosfet_lock(pdMS_TO_TICKS(50))) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    mosfet = &s_mosfets[channel - 1];
+    effect = &mosfet->effect;
+    if (!mosfet->configured || !effect->timer) {
+        node_hw_mosfet_unlock();
+        return mosfet->configured ? ESP_ERR_INVALID_STATE : ESP_ERR_NOT_FOUND;
+    }
+
+    err = node_hw_mosfet_stop_base_timers_locked(channel);
+    if (err != ESP_OK) {
+        node_hw_mosfet_unlock();
+        return err;
+    }
+    node_hw_mosfet_effect_clear_locked(effect);
+    effect->active = true;
+    effect->mode = NODE_HW_MOSFET_EFFECT_BROKEN_FLUORESCENT;
+    effect->value = value;
+    effect->on_phase = true;
+    err = node_hw_mosfet_write_locked(channel, value);
+    if (err == ESP_OK) {
+        delay_ms = node_hw_mosfet_next_broken_delay_ms(true);
+        err = esp_timer_start_once(effect->timer, (uint64_t)delay_ms * 1000ULL);
+    }
+    if (err != ESP_OK) {
+        node_hw_mosfet_effect_clear_locked(effect);
+        (void)node_hw_mosfet_write_locked(channel, 0);
+    }
+    node_hw_mosfet_unlock();
+    return err;
 }

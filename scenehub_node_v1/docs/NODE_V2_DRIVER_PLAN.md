@@ -13,6 +13,41 @@ predictable and firmware-owned.
 - driver commands go through validated action routing;
 - driver polling/callback work must stay bounded.
 
+## Driver Family Pattern
+
+New driver work should follow the same bounded family split that NFC now uses.
+
+Preferred layering:
+
+- `driver_registry`: bounded registered instance metadata only;
+- `<family>_contract`: validates logical config and freezes public ids/events;
+- `<family>_config_api`: narrow config/storage facade for provisioning/admin;
+- `<family>_api`: narrow runtime/admin status/control facade;
+- concrete firmware adapter hidden behind the family owner.
+
+Examples:
+
+- NFC:
+  - `node_driver_nfc_contract`
+  - `node_driver_nfc_config_api`
+  - `node_driver_nfc_api`
+  - concrete adapter: `pn532`
+- planned audio:
+  - `node_driver_audio_contract`
+  - `node_driver_audio_config_api`
+  - `node_driver_audio_api`
+  - first concrete adapter: `dfplayer_mini`
+- planned distance sensor:
+  - `node_driver_sensor_contract`
+  - `node_driver_sensor_config_api`
+  - `node_driver_sensor_api`
+  - first concrete adapter: `hcsr04`
+
+Do not introduce one giant generic `node_driver_api` or `node_driver_runtime`
+that knows every concrete device. Provisioning, MQTT, capability export and
+admin flows should depend on narrow family facades, not on chip-specific owner
+headers.
+
 ## First Driver Goal
 
 The first real driver expansion target should be a minimal RFID/NFC reader.
@@ -221,6 +256,151 @@ The first implementation should keep bus support limited:
 - add UART/SPI only if a real board profile requires it.
 
 Do not design a large generic bus abstraction before the first reader works.
+
+## Next Driver Slices
+
+After NFC, the next useful product slices are:
+
+1. audio player family, first concrete adapter `dfplayer_mini`;
+2. sensor family, first concrete adapter `hcsr04`.
+
+These should reuse the NFC family pattern instead of creating special one-off
+driver surfaces.
+
+## Planned Audio Family
+
+Logical family:
+
+- `audio_player`
+
+First concrete implementation:
+
+- `dfplayer_mini`
+
+Why this slice is next:
+
+- high quest-room value;
+- simple bounded command surface;
+- deterministic UART-based owner model;
+- useful both from SceneHub and local bundles.
+
+Preferred instance shape:
+
+```json
+{
+  "id": "player_1",
+  "type": "audio_player",
+  "driver": "dfplayer_mini",
+  "bus": "uart_1",
+  "config": {
+    "baud": 9600,
+    "volume": 22
+  }
+}
+```
+
+Initial outward command set:
+
+- `audio.play`
+- `audio.stop`
+- `audio.pause`
+- `audio.resume`
+- `audio.set_volume`
+
+Optional later commands:
+
+- `audio.play_folder_track`
+- `audio.set_eq`
+- `audio.reinit`
+
+Initial outward events:
+
+- `player_1_started`
+- `player_1_finished`
+- `player_1_error`
+
+Suggested payload fields:
+
+- `source_id`
+- `track`
+- `folder` (optional)
+- `error_code` (optional)
+
+Runtime and ownership rules:
+
+- UART protocol state belongs to the audio runtime owner;
+- command execution must go through a bounded queue, not direct UART writes
+  from MQTT/provisioning/admin;
+- optional BUSY-pin integration may improve state detection, but it must remain
+  adapter-local;
+- outward status should use bounded state:
+  `health=ok|degraded|error|disabled`,
+  `state=idle|playing|paused|offline|disabled`,
+  plus compact `error_code`.
+
+The public logical contract should remain audio-oriented. Do not expose raw
+DFPlayer packet details or chip-specific transport behavior to SceneHub or to
+rule authors.
+
+## Planned Distance-Sensor Family
+
+Logical family:
+
+- `distance_sensor`
+
+First concrete implementation:
+
+- `hcsr04`
+
+This slice should be event-oriented, not stream-oriented.
+
+Preferred instance shape:
+
+```json
+{
+  "id": "sensor_1",
+  "type": "distance_sensor",
+  "driver": "hcsr04",
+  "bus": "gpio_pair",
+  "config": {
+    "poll_interval_ms": 100,
+    "near_threshold_mm": 400,
+    "far_threshold_mm": 700,
+    "hysteresis_mm": 40,
+    "stable_samples": 3,
+    "timeout_ms": 30
+  }
+}
+```
+
+Preferred first outward events:
+
+- `sensor_1_near_enter`
+- `sensor_1_near_exit`
+- `sensor_1_far_enter`
+- `sensor_1_error`
+
+Optional payload fields:
+
+- `source_id`
+- `distance_mm`
+- `error_code`
+
+Why this event model is preferred:
+
+- quest logic usually cares about threshold/state transitions, not raw sample
+  streams;
+- MQTT and rule traffic stay bounded;
+- the engine does not need high-rate scalar sampling semantics;
+- filtering, hysteresis and debouncing stay inside the driver owner.
+
+Runtime and ownership rules:
+
+- raw sampling, filtering and hysteresis belong to the sensor runtime owner;
+- SceneHub and rules should react to logical state transitions first;
+- do not publish continuous distance streams as the main contract;
+- a later admin/diag sample command is acceptable, but it must stay outside
+  the normal scenario/event path.
 
 ## Driver Rollout Phases
 

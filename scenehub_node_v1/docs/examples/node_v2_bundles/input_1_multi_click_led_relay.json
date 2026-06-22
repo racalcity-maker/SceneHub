@@ -1,0 +1,409 @@
+{
+  "version": 2,
+  "bundle_id": "input_1_multi_click_led_relay",
+  "generation": 2,
+  "mode": "standalone",
+  "exports": {
+    "commands": [],
+    "events": [
+      {
+        "id": "input_1_single_click",
+        "label": "Input 1 Single Click"
+      },
+      {
+        "id": "input_1_double_click",
+        "label": "Input 1 Double Click"
+      },
+      {
+        "id": "input_1_triple_click",
+        "label": "Input 1 Triple Click"
+      },
+      {
+        "id": "input_1_quad_click",
+        "label": "Input 1 Quad Click"
+      }
+    ]
+  },
+  "emits": [
+    "input_1_single_click",
+    "input_1_double_click",
+    "input_1_triple_click",
+    "input_1_quad_click"
+  ],
+  "limits": {
+    "max_action_ms": 50,
+    "max_parallel_timers": 1
+  },
+  "initial_phase": "idle",
+  "initial_state": {},
+  "rules": [
+    {
+      "id": "boot_init",
+      "enabled": true,
+      "trigger": {
+        "kind": "boot"
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "click_window"
+        },
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "relay.set",
+          "args": {
+            "output": "relay_1",
+            "on": false
+          }
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "rainbow_cycle"
+          }
+        }
+      ]
+    },
+    {
+      "id": "press_1",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 1
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "idle"
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "click_window"
+        },
+        {
+          "kind": "set_phase",
+          "phase": "press_1"
+        }
+      ]
+    },
+    {
+      "id": "release_1",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 0
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "press_1"
+      },
+      "actions": [
+        {
+          "kind": "start_timer",
+          "timer": "click_window",
+          "mode": "oneshot",
+          "duration_ms": 700
+        },
+        {
+          "kind": "set_phase",
+          "phase": "click_1_wait"
+        }
+      ]
+    },
+    {
+      "id": "press_2",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 1
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "click_1_wait"
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "click_window"
+        },
+        {
+          "kind": "set_phase",
+          "phase": "press_2"
+        }
+      ]
+    },
+    {
+      "id": "release_2",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 0
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "press_2"
+      },
+      "actions": [
+        {
+          "kind": "start_timer",
+          "timer": "click_window",
+          "mode": "oneshot",
+          "duration_ms": 700
+        },
+        {
+          "kind": "set_phase",
+          "phase": "click_2_wait"
+        }
+      ]
+    },
+    {
+      "id": "press_3",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 1
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "click_2_wait"
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "click_window"
+        },
+        {
+          "kind": "set_phase",
+          "phase": "press_3"
+        }
+      ]
+    },
+    {
+      "id": "release_3",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 0
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "press_3"
+      },
+      "actions": [
+        {
+          "kind": "start_timer",
+          "timer": "click_window",
+          "mode": "oneshot",
+          "duration_ms": 700
+        },
+        {
+          "kind": "set_phase",
+          "phase": "click_3_wait"
+        }
+      ]
+    },
+    {
+      "id": "press_4",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 1
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "click_3_wait"
+      },
+      "actions": [
+        {
+          "kind": "cancel_timer",
+          "timer": "click_window"
+        },
+        {
+          "kind": "set_phase",
+          "phase": "press_4"
+        }
+      ]
+    },
+    {
+      "id": "release_4_finalize",
+      "enabled": true,
+      "trigger": {
+        "kind": "input_edge",
+        "input": "input_1",
+        "to": 0
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "press_4"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "led.off",
+          "args": {
+            "output": "strip_1"
+          }
+        },
+        {
+          "kind": "command",
+          "command": "relay.set",
+          "args": {
+            "output": "relay_1",
+            "on": true
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "input_1_quad_click",
+          "args": {
+            "input": 1,
+            "clicks": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "single_click_finalize",
+      "enabled": true,
+      "trigger": {
+        "kind": "timer",
+        "timer": "click_window"
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "click_1_wait"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "relay.set",
+          "args": {
+            "output": "relay_1",
+            "on": false
+          }
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "twinkle_random"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "input_1_single_click",
+          "args": {
+            "input": 1,
+            "clicks": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "double_click_finalize",
+      "enabled": true,
+      "trigger": {
+        "kind": "timer",
+        "timer": "click_window"
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "click_2_wait"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "relay.set",
+          "args": {
+            "output": "relay_1",
+            "on": false
+          }
+        },
+        {
+          "kind": "command",
+          "command": "led.effect",
+          "args": {
+            "output": "strip_1",
+            "effect": "fire_flicker"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "input_1_double_click",
+          "args": {
+            "input": 1,
+            "clicks": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "triple_click_finalize",
+      "enabled": true,
+      "trigger": {
+        "kind": "timer",
+        "timer": "click_window"
+      },
+      "conditions": {
+        "kind": "phase_is",
+        "phase": "click_3_wait"
+      },
+      "actions": [
+        {
+          "kind": "set_phase",
+          "phase": "idle"
+        },
+        {
+          "kind": "command",
+          "command": "relay.set",
+          "args": {
+            "output": "relay_1",
+            "on": false
+          }
+        },
+        {
+          "kind": "command",
+          "command": "led.breathe",
+          "args": {
+            "output": "strip_1",
+            "color": "#00aaff"
+          }
+        },
+        {
+          "kind": "emit_event",
+          "event": "input_1_triple_click",
+          "args": {
+            "input": 1,
+            "clicks": 3
+          }
+        }
+      ]
+    }
+  ]
+}

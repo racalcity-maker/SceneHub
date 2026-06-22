@@ -17,7 +17,7 @@
 #define NODE_MQTT_REQUEST_ID_MAX 48
 #define NODE_MQTT_COMMAND_MAX 64
 #define NODE_MQTT_ARGS_MAX 1024
-#define NODE_MQTT_ADMIN_ARGS_MAX (NODE_RULE_BUNDLE_MAX_LEN + 256)
+#define NODE_MQTT_ADMIN_ARGS_MAX (NODE_RULE_BUNDLE_MQTT_MAX_LEN + 256)
 #define NODE_MQTT_DUP_CACHE_SIZE 4
 #define NODE_MQTT_COMMAND_QUEUE_LEN 4
 #define NODE_MQTT_ADMIN_QUEUE_LEN 1
@@ -82,6 +82,14 @@ esp_err_t node_mqtt_publish_result_fields_reliable(const char *request_id,
                                                    const char *status,
                                                    const char *error_code,
                                                    const char *data_json);
+esp_err_t node_mqtt_publish_describe_interface_result_locked(const char *request_id,
+                                                             const char *status,
+                                                             const char *error_code,
+                                                             const node_config_t *config);
+esp_err_t node_mqtt_publish_describe_interface_result_reliable(const char *request_id,
+                                                               const char *status,
+                                                               const char *error_code,
+                                                               const node_config_t *config);
 esp_err_t node_mqtt_publish_result_locked(const char *request_id,
                                           const char *command,
                                           const node_control_result_t *result);

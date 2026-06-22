@@ -82,6 +82,13 @@ If a bundle exceeds limits, reject it before activation.
   `node.rules.get` bundle reads must use owner-held transient scratch/cache
   storage instead of widening ordinary per-device steady-state DTO/result
   slots.
+- Read-side runtime projection such as `runtime_snapshot` must use owner-held
+  bounded storage and copied DTO data, not pointers into mutable runtime-owner
+  tables.
+- When a serializer needs a wide runtime view, capture into caller-owned or
+  owner-held scratch DTO storage first, then render from that copy under a
+  normal bounded lock scope. Do not keep borrowed live snapshot pointers across
+  long JSON serialization.
 - Do not store parser object pointers after validation.
 - Do not run rules from raw JSON trees.
 - Generate heartbeat/status/result/event JSON into bounded output buffers.
@@ -114,6 +121,10 @@ If PSRAM is available:
 - use it for rule bundle storage and compiled tables;
 - use it for large static admin/config/editor scratch before consuming internal
   RAM;
+- use it for owner-held wide read-model caches such as runtime/admin snapshot
+  buffers before consuming internal RAM;
+- use it for wide admin/status DTO scratch that exists only to keep `main`,
+  `httpd` or transport task stacks small;
 - keep an explicit internal-RAM/static fallback for targets or code paths where
   PSRAM is not present or not appropriate;
 - do not use it for DMA buffers;

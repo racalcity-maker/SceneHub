@@ -59,6 +59,7 @@ esp_err_t node_hardware_io_init(const node_config_t *config);
 esp_err_t node_hardware_io_set_output(node_hw_output_kind_t kind, uint8_t channel, bool on);
 esp_err_t node_hardware_io_pulse_output(node_hw_output_kind_t kind, uint8_t channel, uint32_t duration_ms);
 esp_err_t node_hardware_io_all_off(node_hw_output_kind_t kind);
+esp_err_t node_hardware_io_relay_broken_fluorescent(uint8_t channel);
 esp_err_t node_hardware_io_mosfet_set(uint8_t channel, uint8_t value);
 esp_err_t node_hardware_io_mosfet_fade(uint8_t channel, uint8_t target, uint32_t duration_ms);
 esp_err_t node_hardware_io_mosfet_pulse(uint8_t channel, uint8_t value, uint32_t duration_ms);
@@ -75,6 +76,7 @@ esp_err_t node_hardware_io_mosfet_breathe(uint8_t channel,
                                           uint32_t hold_ms,
                                           uint32_t count,
                                           uint8_t final_value);
+esp_err_t node_hardware_io_mosfet_broken_fluorescent(uint8_t channel, uint8_t value);
 esp_err_t node_hardware_io_mosfet_all_off(void);
 esp_err_t node_hardware_io_led_all_off(void);
 esp_err_t node_hardware_io_led_off(uint8_t strip);

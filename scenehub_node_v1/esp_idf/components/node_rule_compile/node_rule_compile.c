@@ -8,6 +8,7 @@
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
+#include "node_json.h"
 #include "node_rule_schema.h"
 #include "node_rule_store.h"
 #include "node_runtime_mode.h"
@@ -221,85 +222,13 @@ static bool append_jsonf(char *buf, size_t cap, size_t *len, const char *fmt, ..
     return true;
 }
 
-static bool json_escape_text(const char *src, char *out, size_t out_size)
-{
-    size_t len = 0;
-    const unsigned char *p = (const unsigned char *)(src ? src : "");
-
-    if (!out || out_size == 0) {
-        return false;
-    }
-
-    while (*p) {
-        const char *chunk = NULL;
-        char escaped[7] = {0};
-        size_t chunk_len = 0;
-
-        switch (*p) {
-        case '\"':
-            chunk = "\\\"";
-            chunk_len = 2;
-            break;
-        case '\\':
-            chunk = "\\\\";
-            chunk_len = 2;
-            break;
-        case '\b':
-            chunk = "\\b";
-            chunk_len = 2;
-            break;
-        case '\f':
-            chunk = "\\f";
-            chunk_len = 2;
-            break;
-        case '\n':
-            chunk = "\\n";
-            chunk_len = 2;
-            break;
-        case '\r':
-            chunk = "\\r";
-            chunk_len = 2;
-            break;
-        case '\t':
-            chunk = "\\t";
-            chunk_len = 2;
-            break;
-        default:
-            if (*p < 0x20) {
-                snprintf(escaped, sizeof(escaped), "\\u%04x", (unsigned)*p);
-                chunk = escaped;
-                chunk_len = 6;
-            }
-            break;
-        }
-
-        if (!chunk) {
-            if (len + 1 >= out_size) {
-                out[0] = '\0';
-                return false;
-            }
-            out[len++] = (char)*p++;
-            continue;
-        }
-        if (len + chunk_len >= out_size) {
-            out[0] = '\0';
-            return false;
-        }
-        memcpy(out + len, chunk, chunk_len);
-        len += chunk_len;
-        ++p;
-    }
-
-    out[len] = '\0';
-    return true;
-}
-
 static bool build_emit_args_json(const cJSON *args, char *out_json, size_t out_json_size)
 {
     size_t len = 0;
     cJSON *item = NULL;
     bool first = true;
-    char escaped[96];
+    char escaped_key[96];
+    char escaped_value[96];
 
     if (!out_json || out_json_size == 0) {
         return false;
@@ -315,7 +244,7 @@ static bool build_emit_args_json(const cJSON *args, char *out_json, size_t out_j
         return false;
     }
     cJSON_ArrayForEach(item, (cJSON *)args) {
-        if (!item->string) {
+        if (!item->string || !node_json_escape_string(escaped_key, sizeof(escaped_key), item->string)) {
             return false;
         }
         if (cJSON_IsBool(item)) {
@@ -324,7 +253,7 @@ static bool build_emit_args_json(const cJSON *args, char *out_json, size_t out_j
                               &len,
                               "%s\"%s\":%s",
                               first ? "" : ",",
-                              item->string,
+                              escaped_key,
                               cJSON_IsTrue(item) ? "true" : "false")) {
                 return false;
             }
@@ -334,19 +263,19 @@ static bool build_emit_args_json(const cJSON *args, char *out_json, size_t out_j
                               &len,
                               "%s\"%s\":%ld",
                               first ? "" : ",",
-                              item->string,
+                              escaped_key,
                               (long)item->valuedouble)) {
                 return false;
             }
         } else if (cJSON_IsString(item) && item->valuestring) {
-            if (!json_escape_text(item->valuestring, escaped, sizeof(escaped)) ||
+            if (!node_json_escape_string(escaped_value, sizeof(escaped_value), item->valuestring) ||
                 !append_jsonf(out_json,
                               out_json_size,
                               &len,
                               "%s\"%s\":\"%s\"",
                               first ? "" : ",",
-                              item->string,
-                              escaped)) {
+                              escaped_key,
+                              escaped_value)) {
                 return false;
             }
         } else {

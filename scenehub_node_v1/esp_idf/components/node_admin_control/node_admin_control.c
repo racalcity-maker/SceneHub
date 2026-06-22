@@ -11,7 +11,9 @@
 #include "freertos/task.h"
 #include "node_board.h"
 #include "node_control.h"
-#include "node_driver_nfc_reader_runtime.h"
+#include "node_driver_nfc_api.h"
+#include "node_driver_nfc_config_api.h"
+#include "node_driver_nfc_contract.h"
 #include "node_rule_api.h"
 #include "sdkconfig.h"
 
@@ -242,7 +244,7 @@ static esp_err_t handle_save_nfc_cards(const node_admin_request_t *request)
     }
 
     memset(&s_nfc_reader_scratch, 0, sizeof(s_nfc_reader_scratch));
-    err = node_driver_nfc_reader_load_factory_config(&s_config_scratch, &s_nfc_reader_scratch);
+    err = node_driver_nfc_config_api_load_factory_config(&s_config_scratch, &s_nfc_reader_scratch);
     if (err != ESP_OK) {
         return err;
     }
@@ -251,16 +253,16 @@ static esp_err_t handle_save_nfc_cards(const node_admin_request_t *request)
     for (size_t i = 0; i < request->nfc_card_count; ++i) {
         s_nfc_reader_scratch.known_cards[i] = request->nfc_cards[i];
     }
-    err = node_driver_nfc_reader_validate_config(&s_nfc_reader_scratch, NULL);
+    err = node_driver_nfc_contract_validate_config(&s_nfc_reader_scratch, NULL);
     if (err != ESP_OK) {
         return err;
     }
-    err = node_driver_nfc_reader_save_known_cards(s_nfc_reader_scratch.known_cards,
-                                                  s_nfc_reader_scratch.known_card_count);
+    err = node_driver_nfc_config_api_save_known_cards(s_nfc_reader_scratch.known_cards,
+                                                      s_nfc_reader_scratch.known_card_count);
     if (err != ESP_OK) {
         return err;
     }
-    return node_driver_nfc_reader_runtime_reload(&s_config_scratch);
+    return node_driver_nfc_api_reload(&s_config_scratch);
 }
 
 static esp_err_t handle_reset_wifi(void)
@@ -374,7 +376,7 @@ static esp_err_t handle_resume_rules(void)
 
 static esp_err_t handle_reinit_nfc(void)
 {
-    return node_driver_nfc_reader_runtime_reinit();
+    return node_driver_nfc_api_reinit();
 }
 
 static void node_admin_task(void *arg)
@@ -421,9 +423,13 @@ static void node_admin_task(void *arg)
             break;
         case NODE_ADMIN_REQ_APPLY_RULES:
             err = handle_apply_rules(&request);
+            applied = err == ESP_OK;
+            restart_required = err == ESP_OK;
             break;
         case NODE_ADMIN_REQ_CLEAR_RULES:
             err = handle_clear_rules();
+            applied = err == ESP_OK;
+            restart_required = err == ESP_OK;
             break;
         case NODE_ADMIN_REQ_PAUSE_RULES:
             err = handle_pause_rules();

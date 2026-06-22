@@ -8,7 +8,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "node_admin_control.h"
-#include "node_rule_engine.h"
+#include "node_runtime_snapshot.h"
 #include "node_runtime_mode.h"
 #include "sdkconfig.h"
 
@@ -16,6 +16,7 @@ static const char *TAG = "node_mqtt_command";
 static node_control_result_t s_result;
 static node_control_result_t *s_admin_result;
 static node_rule_store_entry_t *s_rule_entry;
+static node_runtime_snapshot_t *s_runtime_snapshot;
 
 static void *alloc_admin_buffer(size_t size)
 {
@@ -46,7 +47,10 @@ static bool ensure_admin_scratch(void)
     if (!s_rule_entry) {
         s_rule_entry = (node_rule_store_entry_t *)alloc_admin_buffer(sizeof(*s_rule_entry));
     }
-    return s_admin_result && s_rule_entry;
+    if (!s_runtime_snapshot) {
+        s_runtime_snapshot = (node_runtime_snapshot_t *)alloc_admin_buffer(sizeof(*s_runtime_snapshot));
+    }
+    return s_admin_result && s_rule_entry && s_runtime_snapshot;
 }
 
 static void write_text(char *dst, size_t dst_size, const char *src)
@@ -90,6 +94,11 @@ static void result_rejected_local(node_control_result_t *result, const char *cod
     }
     write_text(result->status, sizeof(result->status), "rejected");
     write_text(result->error_code, sizeof(result->error_code), code);
+}
+
+static bool mqtt_rule_bundle_exceeds_admin_budget(const char *raw_json)
+{
+    return raw_json && strlen(raw_json) > NODE_RULE_BUNDLE_MQTT_MAX_LEN;
 }
 
 static bool json_append(char *buf, size_t cap, size_t *len, const char *fmt, ...)
@@ -151,18 +160,21 @@ static void build_metadata_only_result(node_control_result_t *result,
 
 static void build_get_rules_result(node_control_result_t *result, const node_rule_store_entry_t *entry)
 {
-    node_rule_engine_status_t runtime = {0};
+    const node_runtime_snapshot_t *snapshot = s_runtime_snapshot;
     size_t len = 0;
 
     clear_result(result);
-    node_rule_engine_get_status(&runtime);
+    if (!snapshot || node_runtime_snapshot_capture(s_runtime_snapshot) != ESP_OK) {
+        result_failed_local(result, "internal_error");
+        return;
+    }
     if (!json_append(result->data_json, sizeof(result->data_json), &len, "{") ||
         !append_metadata_json(result->data_json, sizeof(result->data_json), &len, entry ? &entry->metadata : NULL) ||
         !json_append(result->data_json,
                      sizeof(result->data_json),
                      &len,
                      ",\"paused\":%s,\"bundle\":",
-                     runtime.paused ? "true" : "false")) {
+                     snapshot->rules_paused ? "true" : "false")) {
         result_failed_local(result, "internal_error");
         return;
     }
@@ -286,6 +298,10 @@ static void process_rule_admin_validate(const node_mqtt_admin_message_t *message
     node_rule_bundle_metadata_t metadata = {0};
     node_admin_control_result_t admin_result = {0};
     char error_code[NODE_RULE_API_ERROR_MAX_LEN] = {0};
+    if (mqtt_rule_bundle_exceeds_admin_budget(message->args_json)) {
+        result_rejected_local(result, "bundle_too_large_for_mqtt_admin");
+        return;
+    }
     esp_err_t err = node_admin_control_validate_rules(message->args_json,
                                                       &metadata,
                                                       error_code,
@@ -304,6 +320,10 @@ static void process_rule_admin_apply(const node_mqtt_admin_message_t *message, n
     node_rule_bundle_metadata_t metadata = {0};
     node_admin_control_result_t admin_result = {0};
     char error_code[NODE_RULE_API_ERROR_MAX_LEN] = {0};
+    if (mqtt_rule_bundle_exceeds_admin_budget(message->args_json)) {
+        result_rejected_local(result, "bundle_too_large_for_mqtt_admin");
+        return;
+    }
     esp_err_t err = node_admin_control_apply_rules(message->args_json,
                                                    &metadata,
                                                    error_code,
@@ -330,6 +350,10 @@ static void process_rule_admin_get(node_control_result_t *result)
 
     if (err != ESP_OK) {
         map_admin_error(result, err, "internal_error");
+        return;
+    }
+    if (s_rule_entry->metadata.raw_size > NODE_RULE_BUNDLE_MQTT_MAX_LEN) {
+        result_rejected_local(result, "bundle_too_large_for_mqtt_admin");
         return;
     }
     build_get_rules_result(result, s_rule_entry);
@@ -468,13 +492,38 @@ void node_mqtt_process_command_message(const node_mqtt_command_message_t *messag
         return;
     }
 
+    if (strcmp(message->command, "describe_interface") == 0) {
+        clear_result(&s_result);
+        if (node_mqtt_publish_describe_interface_result_reliable(message->request_id,
+                                                                 "done",
+                                                                 "",
+                                                                 &g_node_mqtt_config) == ESP_OK) {
+            result_done_local(&s_result);
+            if (node_mqtt_publish_lock(portMAX_DELAY)) {
+                node_mqtt_publish_status_locked();
+                node_mqtt_publish_unlock();
+            }
+        } else {
+            result_failed_local(&s_result, "internal_error");
+            if (node_mqtt_publish_result_fields_reliable(message->request_id,
+                                                         message->command,
+                                                         s_result.status,
+                                                         s_result.error_code,
+                                                         NULL) != ESP_OK) {
+                ESP_LOGW(TAG, "failed to publish describe_interface failure for %s", message->request_id);
+            }
+        }
+        node_mqtt_duplicate_remember(message->request_id, message->command, &s_result);
+        return;
+    }
+
     node_control_command_t control = {
         .request_id = message->request_id,
         .command = message->command,
         .args_json = message->args_json,
         .source = NODE_CONTROL_SOURCE_HUB,
     };
-    (void)node_control_execute(&control, &s_result);
+    (void)node_control_submit(&control, &s_result);
 
     if (node_mqtt_publish_result_reliable(message->request_id, message->command, &s_result) == ESP_OK) {
         if (node_mqtt_publish_lock(portMAX_DELAY)) {

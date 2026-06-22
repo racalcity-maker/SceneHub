@@ -2,10 +2,12 @@
 
 #include <string.h>
 
+#include "node_fallback_policy.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "node_rule_engine.h"
 
@@ -37,15 +39,20 @@ static TaskHandle_t s_task_handle;
 static StaticQueue_t s_queue_storage;
 static uint8_t s_queue_buffer[NODE_FALLBACK_QUEUE_LEN * sizeof(node_fallback_request_t)];
 static QueueHandle_t s_queue;
+static StaticSemaphore_t s_status_lock_storage;
+static SemaphoreHandle_t s_status_lock;
+
+static bool ensure_status_lock(void)
+{
+    if (!s_status_lock) {
+        s_status_lock = xSemaphoreCreateMutexStatic(&s_status_lock_storage);
+    }
+    return s_status_lock != NULL;
+}
 
 static uint32_t now_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
-}
-
-static bool time_reached(uint32_t now, uint32_t deadline)
-{
-    return (int32_t)(now - deadline) >= 0;
 }
 
 const char *node_fallback_runtime_state_name(node_fallback_runtime_state_t state)
@@ -74,11 +81,6 @@ const char *node_fallback_runtime_return_policy_name(node_fallback_runtime_retur
     }
 }
 
-static bool hub_available(void)
-{
-    return s_status.wifi_ready && s_status.mqtt_connected;
-}
-
 static void set_state(node_fallback_runtime_state_t state, uint32_t deadline_ms)
 {
     s_status.state = state;
@@ -93,123 +95,90 @@ static void set_state(node_fallback_runtime_state_t state, uint32_t deadline_ms)
              (unsigned long)deadline_ms);
 }
 
-static void pause_fallback_rules(void)
+static esp_err_t pause_fallback_rules_unlocked(void)
 {
     esp_err_t err = ESP_OK;
-
-    if (!s_status.fallback_rules_active) {
-        return;
-    }
 
     err = node_rule_engine_pause();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "fallback exit pause failed: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
     err = node_rule_engine_set_runtime_enabled(false);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "fallback exit disable failed: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
 
-    s_status.fallback_rules_active = false;
     ESP_LOGI(TAG, "fallback rules paused");
+    return ESP_OK;
 }
 
-static void resume_fallback_rules(void)
+static esp_err_t resume_fallback_rules_unlocked(void)
 {
     esp_err_t err = ESP_OK;
-
-    if (s_status.fallback_rules_active) {
-        return;
-    }
 
     err = node_rule_engine_set_runtime_enabled(true);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "fallback entry enable failed: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
 
     err = node_rule_engine_reset();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "fallback entry reset failed: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
 
     err = node_rule_engine_resume();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "fallback entry resume failed: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
 
-    s_status.fallback_rules_active = true;
     ESP_LOGI(TAG, "fallback rules resumed");
+    return ESP_OK;
 }
 
-static void evaluate_state(void)
+static node_fallback_policy_transition_t evaluate_state_locked(void)
 {
-    uint32_t now = now_ms();
-    bool available = hub_available();
+    node_fallback_policy_transition_t transition = {0};
 
-    if (!s_status.enabled) {
-        pause_fallback_rules();
-        if (s_status.state != NODE_FALLBACK_RUNTIME_STATE_HUB_PRIMARY) {
-            set_state(NODE_FALLBACK_RUNTIME_STATE_HUB_PRIMARY, 0);
-        }
+    node_fallback_policy_evaluate(&s_status, now_ms(), &transition);
+    return transition;
+}
+
+static esp_err_t perform_transition_action_unlocked(node_fallback_policy_action_t action)
+{
+    switch (action) {
+    case NODE_FALLBACK_POLICY_ACTION_ENTER_FALLBACK:
+        return resume_fallback_rules_unlocked();
+    case NODE_FALLBACK_POLICY_ACTION_EXIT_FALLBACK:
+        return pause_fallback_rules_unlocked();
+    case NODE_FALLBACK_POLICY_ACTION_NONE:
+    default:
+        return ESP_OK;
+    }
+}
+
+static void finalize_transition_locked(const node_fallback_policy_transition_t *transition,
+                                       esp_err_t action_err)
+{
+    if (!transition) {
+        return;
+    }
+    if (transition->action != NODE_FALLBACK_POLICY_ACTION_NONE && action_err != ESP_OK) {
         return;
     }
 
-    switch (s_status.state) {
-    case NODE_FALLBACK_RUNTIME_STATE_HUB_PRIMARY:
-        if (!available) {
-            if (s_status.fallback_timeout_ms == 0) {
-                return;
-            }
-            set_state(NODE_FALLBACK_RUNTIME_STATE_HUB_OFFLINE_PENDING,
-                      now + s_status.fallback_timeout_ms);
-        }
-        break;
+    if (transition->action == NODE_FALLBACK_POLICY_ACTION_ENTER_FALLBACK) {
+        s_status.fallback_rules_active = true;
+    } else if (transition->action == NODE_FALLBACK_POLICY_ACTION_EXIT_FALLBACK) {
+        s_status.fallback_rules_active = false;
+    }
 
-    case NODE_FALLBACK_RUNTIME_STATE_HUB_OFFLINE_PENDING:
-        if (available) {
-            set_state(NODE_FALLBACK_RUNTIME_STATE_HUB_PRIMARY, 0);
-            break;
-        }
-        if (time_reached(now, s_status.deadline_ms)) {
-            resume_fallback_rules();
-            set_state(NODE_FALLBACK_RUNTIME_STATE_FALLBACK_ACTIVE, 0);
-        }
-        break;
-
-    case NODE_FALLBACK_RUNTIME_STATE_FALLBACK_ACTIVE:
-        if (available) {
-            if (s_status.return_policy == NODE_FALLBACK_RETURN_POLICY_MANUAL_STAY_ACTIVE) {
-                break;
-            }
-            if (s_status.fallback_return_delay_ms == 0) {
-                pause_fallback_rules();
-                set_state(NODE_FALLBACK_RUNTIME_STATE_HUB_PRIMARY, 0);
-                break;
-            }
-            set_state(NODE_FALLBACK_RUNTIME_STATE_HUB_RETURN_PENDING,
-                      now + s_status.fallback_return_delay_ms);
-        }
-        break;
-
-    case NODE_FALLBACK_RUNTIME_STATE_HUB_RETURN_PENDING:
-        if (!available) {
-            set_state(NODE_FALLBACK_RUNTIME_STATE_FALLBACK_ACTIVE, 0);
-            break;
-        }
-        if (time_reached(now, s_status.deadline_ms)) {
-            pause_fallback_rules();
-            set_state(NODE_FALLBACK_RUNTIME_STATE_HUB_PRIMARY, 0);
-        }
-        break;
-
-    default:
-        set_state(NODE_FALLBACK_RUNTIME_STATE_HUB_PRIMARY, 0);
-        break;
+    if (transition->state_changed) {
+        set_state(transition->next_state, transition->next_deadline_ms);
     }
 }
 
@@ -226,7 +195,6 @@ static void apply_config(const node_fallback_runtime_config_t *config)
     s_status.fallback_timeout_ms = config->fallback_timeout_ms;
     s_status.fallback_return_delay_ms = config->fallback_return_delay_ms;
     s_status.return_policy = config->return_policy;
-    evaluate_state();
 }
 
 static void handle_request(const node_fallback_request_t *request)
@@ -241,11 +209,9 @@ static void handle_request(const node_fallback_request_t *request)
         break;
     case NODE_FALLBACK_REQ_WIFI_STATE:
         s_status.wifi_ready = request->connected;
-        evaluate_state();
         break;
     case NODE_FALLBACK_REQ_MQTT_STATE:
         s_status.mqtt_connected = request->connected;
-        evaluate_state();
         break;
     default:
         break;
@@ -258,14 +224,32 @@ static void fallback_task(void *arg)
 
     while (true) {
         node_fallback_request_t request = {0};
+        node_fallback_policy_transition_t transition = {0};
+        esp_err_t action_err = ESP_OK;
 
         if (xQueueReceive(s_queue, &request, pdMS_TO_TICKS(NODE_FALLBACK_TICK_MS)) == pdTRUE) {
+            if (!ensure_status_lock()) {
+                continue;
+            }
+            xSemaphoreTake(s_status_lock, portMAX_DELAY);
             handle_request(&request);
             while (xQueueReceive(s_queue, &request, 0) == pdTRUE) {
                 handle_request(&request);
             }
+            xSemaphoreGive(s_status_lock);
         }
-        evaluate_state();
+        if (!ensure_status_lock()) {
+            continue;
+        }
+        xSemaphoreTake(s_status_lock, portMAX_DELAY);
+        transition = evaluate_state_locked();
+        xSemaphoreGive(s_status_lock);
+
+        action_err = perform_transition_action_unlocked(transition.action);
+
+        xSemaphoreTake(s_status_lock, portMAX_DELAY);
+        finalize_transition_locked(&transition, action_err);
+        xSemaphoreGive(s_status_lock);
     }
 }
 
@@ -316,14 +300,16 @@ esp_err_t node_fallback_runtime_init(void)
     if (s_initialized) {
         return ESP_OK;
     }
-    if (!ensure_queue() || !ensure_task()) {
+    if (!ensure_queue() || !ensure_status_lock() || !ensure_task()) {
         return ESP_ERR_NO_MEM;
     }
 
+    xSemaphoreTake(s_status_lock, portMAX_DELAY);
     memset(&s_status, 0, sizeof(s_status));
     s_initialized = true;
     s_status.initialized = true;
     apply_config(&disabled);
+    xSemaphoreGive(s_status_lock);
     return ESP_OK;
 }
 
@@ -368,5 +354,11 @@ void node_fallback_runtime_get_status(node_fallback_runtime_status_t *out_status
     if (!out_status) {
         return;
     }
+    if (!ensure_status_lock()) {
+        memset(out_status, 0, sizeof(*out_status));
+        return;
+    }
+    xSemaphoreTake(s_status_lock, portMAX_DELAY);
     *out_status = s_status;
+    xSemaphoreGive(s_status_lock);
 }

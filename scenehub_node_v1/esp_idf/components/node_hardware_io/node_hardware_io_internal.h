@@ -38,6 +38,7 @@ esp_err_t node_hw_mosfet_init(const node_config_t *config);
 esp_err_t node_hw_universal_io_init(const node_config_t *config);
 esp_err_t node_hw_led_init(const node_config_t *config);
 esp_err_t node_hw_relay_set(uint8_t channel, bool on);
+esp_err_t node_hw_relay_broken_fluorescent(uint8_t channel);
 esp_err_t node_hw_relay_all_off(void);
 esp_err_t node_hw_mosfet_set(uint8_t channel, bool on);
 esp_err_t node_hw_mosfet_set_value(uint8_t channel, uint8_t value);
@@ -56,6 +57,7 @@ esp_err_t node_hw_mosfet_breathe(uint8_t channel,
                                  uint32_t hold_ms,
                                  uint32_t count,
                                  uint8_t final_value);
+esp_err_t node_hw_mosfet_broken_fluorescent(uint8_t channel, uint8_t value);
 esp_err_t node_hw_mosfet_all_off(void);
 esp_err_t node_hw_universal_output_set(uint8_t channel, bool on);
 esp_err_t node_hw_universal_output_all_off(void);

@@ -336,6 +336,14 @@ esp_err_t execute_mosfet_effect_alias(const char *args_json, node_control_result
         result_done(result);
         return ESP_OK;
     }
+    if (strcmp(effect, "broken_fluorescent") == 0) {
+        esp_err_t err = node_hardware_io_mosfet_broken_fluorescent((uint8_t)channel, value);
+        if (err != ESP_OK) {
+            return reject_mosfet_error(result, err, "mosfet_effect_failed");
+        }
+        result_done(result);
+        return ESP_OK;
+    }
 
     return result_rejected(result, "invalid_args");
 }

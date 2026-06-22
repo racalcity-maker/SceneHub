@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "node_action_router.h"
 #include "node_board.h"
 #include "node_config.h"
 #include "node_control.h"
@@ -103,6 +104,10 @@ static void init_local_runtime(const node_config_t *config)
         ESP_LOGW(TAG, "hardware init failed: %s", esp_err_to_name(err));
     }
     ESP_ERROR_CHECK(node_control_init(config));
+    err = node_action_router_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "action router init failed: %s", esp_err_to_name(err));
+    }
     err = node_rule_engine_init(config);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "rule engine init failed: %s", esp_err_to_name(err));

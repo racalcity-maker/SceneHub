@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "driver/gpio.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -16,11 +16,10 @@
 static const char *TAG = "node_drv_pn532";
 
 enum {
-    NODE_PN532_I2C_PORT = I2C_NUM_0,
-    NODE_PN532_I2C_FREQ_HZ = 400000,
-    NODE_PN532_I2C_TIMEOUT_MS = 50,
+    NODE_PN532_I2C_FREQ_HZ = 100000,
+    NODE_PN532_I2C_TIMEOUT_MS = 250,
     NODE_PN532_READY_POLL_MS = 5,
-    NODE_PN532_READY_TIMEOUT_MS = 250,
+    NODE_PN532_READY_TIMEOUT_MS = 1000,
     NODE_PN532_FRAME_BUF_LEN = 64,
     NODE_PN532_UID_MAX_LEN = 10,
     NODE_PN532_INIT_RETRY_MIN_MS = 500,
@@ -35,6 +34,7 @@ enum {
     NODE_PN532_RESET_LOW_MS = 10,
     NODE_PN532_RESET_RECOVER_MS = 40,
     NODE_PN532_LOG_INTERVAL_MS = 10000,
+    NODE_PN532_MIN_POLL_INTERVAL_MS = 500,
     NODE_PN532_NOTIFY_REINIT = 1U << 0,
 };
 
@@ -43,6 +43,8 @@ typedef struct {
     bool bus_ready;
     bool session_ready;
     bool ever_ready;
+    bool poll_fail_debug_logged;
+    bool absent_reported;
     uint32_t init_retry_delay_ms;
     uint32_t init_fail_count;
     uint32_t init_burst_fail_count;
@@ -56,12 +58,14 @@ typedef struct {
     StaticTask_t task_storage;
     TaskHandle_t task_handle;
     uint8_t tx_buf[NODE_PN532_FRAME_BUF_LEN];
-    uint8_t rx_buf[NODE_PN532_FRAME_BUF_LEN];
+    uint8_t rx_buf[NODE_PN532_FRAME_BUF_LEN + 1U];
 } node_pn532_i2c_state_t;
 
 static node_pn532_i2c_state_t s_pn532;
 static node_nfc_reader_config_t *s_pn532_config;
 static StackType_t *s_pn532_task_stack_mem;
+static i2c_master_bus_handle_t s_pn532_i2c_bus;
+static i2c_master_dev_handle_t s_pn532_i2c_dev;
 
 static void pn532_task(void *arg);
 
@@ -130,6 +134,14 @@ static uint32_t now_ms(void)
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
 
+static int pn532_i2c_port(void)
+{
+    if (s_pn532_config && strcmp(s_pn532_config->bus, "i2c_1") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static bool text_present(const char *text)
 {
     return text && text[0] != '\0';
@@ -152,6 +164,40 @@ static bool should_log_failure(uint32_t *last_log_ms, int *last_err, esp_err_t e
         return true;
     }
     return false;
+}
+
+static void pn532_log_poll_failure_once(esp_err_t poll_err)
+{
+    uint8_t status = 0;
+    uint8_t raw[24] = {0};
+    esp_err_t status_err = ESP_OK;
+
+    if (s_pn532.poll_fail_debug_logged || !s_pn532_i2c_dev) {
+        return;
+    }
+    s_pn532.poll_fail_debug_logged = true;
+
+    status_err = i2c_master_receive(s_pn532_i2c_dev, &status, 1, NODE_PN532_I2C_TIMEOUT_MS);
+    ESP_LOGW(TAG,
+             "pn532 poll miss err=%s status_err=%s status=0x%02x",
+             esp_err_to_name(poll_err),
+             esp_err_to_name(status_err),
+             status);
+
+    if (status_err == ESP_OK && status == 0x01) {
+        esp_err_t raw_err = i2c_master_receive(s_pn532_i2c_dev, raw, sizeof(raw), NODE_PN532_I2C_TIMEOUT_MS);
+        ESP_LOGW(TAG,
+                 "pn532 poll pending raw err=%s bytes=%02x %02x %02x %02x %02x %02x %02x %02x",
+                 esp_err_to_name(raw_err),
+                 raw[0],
+                 raw[1],
+                 raw[2],
+                 raw[3],
+                 raw[4],
+                 raw[5],
+                 raw[6],
+                 raw[7]);
+    }
 }
 
 static bool reset_gpio_configured(void)
@@ -183,15 +229,24 @@ static uint32_t clamp_delay_ms(uint32_t delay_ms)
 
 static esp_err_t pn532_uninstall_bus(void)
 {
-    esp_err_t err = i2c_driver_delete(NODE_PN532_I2C_PORT);
+    esp_err_t err = ESP_OK;
 
-    if (err == ESP_ERR_INVALID_STATE) {
-        err = ESP_OK;
+    if (s_pn532_i2c_dev) {
+        err = i2c_master_bus_rm_device(s_pn532_i2c_dev);
+        if (err != ESP_OK) {
+            return err;
+        }
+        s_pn532_i2c_dev = NULL;
     }
-    if (err == ESP_OK) {
-        s_pn532.bus_ready = false;
+    if (s_pn532_i2c_bus) {
+        err = i2c_del_master_bus(s_pn532_i2c_bus);
+        if (err != ESP_OK) {
+            return err;
+        }
+        s_pn532_i2c_bus = NULL;
     }
-    return err;
+    s_pn532.bus_ready = false;
+    return ESP_OK;
 }
 
 static void pn532_reset_session(void)
@@ -314,14 +369,22 @@ static void schedule_init_retry(esp_err_t err)
 
 static esp_err_t i2c_write_bytes(const uint8_t *data, size_t len)
 {
+    uint8_t wrapped[NODE_PN532_FRAME_BUF_LEN + 2U] = {0};
+
     if (!data || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    return i2c_master_write_to_device(NODE_PN532_I2C_PORT,
-                                      s_pn532_config->i2c_address,
-                                      data,
-                                      len,
-                                      pdMS_TO_TICKS(NODE_PN532_I2C_TIMEOUT_MS));
+    if (!s_pn532_i2c_dev) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if ((len + 2U) > sizeof(wrapped)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    wrapped[0] = 0x00;
+    memcpy(&wrapped[1], data, len);
+    wrapped[len + 1U] = 0x00;
+    return i2c_master_transmit(s_pn532_i2c_dev, wrapped, len + 2U, NODE_PN532_I2C_TIMEOUT_MS);
 }
 
 static esp_err_t i2c_read_chunk(uint8_t *out, size_t len)
@@ -329,11 +392,13 @@ static esp_err_t i2c_read_chunk(uint8_t *out, size_t len)
     if (!out || len == 0 || (len + 1U) > sizeof(s_pn532.rx_buf)) {
         return ESP_ERR_INVALID_ARG;
     }
-    esp_err_t err = i2c_master_read_from_device(NODE_PN532_I2C_PORT,
-                                                s_pn532_config->i2c_address,
-                                                s_pn532.rx_buf,
-                                                len + 1U,
-                                                pdMS_TO_TICKS(NODE_PN532_I2C_TIMEOUT_MS));
+    if (!s_pn532_i2c_dev) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = i2c_master_receive(s_pn532_i2c_dev,
+                                       s_pn532.rx_buf,
+                                       len + 1U,
+                                       NODE_PN532_I2C_TIMEOUT_MS);
     if (err != ESP_OK) {
         return err;
     }
@@ -350,11 +415,9 @@ static esp_err_t pn532_wait_ready(uint32_t timeout_ms)
 
     while (elapsed_ms < timeout_ms) {
         uint8_t status = 0;
-        esp_err_t err = i2c_master_read_from_device(NODE_PN532_I2C_PORT,
-                                                    s_pn532_config->i2c_address,
-                                                    &status,
-                                                    1,
-                                                    pdMS_TO_TICKS(NODE_PN532_I2C_TIMEOUT_MS));
+        esp_err_t err = s_pn532_i2c_dev
+                            ? i2c_master_receive(s_pn532_i2c_dev, &status, 1, NODE_PN532_I2C_TIMEOUT_MS)
+                            : ESP_ERR_INVALID_STATE;
         if (err == ESP_OK && status == 0x01) {
             return ESP_OK;
         }
@@ -403,8 +466,7 @@ static esp_err_t pn532_write_command(const uint8_t *payload, size_t payload_len)
         checksum = (uint8_t)(checksum + payload[i]);
     }
     s_pn532.tx_buf[6 + payload_len] = (uint8_t)(0U - checksum);
-    s_pn532.tx_buf[7 + payload_len] = 0x00;
-    frame_len = payload_len + 8U;
+    frame_len = payload_len + 7U;
 
     return i2c_write_bytes(s_pn532.tx_buf, frame_len);
 }
@@ -414,10 +476,13 @@ static esp_err_t pn532_read_response(uint8_t command,
                                      size_t out_payload_cap,
                                      size_t *out_payload_len)
 {
-    uint8_t header[7] = {0};
-    uint8_t tail[NODE_PN532_FRAME_BUF_LEN] = {0};
+    uint8_t raw[NODE_PN532_FRAME_BUF_LEN + 1U] = {0};
+    const uint8_t *frame = &raw[1];
+    const uint8_t *tail = NULL;
     uint8_t len_field = 0;
     size_t payload_len = 0;
+    size_t read_payload_cap = out_payload_cap;
+    size_t read_len = 0;
     uint8_t checksum = 0;
     esp_err_t err = pn532_wait_ready(NODE_PN532_READY_TIMEOUT_MS);
 
@@ -427,31 +492,44 @@ static esp_err_t pn532_read_response(uint8_t command,
     if (err != ESP_OK) {
         return err;
     }
-    err = i2c_read_chunk(header, sizeof(header));
+
+    if (command == 0x02) {
+        read_payload_cap = 4U;
+    } else if (command == 0x14) {
+        read_payload_cap = 0U;
+    }
+    read_len = 1U + 7U + read_payload_cap + 2U;
+    if (read_len > sizeof(raw)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    err = s_pn532_i2c_dev
+              ? i2c_master_receive(s_pn532_i2c_dev, raw, read_len, NODE_PN532_I2C_TIMEOUT_MS)
+              : ESP_ERR_INVALID_STATE;
     if (err != ESP_OK) {
         return err;
     }
-    if (header[0] != 0x00 || header[1] != 0x00 || header[2] != 0xFF) {
+    if (raw[0] != 0x01) {
         return ESP_ERR_INVALID_RESPONSE;
     }
-    len_field = header[3];
-    if ((uint8_t)(header[3] + header[4]) != 0U || len_field < 2U) {
+    if (frame[0] != 0x00 || frame[1] != 0x00 || frame[2] != 0xFF) {
         return ESP_ERR_INVALID_RESPONSE;
     }
-    if (header[5] != 0xD5 || header[6] != (uint8_t)(command + 1U)) {
+    len_field = frame[3];
+    if ((uint8_t)(frame[3] + frame[4]) != 0U || len_field < 2U) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    if (frame[5] != 0xD5 || frame[6] != (uint8_t)(command + 1U)) {
         return ESP_ERR_INVALID_RESPONSE;
     }
 
     payload_len = (size_t)len_field - 2U;
-    if ((payload_len + 2U) > sizeof(tail) || payload_len > out_payload_cap) {
+    if (payload_len > out_payload_cap || (7U + payload_len + 2U) > (read_len - 1U)) {
         return ESP_ERR_INVALID_SIZE;
     }
-    err = i2c_read_chunk(tail, payload_len + 2U);
-    if (err != ESP_OK) {
-        return err;
-    }
+    tail = &frame[7];
 
-    checksum = (uint8_t)(header[5] + header[6]);
+    checksum = (uint8_t)(frame[5] + frame[6]);
     for (size_t i = 0; i < payload_len; ++i) {
         checksum = (uint8_t)(checksum + tail[i]);
     }
@@ -499,24 +577,32 @@ static esp_err_t pn532_run_command(uint8_t command,
 
 static esp_err_t pn532_install_bus(void)
 {
-    i2c_config_t cfg = {
-        .mode = I2C_MODE_MASTER,
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = pn532_i2c_port(),
         .sda_io_num = s_pn532_config->i2c_sda_gpio,
         .scl_io_num = s_pn532_config->i2c_scl_gpio,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = NODE_PN532_I2C_FREQ_HZ,
-        .clk_flags = 0,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
-    esp_err_t err = i2c_param_config(NODE_PN532_I2C_PORT, &cfg);
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = s_pn532_config->i2c_address,
+        .scl_speed_hz = NODE_PN532_I2C_FREQ_HZ,
+        .scl_wait_us = 200000,
+    };
+    esp_err_t err = ESP_OK;
 
+    if (s_pn532_i2c_dev) {
+        s_pn532.bus_ready = true;
+        return ESP_OK;
+    }
+
+    err = i2c_new_master_bus(&bus_cfg, &s_pn532_i2c_bus);
     if (err != ESP_OK) {
         return err;
     }
-    err = i2c_driver_install(NODE_PN532_I2C_PORT, cfg.mode, 0, 0, 0);
-    if (err == ESP_ERR_INVALID_STATE) {
-        err = ESP_OK;
-    }
+    err = i2c_master_bus_add_device(s_pn532_i2c_bus, &dev_cfg, &s_pn532_i2c_dev);
     if (err == ESP_OK) {
         s_pn532.bus_ready = true;
     }
@@ -543,7 +629,6 @@ static esp_err_t pn532_init_session(void)
             return err;
         }
     }
-
     err = pn532_run_command(0x02, NULL, 0, fw_payload, sizeof(fw_payload), &fw_payload_len);
     if (err != ESP_OK) {
         return err;
@@ -551,7 +636,6 @@ static esp_err_t pn532_init_session(void)
     if (fw_payload_len < 4U) {
         return ESP_ERR_INVALID_RESPONSE;
     }
-
     err = pn532_run_command(0x14, sam_cfg, sizeof(sam_cfg), payload, sizeof(payload), &payload_len);
     if (err != ESP_OK) {
         return err;
@@ -568,6 +652,8 @@ static esp_err_t pn532_init_session(void)
     s_pn532.init_burst_fail_count = 0;
     s_pn532.next_init_attempt_ms = 0;
     s_pn532.pending_hw_reset = false;
+    s_pn532.poll_fail_debug_logged = false;
+    s_pn532.absent_reported = false;
     s_pn532.last_init_err = ESP_OK;
     s_pn532.last_init_log_ms = 0;
     ESP_LOGI(TAG,
@@ -604,18 +690,30 @@ static void uid_to_text(const uint8_t *uid, size_t uid_len, char *out, size_t ou
 static esp_err_t pn532_poll_once(void)
 {
     static const uint8_t scan_args[] = {0x01, 0x00};
-    uint8_t payload[24] = {0};
+    uint8_t payload[32] = {0};
     size_t payload_len = 0;
     char uid_text[NODE_DRIVER_UID_TEXT_MAX_LEN] = {0};
     esp_err_t err = pn532_run_command(0x4A, scan_args, sizeof(scan_args), payload, sizeof(payload), &payload_len);
 
     if (err != ESP_OK) {
+        if (err == ESP_ERR_TIMEOUT || err == ESP_ERR_INVALID_RESPONSE) {
+            pn532_log_poll_failure_once(err);
+            if (s_pn532.absent_reported) {
+                return ESP_OK;
+            }
+            s_pn532.absent_reported = true;
+            return node_driver_nfc_reader_runtime_submit_scan(s_pn532_config ? s_pn532_config->id : "", NULL);
+        }
         return err;
     }
     if (payload_len < 1U) {
         return ESP_ERR_INVALID_RESPONSE;
     }
     if (payload[0] == 0U) {
+        if (s_pn532.absent_reported) {
+            return ESP_OK;
+        }
+        s_pn532.absent_reported = true;
         return node_driver_nfc_reader_runtime_submit_scan(s_pn532_config ? s_pn532_config->id : "", NULL);
     }
     if (payload_len < 6U) {
@@ -631,6 +729,8 @@ static esp_err_t pn532_poll_once(void)
     if (!text_present(uid_text)) {
         return ESP_ERR_INVALID_RESPONSE;
     }
+    s_pn532.poll_fail_debug_logged = false;
+    s_pn532.absent_reported = false;
     return node_driver_nfc_reader_runtime_submit_scan(s_pn532_config ? s_pn532_config->id : "", uid_text);
 }
 
@@ -700,7 +800,11 @@ static void pn532_task(void *arg)
         s_pn532.last_poll_err = ESP_OK;
         s_pn532.last_poll_log_ms = 0;
 
-        vTaskDelay(pdMS_TO_TICKS(s_pn532_config->poll_interval_ms));
+        uint32_t poll_delay_ms = s_pn532_config->poll_interval_ms;
+        if (poll_delay_ms < NODE_PN532_MIN_POLL_INTERVAL_MS) {
+            poll_delay_ms = NODE_PN532_MIN_POLL_INTERVAL_MS;
+        }
+        vTaskDelay(pdMS_TO_TICKS(poll_delay_ms));
     }
 }
 
@@ -721,7 +825,10 @@ esp_err_t node_driver_pn532_i2c_start(const node_nfc_reader_config_t *config)
     s_pn532.bus_ready = false;
     s_pn532.session_ready = false;
     s_pn532.ever_ready = false;
+    s_pn532.poll_fail_debug_logged = false;
+    s_pn532.absent_reported = false;
     reset_failure_backoff();
+    esp_log_level_set("i2c.master", ESP_LOG_NONE);
 
     if (reset_gpio_configured()) {
         (void)gpio_set_direction((gpio_num_t)s_pn532_config->reset_gpio, GPIO_MODE_OUTPUT);

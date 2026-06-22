@@ -7,7 +7,8 @@
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
-#include "node_driver_nfc_reader.h"
+#include "node_driver_nfc_contract.h"
+#include "node_text.h"
 #include "node_runtime_mode.h"
 #include "sdkconfig.h"
 
@@ -51,17 +52,6 @@ static void write_error_code(char *out_error_code, size_t out_error_code_size, c
         return;
     }
     snprintf(out_error_code, out_error_code_size, "%s", code ? code : "");
-}
-
-static bool nonempty_text(const char *text, size_t max_len)
-{
-    size_t len = 0;
-
-    if (!text) {
-        return false;
-    }
-    len = strnlen(text, max_len + 1);
-    return len > 0 && len <= max_len;
 }
 
 static bool read_string_item(const cJSON *item, char *out, size_t out_size)
@@ -109,7 +99,7 @@ static bool normalize_name(const char *src, char *out, size_t out_size)
 
 static bool append_name(char (*items)[NODE_DRIVER_EVENT_NAME_MAX_LEN], size_t *count, size_t cap, const char *name)
 {
-    if (!items || !count || !name || !nonempty_text(name, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1)) {
+    if (!items || !count || !node_text_identifier_valid(name, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U)) {
         return false;
     }
     for (size_t i = 0; i < *count; ++i) {
@@ -127,7 +117,7 @@ static bool append_name(char (*items)[NODE_DRIVER_EVENT_NAME_MAX_LEN], size_t *c
 
 static bool append_driver_id(node_rule_schema_context_t *ctx, const char *id)
 {
-    if (!ctx || !id || !nonempty_text(id, NODE_DRIVER_ID_MAX_LEN)) {
+    if (!ctx || !node_text_identifier_valid(id, NODE_DRIVER_ID_MAX_LEN)) {
         return false;
     }
     for (size_t i = 0; i < ctx->driver_count; ++i) {
@@ -390,7 +380,8 @@ static bool validate_inputs_array(const node_rule_schema_context_t *ctx, const c
         return false;
     }
     cJSON_ArrayForEach(item, (cJSON *)array) {
-        if (!cJSON_IsString(item) || !nonempty_text(item->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1)) {
+        if (!cJSON_IsString(item) ||
+            !node_text_identifier_valid(item->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U)) {
             return false;
         }
         if (!config_has_input(ctx ? ctx->config : NULL, item->valuestring)) {
@@ -429,7 +420,7 @@ static bool validate_claims_array(const node_rule_schema_context_t *ctx, const c
     }
     cJSON_ArrayForEach(item, (cJSON *)claims) {
         if (!cJSON_IsString(item) ||
-            !nonempty_text(item->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1) ||
+            !node_text_identifier_valid(item->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) ||
             !logical_resource_exists(ctx, item->valuestring)) {
             return false;
         }
@@ -437,22 +428,30 @@ static bool validate_claims_array(const node_rule_schema_context_t *ctx, const c
     return true;
 }
 
-static bool validate_exports_object(node_rule_schema_context_t *ctx, const cJSON *exports)
+static bool validate_exports_object(node_rule_schema_context_t *ctx,
+                                    const cJSON *exports,
+                                    char *out_error_code,
+                                    size_t out_error_code_size)
 {
     const cJSON *commands = NULL;
     const cJSON *events = NULL;
     cJSON *item = NULL;
 
+    if (out_error_code && out_error_code_size > 0) {
+        out_error_code[0] = '\0';
+    }
     if (!exports) {
         return true;
     }
     if (!cJSON_IsObject(exports)) {
+        write_error_code(out_error_code, out_error_code_size, "invalid_exports_shape");
         return false;
     }
 
     commands = cJSON_GetObjectItemCaseSensitive(exports, "commands");
     if (commands) {
         if (!cJSON_IsArray(commands) || cJSON_GetArraySize(commands) > NODE_RULE_MAX_EXPORT_COMMANDS) {
+            write_error_code(out_error_code, out_error_code_size, "invalid_export_commands");
             return false;
         }
         cJSON_ArrayForEach(item, (cJSON *)commands) {
@@ -463,15 +462,22 @@ static bool validate_exports_object(node_rule_schema_context_t *ctx, const cJSON
 
             if (!cJSON_IsObject(item) ||
                 !cJSON_IsString(id) ||
-                !nonempty_text(id->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1) ||
+                !node_text_identifier_valid(id->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) ||
                 !cJSON_IsString(label) ||
-                !nonempty_text(label->valuestring, NODE_RULE_EXPORT_LABEL_MAX_LEN) ||
-                (kind && (!cJSON_IsString(kind) || strcmp(kind->valuestring, "runtime_command") != 0)) ||
-                !validate_claims_array(ctx, claims) ||
-                !append_name(ctx->export_command_names,
+                !node_text_nonempty_bounded(label->valuestring, NODE_RULE_EXPORT_LABEL_MAX_LEN) ||
+                (kind && (!cJSON_IsString(kind) || strcmp(kind->valuestring, "runtime_command") != 0))) {
+                write_error_code(out_error_code, out_error_code_size, "invalid_export_commands");
+                return false;
+            }
+            if (!validate_claims_array(ctx, claims)) {
+                write_error_code(out_error_code, out_error_code_size, "invalid_export_command_claims");
+                return false;
+            }
+            if (!append_name(ctx->export_command_names,
                              &ctx->export_command_count,
                              NODE_RULE_MAX_EXPORT_COMMANDS,
                              id->valuestring)) {
+                write_error_code(out_error_code, out_error_code_size, "invalid_export_commands");
                 return false;
             }
         }
@@ -480,6 +486,7 @@ static bool validate_exports_object(node_rule_schema_context_t *ctx, const cJSON
     events = cJSON_GetObjectItemCaseSensitive(exports, "events");
     if (events) {
         if (!cJSON_IsArray(events) || cJSON_GetArraySize(events) > NODE_RULE_MAX_EXPORT_EVENTS) {
+            write_error_code(out_error_code, out_error_code_size, "invalid_export_events");
             return false;
         }
         cJSON_ArrayForEach(item, (cJSON *)events) {
@@ -488,14 +495,21 @@ static bool validate_exports_object(node_rule_schema_context_t *ctx, const cJSON
 
             if (!cJSON_IsObject(item) ||
                 !cJSON_IsString(id) ||
-                !nonempty_text(id->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1) ||
-                !emit_event_declared(ctx, id->valuestring) ||
+                !node_text_identifier_valid(id->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) ||
                 !cJSON_IsString(label) ||
-                !nonempty_text(label->valuestring, NODE_RULE_EXPORT_LABEL_MAX_LEN) ||
-                !append_name(ctx->export_event_names,
+                !node_text_nonempty_bounded(label->valuestring, NODE_RULE_EXPORT_LABEL_MAX_LEN)) {
+                write_error_code(out_error_code, out_error_code_size, "invalid_export_events");
+                return false;
+            }
+            if (!emit_event_declared(ctx, id->valuestring)) {
+                write_error_code(out_error_code, out_error_code_size, "invalid_export_events");
+                return false;
+            }
+            if (!append_name(ctx->export_event_names,
                              &ctx->export_event_count,
                              NODE_RULE_MAX_EXPORT_EVENTS,
                              id->valuestring)) {
+                write_error_code(out_error_code, out_error_code_size, "invalid_export_events");
                 return false;
             }
         }
@@ -559,22 +573,24 @@ static bool validate_trigger(const node_rule_schema_context_t *ctx, const cJSON 
     }
     if (strcmp(kind->valuestring, "timer") == 0) {
         timer = cJSON_GetObjectItemCaseSensitive(trigger, "timer");
-        return cJSON_IsString(timer) && nonempty_text(timer->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1);
+        return cJSON_IsString(timer) &&
+               node_text_identifier_valid(timer->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U);
     }
     if (strcmp(kind->valuestring, "local_event") == 0) {
         event = cJSON_GetObjectItemCaseSensitive(trigger, "event");
         return cJSON_IsString(event) &&
-               nonempty_text(event->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1) &&
+               node_text_identifier_valid(event->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) &&
                local_event_allowed(ctx, event->valuestring);
     }
     if (strcmp(kind->valuestring, "state_changed") == 0) {
         const cJSON *key = cJSON_GetObjectItemCaseSensitive(trigger, "key");
-        return cJSON_IsString(key) && nonempty_text(key->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1);
+        return cJSON_IsString(key) &&
+               node_text_identifier_valid(key->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U);
     }
     if (strcmp(kind->valuestring, "mqtt_command") == 0) {
         const cJSON *command = cJSON_GetObjectItemCaseSensitive(trigger, "command");
         return cJSON_IsString(command) &&
-               nonempty_text(command->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1) &&
+               node_text_identifier_valid(command->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) &&
                export_command_allowed(ctx, command->valuestring);
     }
 
@@ -597,7 +613,7 @@ static bool validate_condition(const node_rule_schema_context_t *ctx, const cJSO
         const cJSON *key = cJSON_GetObjectItemCaseSensitive(condition, "key");
         const cJSON *value = cJSON_GetObjectItemCaseSensitive(condition, "value");
         return cJSON_IsString(key) &&
-               nonempty_text(key->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1) &&
+               node_text_identifier_valid(key->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) &&
                scalar_state_value_valid(value);
     }
     if (strcmp(kind->valuestring, "input_equals") == 0) {
@@ -621,7 +637,8 @@ static bool validate_condition(const node_rule_schema_context_t *ctx, const cJSO
     }
     if (strcmp(kind->valuestring, "phase_is") == 0) {
         const cJSON *phase = cJSON_GetObjectItemCaseSensitive(condition, "phase");
-        return cJSON_IsString(phase) && nonempty_text(phase->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1);
+        return cJSON_IsString(phase) &&
+               node_text_identifier_valid(phase->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U);
     }
     if (strcmp(kind->valuestring, "not") == 0) {
         const cJSON *inner = cJSON_GetObjectItemCaseSensitive(condition, "condition");
@@ -696,17 +713,19 @@ static bool validate_action(const node_rule_schema_context_t *ctx, const cJSON *
         const cJSON *key = cJSON_GetObjectItemCaseSensitive(action, "key");
         const cJSON *value = cJSON_GetObjectItemCaseSensitive(action, "value");
         return cJSON_IsString(key) &&
-               nonempty_text(key->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1) &&
+               node_text_identifier_valid(key->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) &&
                scalar_state_value_valid(value);
     }
     if (strcmp(kind->valuestring, "set_phase") == 0) {
         const cJSON *phase = cJSON_GetObjectItemCaseSensitive(action, "phase");
-        return cJSON_IsString(phase) && nonempty_text(phase->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1);
+        return cJSON_IsString(phase) &&
+               node_text_identifier_valid(phase->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U);
     }
     if (strcmp(kind->valuestring, "emit_event") == 0) {
         const cJSON *event = cJSON_GetObjectItemCaseSensitive(action, "event");
         const cJSON *args = cJSON_GetObjectItemCaseSensitive(action, "args");
         return cJSON_IsString(event) &&
+               node_text_identifier_valid(event->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) &&
                emit_event_declared(ctx, event->valuestring) &&
                (!args || cJSON_IsObject(args));
     }
@@ -719,7 +738,7 @@ static bool validate_action(const node_rule_schema_context_t *ctx, const cJSON *
         const cJSON *timer_name = cJSON_IsString(timer) ? timer : name;
 
         if (!cJSON_IsString(timer_name) ||
-            !nonempty_text(timer_name->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1)) {
+            !node_text_identifier_valid(timer_name->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U)) {
             return false;
         }
         if (mode && (!cJSON_IsString(mode) ||
@@ -738,7 +757,7 @@ static bool validate_action(const node_rule_schema_context_t *ctx, const cJSON *
         const cJSON *name = cJSON_GetObjectItemCaseSensitive(action, "name");
         const cJSON *timer_name = cJSON_IsString(timer) ? timer : name;
         return cJSON_IsString(timer_name) &&
-               nonempty_text(timer_name->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1);
+               node_text_identifier_valid(timer_name->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U);
     }
     if (strcmp(kind->valuestring, "choose") == 0) {
         const cJSON *condition = cJSON_GetObjectItemCaseSensitive(action, "condition");
@@ -809,7 +828,8 @@ static bool validate_initial_state(const cJSON *initial_state)
         return false;
     }
     cJSON_ArrayForEach(item, (cJSON *)initial_state) {
-        if (!item->string || !scalar_state_value_valid(item)) {
+        if (!node_text_identifier_valid(item->string, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) ||
+            !scalar_state_value_valid(item)) {
             return false;
         }
         ++count;
@@ -828,7 +848,9 @@ static bool validate_limits_object(const cJSON *limits)
         return false;
     }
     cJSON_ArrayForEach(item, (cJSON *)limits) {
-        if (!item->string || !cJSON_IsNumber(item) || item->valuedouble < 0) {
+        if (!node_text_identifier_valid(item->string, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U) ||
+            !cJSON_IsNumber(item) ||
+            item->valuedouble < 0) {
             return false;
         }
     }
@@ -861,7 +883,8 @@ static bool collect_driver_events_for_reader(node_rule_schema_context_t *ctx,
     }
 
     for (size_t i = 0; i < config->known_card_count; ++i) {
-        if (config->known_cards[i].event_name[0] == '\0') {
+        if (!node_text_nonempty_bounded(config->known_cards[i].event_name,
+                                        sizeof(config->known_cards[i].event_name) - 1U)) {
             continue;
         }
         if (!append_name(ctx->local_event_names,
@@ -950,7 +973,7 @@ static bool validate_driver_array(node_rule_schema_context_t *ctx, const cJSON *
             }
         }
 
-        if (node_driver_nfc_reader_validate_config(&reader, &instance) != ESP_OK) {
+        if (node_driver_nfc_contract_validate_config(&reader, &instance) != ESP_OK) {
             return false;
         }
         if (!collect_driver_events_for_reader(ctx, &reader)) {
@@ -977,7 +1000,8 @@ static bool validate_rule_object(const node_rule_schema_context_t *ctx, const cJ
     conditions = cJSON_GetObjectItemCaseSensitive(rule, "conditions");
     actions = cJSON_GetObjectItemCaseSensitive(rule, "actions");
 
-    if (!cJSON_IsString(id) || !nonempty_text(id->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1)) {
+    if (!cJSON_IsString(id) ||
+        !node_text_identifier_valid(id->valuestring, NODE_DRIVER_EVENT_NAME_MAX_LEN - 1U)) {
         return false;
     }
     if (enabled && !cJSON_IsBool(enabled)) {
@@ -1018,7 +1042,7 @@ static esp_err_t validate_bundle_impl(const char *raw_json,
     ctx->config = config;
 
     metadata.raw_size = strlen(raw_json);
-    if (metadata.raw_size == 0 || metadata.raw_size > NODE_RULE_BUNDLE_MAX_LEN) {
+    if (metadata.raw_size == 0 || metadata.raw_size > NODE_RULE_BUNDLE_STORE_MAX_LEN) {
         write_error_code(out_error_code, out_error_code_size, "bundle_too_large");
         free(ctx);
         return ESP_ERR_INVALID_SIZE;
@@ -1081,12 +1105,37 @@ static esp_err_t validate_bundle_impl(const char *raw_json,
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (!collect_emit_names(ctx, cJSON_GetObjectItemCaseSensitive(root, "emits")) ||
-        !validate_initial_state(cJSON_GetObjectItemCaseSensitive(root, "initial_state")) ||
-        !validate_limits_object(cJSON_GetObjectItemCaseSensitive(root, "limits")) ||
-        !validate_driver_array(ctx, cJSON_GetObjectItemCaseSensitive(root, "drivers")) ||
-        !validate_exports_object(ctx, cJSON_GetObjectItemCaseSensitive(root, "exports"))) {
-        write_error_code(out_error_code, out_error_code_size, "invalid_bundle_shape");
+    if (!collect_emit_names(ctx, cJSON_GetObjectItemCaseSensitive(root, "emits"))) {
+        write_error_code(out_error_code, out_error_code_size, "invalid_emits");
+        cJSON_Delete(root);
+        free(ctx);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!validate_initial_state(cJSON_GetObjectItemCaseSensitive(root, "initial_state"))) {
+        write_error_code(out_error_code, out_error_code_size, "invalid_initial_state");
+        cJSON_Delete(root);
+        free(ctx);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!validate_limits_object(cJSON_GetObjectItemCaseSensitive(root, "limits"))) {
+        write_error_code(out_error_code, out_error_code_size, "invalid_limits");
+        cJSON_Delete(root);
+        free(ctx);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!validate_driver_array(ctx, cJSON_GetObjectItemCaseSensitive(root, "drivers"))) {
+        write_error_code(out_error_code, out_error_code_size, "invalid_drivers");
+        cJSON_Delete(root);
+        free(ctx);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!validate_exports_object(ctx,
+                                 cJSON_GetObjectItemCaseSensitive(root, "exports"),
+                                 out_error_code,
+                                 out_error_code_size)) {
+        if (!out_error_code || out_error_code[0] == '\0') {
+            write_error_code(out_error_code, out_error_code_size, "invalid_exports");
+        }
         cJSON_Delete(root);
         free(ctx);
         return ESP_ERR_INVALID_ARG;

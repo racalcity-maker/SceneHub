@@ -132,6 +132,11 @@ esp_err_t node_hardware_io_all_off(node_hw_output_kind_t kind)
     }
 }
 
+esp_err_t node_hardware_io_relay_broken_fluorescent(uint8_t channel)
+{
+    return node_hw_relay_broken_fluorescent(channel);
+}
+
 esp_err_t node_hardware_io_mosfet_set(uint8_t channel, uint8_t value)
 {
     return node_hw_mosfet_set_value(channel, value);
@@ -172,6 +177,11 @@ esp_err_t node_hardware_io_mosfet_breathe(uint8_t channel,
                                   hold_ms,
                                   count,
                                   final_value);
+}
+
+esp_err_t node_hardware_io_mosfet_broken_fluorescent(uint8_t channel, uint8_t value)
+{
+    return node_hw_mosfet_broken_fluorescent(channel, value);
 }
 
 esp_err_t node_hardware_io_mosfet_all_off(void)
@@ -261,8 +271,15 @@ esp_err_t node_hardware_io_pulse_output(node_hw_output_kind_t kind, uint8_t chan
         }
         return err;
     }
-    ESP_ERROR_CHECK_WITHOUT_ABORT(node_hw_output_slot_set(slot, true));
+    if (kind == NODE_HW_OUTPUT_RELAY) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(node_hw_relay_set(channel, true));
+    } else {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(node_hw_output_slot_set(slot, true));
+    }
     vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    if (kind == NODE_HW_OUTPUT_RELAY) {
+        return node_hw_relay_set(channel, false);
+    }
     return node_hw_output_slot_set(slot, false);
 }
 

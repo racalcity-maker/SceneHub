@@ -9,6 +9,6 @@ idf_component_register(
         "room_scenario_types.c"
         "room_scenario_validation.c"
     INCLUDE_DIRS "include"
-    REQUIRES freertos json
+    REQUIRES freertos json quest_common
     PRIV_REQUIRES sd_storage
 )

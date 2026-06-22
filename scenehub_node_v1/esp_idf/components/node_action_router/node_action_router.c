@@ -10,6 +10,7 @@
 #include "node_limits.h"
 #include "node_control.h"
 #include "node_mqtt_transport.h"
+#include "node_rule_action_port.h"
 
 static const char *TAG = "node_action_router";
 
@@ -39,6 +40,7 @@ static StaticTask_t s_publish_task_storage;
 static StackType_t s_publish_task_stack[3072];
 static TaskHandle_t s_publish_task;
 static node_control_result_t s_rule_result;
+static bool s_port_bound;
 
 static void publish_task(void *arg)
 {
@@ -104,7 +106,7 @@ static esp_err_t enqueue_publish_request(const node_action_router_publish_reques
     return ESP_OK;
 }
 
-esp_err_t node_action_router_execute_command(const char *command, const char *args_json)
+static esp_err_t execute_command_binding(const char *command, const char *args_json)
 {
     node_control_command_t control = {0};
     esp_err_t err = ESP_OK;
@@ -119,7 +121,7 @@ esp_err_t node_action_router_execute_command(const char *command, const char *ar
     control.source = NODE_CONTROL_SOURCE_LOCAL_RULE;
 
     memset(&s_rule_result, 0, sizeof(s_rule_result));
-    err = node_control_execute(&control, &s_rule_result);
+    err = node_control_submit(&control, &s_rule_result);
     if (err != ESP_OK) {
         ESP_LOGW(TAG,
                  "rule command rejected command=%s status=%s error=%s err=%s",
@@ -139,7 +141,7 @@ esp_err_t node_action_router_execute_command(const char *command, const char *ar
     return ESP_OK;
 }
 
-esp_err_t node_action_router_emit_event(const char *event_name, const char *args_json)
+static esp_err_t emit_event_binding(const char *event_name, const char *args_json)
 {
     node_action_router_publish_request_t request = {0};
     int written = 0;
@@ -166,7 +168,7 @@ esp_err_t node_action_router_emit_event(const char *event_name, const char *args
     return enqueue_publish_request(&request);
 }
 
-esp_err_t node_action_router_publish_input_change(uint8_t channel, int32_t value)
+static esp_err_t publish_input_change_binding(uint8_t channel, int32_t value)
 {
     node_action_router_publish_request_t request = {0};
 
@@ -181,4 +183,26 @@ esp_err_t node_action_router_publish_input_change(uint8_t channel, int32_t value
     request.channel = channel;
     request.value = value;
     return enqueue_publish_request(&request);
+}
+
+esp_err_t node_action_router_init(void)
+{
+    static const node_rule_action_port_t port = {
+        .execute_command = execute_command_binding,
+        .emit_event = emit_event_binding,
+        .publish_input_change = publish_input_change_binding,
+    };
+    esp_err_t err = ESP_OK;
+
+    if (s_port_bound) {
+        return ESP_OK;
+    }
+    if (!ensure_publish_owner()) {
+        return ESP_ERR_NO_MEM;
+    }
+    err = node_rule_action_port_bind(&port);
+    if (err == ESP_OK) {
+        s_port_bound = true;
+    }
+    return err;
 }

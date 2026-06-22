@@ -29,8 +29,16 @@ typedef struct {
     uint32_t duration_ms;
 } node_rule_event_t;
 
+typedef esp_err_t (*node_event_router_sink_fn)(const node_rule_event_t *event);
+
 esp_err_t node_event_router_init(void);
 esp_err_t node_event_router_reset(void);
+esp_err_t node_event_router_set_sink(node_event_router_sink_fn sink);
+esp_err_t node_event_router_route_event(const node_rule_event_t *event);
+esp_err_t node_event_router_route_local_event(const char *event_name,
+                                              const char *source_id,
+                                              int32_t token_id,
+                                              const char *uid);
 void node_event_router_make_boot_event(node_rule_event_t *out_event);
 void node_event_router_make_input_edge_event(node_rule_event_t *out_event,
                                              uint8_t input_channel,

@@ -129,7 +129,7 @@ static esp_err_t legacy_nvs_load(node_rule_store_entry_t *out_entry)
 
     metadata_from_persisted(&out_entry->metadata, &persisted);
     if (!out_entry->metadata.has_bundle || out_entry->metadata.raw_size == 0 ||
-        out_entry->metadata.raw_size > NODE_RULE_BUNDLE_MAX_LEN) {
+        out_entry->metadata.raw_size > NODE_RULE_BUNDLE_STORE_MAX_LEN) {
         out_entry->metadata.has_bundle = false;
         out_entry->metadata.raw_size = 0;
         nvs_close(handle);
@@ -143,7 +143,7 @@ static esp_err_t legacy_nvs_load(node_rule_store_entry_t *out_entry)
         clear_entry(out_entry);
         return err;
     }
-    if (raw_size != out_entry->metadata.raw_size || raw_size > NODE_RULE_BUNDLE_MAX_LEN) {
+    if (raw_size != out_entry->metadata.raw_size || raw_size > NODE_RULE_BUNDLE_STORE_MAX_LEN) {
         clear_entry(out_entry);
         return ESP_ERR_INVALID_SIZE;
     }
@@ -207,7 +207,7 @@ static esp_err_t load_from_file(node_rule_store_entry_t *out_entry)
 
     metadata_from_persisted(&out_entry->metadata, &persisted);
     if (!out_entry->metadata.has_bundle || out_entry->metadata.raw_size == 0 ||
-        out_entry->metadata.raw_size > NODE_RULE_BUNDLE_MAX_LEN) {
+        out_entry->metadata.raw_size > NODE_RULE_BUNDLE_STORE_MAX_LEN) {
         fclose(fp);
         out_entry->metadata.has_bundle = false;
         out_entry->metadata.raw_size = 0;
@@ -284,7 +284,7 @@ esp_err_t node_rule_store_save(const char *raw_json,
     node_rule_store_persisted_metadata_t persisted = {0};
     esp_err_t err = ESP_OK;
 
-    if (!raw_json || !metadata || raw_size == 0 || raw_size > NODE_RULE_BUNDLE_MAX_LEN) {
+    if (!raw_json || !metadata || raw_size == 0 || raw_size > NODE_RULE_BUNDLE_STORE_MAX_LEN) {
         return ESP_ERR_INVALID_ARG;
     }
 

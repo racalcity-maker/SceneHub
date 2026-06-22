@@ -9,8 +9,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "node_action_router.h"
 #include "node_hardware_io.h"
+#include "node_rule_action_port.h"
 #include "node_rule_compile.h"
 #include "node_runtime_mode.h"
 #include "sdkconfig.h"
@@ -75,6 +75,7 @@ static node_rule_scalar_value_t s_state_values[NODE_RULE_MAX_STATE_KEYS];
 static uint16_t s_phase_index = UINT16_MAX;
 static node_rule_timer_slot_t s_timer_slots[NODE_RULE_MAX_TIMERS];
 static node_rule_input_slot_t s_input_slots[NODE_UNIVERSAL_IO_MAX];
+static portMUX_TYPE s_status_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static StaticTask_t s_engine_task_storage;
 static StackType_t *s_engine_task_stack_mem;
@@ -83,6 +84,8 @@ static StaticQueue_t s_engine_queue_storage;
 static uint8_t s_engine_queue_buffer[NODE_RULE_ENGINE_QUEUE_LEN * sizeof(node_rule_engine_request_t)];
 static QueueHandle_t s_engine_queue;
 static char s_local_event_json[128];
+
+static esp_err_t route_event_to_engine(const node_rule_event_t *event);
 
 static uint32_t now_ms(void)
 {
@@ -234,7 +237,7 @@ static void publish_local_event(const node_rule_event_t *event)
         return;
     }
 
-    err = node_action_router_emit_event(event->event_name, s_local_event_json);
+    err = node_rule_action_port_emit_event(event->event_name, s_local_event_json);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG,
                  "local event publish failed event=%s source=%s err=%s",
@@ -355,7 +358,7 @@ static esp_err_t execute_action(const node_rule_compiled_bundle_t *bundle,
 
     switch (action->kind) {
     case NODE_RULE_ACTION_COMMAND:
-        return node_action_router_execute_command(action->command, action->payload_json);
+        return node_rule_action_port_execute_command(action->command, action->payload_json);
     case NODE_RULE_ACTION_SET_STATE:
         if (action->state_index >= NODE_RULE_MAX_STATE_KEYS) {
             return ESP_ERR_INVALID_ARG;
@@ -366,7 +369,7 @@ static esp_err_t execute_action(const node_rule_compiled_bundle_t *bundle,
         s_phase_index = action->phase_index;
         return ESP_OK;
     case NODE_RULE_ACTION_EMIT_EVENT:
-        err = node_action_router_emit_event(action->event_name, action->payload_json);
+        err = node_rule_action_port_emit_event(action->event_name, action->payload_json);
         return err == ESP_ERR_INVALID_STATE ? ESP_OK : err;
     case NODE_RULE_ACTION_START_TIMER:
         if (action->timer_index >= NODE_RULE_MAX_TIMERS) {
@@ -516,7 +519,7 @@ static uint32_t input_debounce_ms_for_channel(uint8_t channel)
 static void publish_input_edge(uint8_t channel, bool active)
 {
     node_rule_event_t event = {0};
-    esp_err_t err = node_action_router_publish_input_change(channel, active ? 1 : 0);
+    esp_err_t err = node_rule_action_port_publish_input_change(channel, active ? 1 : 0);
 
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG,
@@ -682,7 +685,9 @@ static esp_err_t handle_pause_inline(void)
 {
     const node_rule_compiled_bundle_t *bundle = node_rule_compile_peek_active();
 
+    portENTER_CRITICAL(&s_status_lock);
     s_paused = true;
+    portEXIT_CRITICAL(&s_status_lock);
     reset_runtime_state(bundle);
     ESP_LOGI(TAG, "rules paused");
     return ESP_OK;
@@ -690,7 +695,9 @@ static esp_err_t handle_pause_inline(void)
 
 static esp_err_t handle_set_enabled_inline(bool enabled)
 {
+    portENTER_CRITICAL(&s_status_lock);
     s_engine_config.rules_enabled = enabled;
+    portEXIT_CRITICAL(&s_status_lock);
     ESP_LOGI(TAG, "rules runtime enabled=%d", enabled);
     return ESP_OK;
 }
@@ -701,7 +708,9 @@ static esp_err_t handle_resume_inline(void)
     const node_rule_compiled_bundle_t *bundle = node_rule_compile_peek_active();
 
     reset_runtime_state(bundle);
+    portENTER_CRITICAL(&s_status_lock);
     s_paused = false;
+    portEXIT_CRITICAL(&s_status_lock);
     ESP_LOGI(TAG, "rules resumed");
     if (!s_engine_config.rules_enabled ||
         !bundle ||
@@ -833,6 +842,11 @@ static esp_err_t enqueue_event(const node_rule_event_t *event)
     return ESP_OK;
 }
 
+static esp_err_t route_event_to_engine(const node_rule_event_t *event)
+{
+    return enqueue_event(event);
+}
+
 esp_err_t node_rule_engine_dispatch_event(const node_rule_event_t *event)
 {
     return enqueue_event(event);
@@ -917,9 +931,11 @@ void node_rule_engine_get_status(node_rule_engine_status_t *out_status)
     }
 
     memset(out_status, 0, sizeof(*out_status));
+    portENTER_CRITICAL(&s_status_lock);
     out_status->initialized = s_initialized;
     out_status->paused = s_paused;
     out_status->rules_enabled_by_mode = s_engine_config.rules_enabled;
+    portEXIT_CRITICAL(&s_status_lock);
 }
 
 esp_err_t node_rule_engine_init(const node_config_t *config)
@@ -936,8 +952,17 @@ esp_err_t node_rule_engine_init(const node_config_t *config)
     }
 
     build_runtime_config(config);
+    portENTER_CRITICAL(&s_status_lock);
     s_initialized = true;
     s_paused = false;
+    portEXIT_CRITICAL(&s_status_lock);
+    err = node_event_router_set_sink(route_event_to_engine);
+    if (err != ESP_OK) {
+        portENTER_CRITICAL(&s_status_lock);
+        s_initialized = false;
+        portEXIT_CRITICAL(&s_status_lock);
+        return err;
+    }
 
     err = node_rule_engine_reset();
     if (err != ESP_OK) {

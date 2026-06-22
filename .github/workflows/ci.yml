@@ -39,7 +39,7 @@ jobs:
           path: |
             ~/.espressif
             ${{ env.IDF_PATH }}
-          key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('CMakeLists.txt', 'sdkconfig', 'dependencies.lock', 'components/**/CMakeLists.txt') }}
+          key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('CMakeLists.txt', 'sdkconfig', 'dependencies.lock', 'components/**/CMakeLists.txt', 'scenehub_node_v1/esp_idf/CMakeLists.txt', 'scenehub_node_v1/esp_idf/sdkconfig', 'scenehub_node_v1/esp_idf/dependencies.lock', 'scenehub_node_v1/esp_idf/components/**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}
 
@@ -58,6 +58,13 @@ jobs:
           source "${IDF_PATH}/export.sh"
           idf.py build
 
+      - name: Build SceneHub Node firmware
+        shell: bash
+        working-directory: scenehub_node_v1/esp_idf
+        run: |
+          source "${IDF_PATH}/export.sh"
+          idf.py build
+
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -70,3 +77,16 @@ jobs:
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
             build/flasher_args.json
+
+      - name: Upload node build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenehub-node-firmware
+          path: |
+            scenehub_node_v1/esp_idf/build/*.bin
+            scenehub_node_v1/esp_idf/build/*.elf
+            scenehub_node_v1/esp_idf/build/*.map
+            scenehub_node_v1/esp_idf/build/bootloader/bootloader.bin
+            scenehub_node_v1/esp_idf/build/partition_table/partition-table.bin
+            scenehub_node_v1/esp_idf/build/flasher_args.json

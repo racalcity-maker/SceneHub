@@ -18,7 +18,7 @@ The frozen engine semantics live in `NODE_V2_ENGINE_CONTRACT.md`.
 The driver rollout plan lives in `NODE_V2_DRIVER_PLAN.md`.
 
 Node v2 may also expose a small set of firmware-built device drivers such as
-digital sensors, NFC readers, DFPlayer and LED strips. Driver support is
+digital sensors, NFC readers, audio players and LED strips. Driver support is
 intentionally bounded: the node is not trying to become ESPHome.
 
 ## Goals
@@ -264,8 +264,9 @@ Initial driver categories:
 - `mosfet_output`: DC output channels.
 - `led_strip`: bounded LED effects, not arbitrary animation scripts.
 - `nfc_reader`: UID/card/tag events.
-- `dfplayer`: simple audio playback over UART.
-- `sensor`: simple scalar sensors such as distance, light or temperature.
+- `audio_player`: simple bounded audio playback.
+- `sensor`: simple scalar sensor families such as distance, light or
+  temperature.
 
 Driver instance example:
 
@@ -285,12 +286,26 @@ Driver instance example:
       }
     },
     {
-      "id": "music_1",
-      "type": "dfplayer",
-      "bus": "uart_2",
+      "id": "player_1",
+      "type": "audio_player",
+      "driver": "dfplayer_mini",
+      "bus": "uart_1",
       "config": {
         "baud": 9600,
         "volume": 22
+      }
+    },
+    {
+      "id": "sensor_1",
+      "type": "distance_sensor",
+      "driver": "hcsr04",
+      "bus": "gpio_pair",
+      "config": {
+        "poll_interval_ms": 100,
+        "near_threshold_mm": 400,
+        "far_threshold_mm": 700,
+        "hysteresis_mm": 40,
+        "stable_samples": 3
       }
     }
   ]
@@ -303,17 +318,25 @@ UART/I2C/SPI/GPIO primitives directly.
 Driver commands must still go through `action_router`, for example:
 
 - `nfc.identify`
-- `dfplayer.play`
-- `dfplayer.stop`
+- `audio.play`
+- `audio.stop`
+- `audio.pause`
+- `audio.resume`
 - `led.effect`
-- `sensor.calibrate`
+- `sensor.sample_once`
 
 Driver events enter the same event router as GPIO inputs:
 
 - `reader_1_card_seen`
 - `reader_1_card_removed`
-- `sensor_threshold_crossed`
-- `dfplayer_finished`
+- `sensor_1_near_enter`
+- `sensor_1_near_exit`
+- `player_1_finished`
+
+The public contract should be family-level and logical. Concrete adapters such
+as `dfplayer_mini` or `hcsr04` should remain hidden behind family owners and
+must not leak raw protocol packets or chip-specific commands into rule or
+SceneHub-facing APIs.
 
 ## Driver Safety Rules
 

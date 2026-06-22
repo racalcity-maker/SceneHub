@@ -10,9 +10,10 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "node_driver_nfc_contract.h"
 #include "node_driver_nfc_reader.h"
 #include "node_driver_pn532_i2c.h"
-#include "node_rule_engine.h"
+#include "node_event_router.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "node_drv_nfc_rt";
@@ -118,7 +119,7 @@ static bool ensure_runtime_config(void)
 
 static StackType_t *allocate_runtime_task_stack(void)
 {
-    size_t stack_bytes = 3072U * sizeof(StackType_t);
+    size_t stack_bytes = 6144U * sizeof(StackType_t);
 
     if (s_runtime_task_stack_mem) {
         return s_runtime_task_stack_mem;
@@ -306,7 +307,7 @@ static bool ensure_runtime_owner(void)
         }
         s_runtime_task = xTaskCreateStatic(nfc_runtime_task,
                                            "node_nfc_drv",
-                                           3072,
+                                           6144,
                                            NULL,
                                            tskIDLE_PRIORITY + 1,
                                            task_stack,
@@ -336,7 +337,10 @@ static void dispatch_local_event(const char *event_name, int32_t token_id, const
     if (!text_present(event_name)) {
         return;
     }
-    err = node_rule_engine_dispatch_local_event(event_name, s_runtime_config ? s_runtime_config->id : "", token_id, uid);
+    err = node_event_router_route_local_event(event_name,
+                                              s_runtime_config ? s_runtime_config->id : "",
+                                              token_id,
+                                              uid);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG,
                  "local_event dispatch failed event=%s reader=%s err=%s",
@@ -368,7 +372,7 @@ static void emit_card_seen(const char *uid)
 
     s_runtime.stable_token_id = 0;
     copy_text(s_runtime.last_seen_uid, sizeof(s_runtime.last_seen_uid), uid);
-    if (node_driver_nfc_reader_resolve_card(s_runtime_config, uid, &resolution) == ESP_OK && resolution.matched) {
+    if (node_driver_nfc_contract_resolve_card(s_runtime_config, uid, &resolution) == ESP_OK && resolution.matched) {
         s_runtime.stable_token_id = resolution.token_id;
     }
 

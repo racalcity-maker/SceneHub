@@ -33,6 +33,9 @@ scenehub_node_v1/esp_idf/build/
 scenehub_node_v1/esp_idf/sdkconfig
 scenehub_node_v1/esp_idf/sdkconfig.old
 
+# Local PN532 bring-up sandbox; keep the production driver in esp_idf/components.
+scenehub_node_v1/examples/pn532_i2c_only/
+
 # Local archive/reference code, not part of the SceneHub product tree
 legacy/
 

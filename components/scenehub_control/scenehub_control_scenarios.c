@@ -488,15 +488,21 @@ esp_err_t scenehub_control_delete_scenario(const char *source,
                                            const char *scenario_id,
                                            scenehub_control_result_t *out_result)
 {
-    room_scenario_t scenario = {0};
+    room_scenario_t *scenario = NULL;
     const char *room_id = "";
     (void)source;
     esp_err_t err = scenehub_control_prepare_result("", "scenario_delete", out_result);
     if (err != ESP_OK) {
         return err;
     }
-    if (scenario_id && room_scenario_get(scenario_id, &scenario) == ESP_OK) {
-        room_id = scenario.room_id;
+    if (scenario_id) {
+        if (room_scenario_acquire_scratch(&scenario, NULL) == ESP_OK) {
+            memset(scenario, 0, sizeof(*scenario));
+            if (room_scenario_get(scenario_id, scenario) == ESP_OK) {
+                room_id = scenario->room_id;
+            }
+            room_scenario_release_scratch();
+        }
     }
     return scenehub_control_finalize_api_result_with_invalidation(
         out_result,

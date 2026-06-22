@@ -62,8 +62,14 @@ Additional v2 modules:
 - `rule_api`: accepts admin-provided rule bundles through MQTT commands.
 - `action_router`: maps rule actions to validated local commands.
 - `event_router`: maps hardware/input/timer events into rule triggers.
+- `runtime_snapshot`: exports bounded read-only rule/fallback/runtime metadata
+  for status, manifest and diagnostics paths.
 - `driver_registry`: exposes firmware-built device drivers as named
   capabilities.
+- `driver_nfc_api`: narrow NFC runtime/admin facade for status and control
+  paths.
+- `driver_nfc_config_api`: narrow NFC config/storage facade for factory-config
+  projection and known-card persistence.
 - `sandbox`: enforces limits, budgets and allowed capabilities.
 
 V2 rule execution must call the same local command handlers as MQTT commands.
@@ -80,6 +86,10 @@ code.
 - `rule_engine` owns active rule runtime state.
 - Hardware drivers own hardware registers/peripheral state.
 - Driver instances own their device protocol state.
+- `runtime_snapshot` owns copied read-side DTO projection for rule/fallback
+  status and exported bundle metadata.
+- driver domain facades own narrow adapter-facing API surfaces; they must not
+  turn into generic transport or controller modules.
 - Storage owns durable config and rule bundles.
 - Read model owns exported status/diag snapshots.
 - Large admin/export payload scratch is an owner concern of the admin/control
@@ -88,6 +98,23 @@ code.
 
 If two modules need the same information, prefer a copied DTO or event over a
 shared mutable struct.
+
+## Read-Side Boundaries
+
+- Transport, provisioning and manifest/status serialization should read rule
+  and fallback state through `runtime_snapshot`, not by including concrete
+  runtime-owner headers.
+- `runtime_snapshot` should prefer caller-owned DTO capture
+  (`capture(out)` style) over borrowed pointers to rotating internal buffers.
+  Read-side code may cache or serialize its own copy, but it must not depend on
+  the lifetime of mutable internal snapshot storage after the capture call
+  returns.
+- Adapter/admin/config paths that need NFC-specific status or config/storage
+  behavior should go through `driver_nfc_api` or `driver_nfc_config_api`
+  instead of including concrete reader runtime headers.
+- Concrete driver modules such as PN532 remain internal NFC-domain owners. New
+  reader implementations should plug into the same narrow NFC-domain facades
+  rather than teaching MQTT/provisioning/admin code about each driver.
 
 ## Events
 
@@ -139,7 +166,13 @@ Preferred split examples:
 - `node_provisioning_lifecycle.c`: Wi-Fi/AP/STA and web server lifecycle.
 - `node_provisioning_http.c`: HTTP route registration and route handlers.
 - `node_provisioning_ui.c`: static HTML/UI payloads.
-- `node_provisioning_config_api.c`: config GET/POST parsing and response JSON.
+- `node_provisioning_config_api.c`: base config GET/POST parsing only.
+- `node_provisioning_rules_api.c`: `/api/rules/*` handlers.
+- `node_provisioning_rules_context_api.c`: rules authoring context/export DTOs.
+- `node_provisioning_nfc_api.c`: NFC config/status handlers.
+- `node_provisioning_led_api.c`: LED config/preview handlers.
+- `node_provisioning_admin_json.c`: admin/rules result JSON writers.
+- `node_provisioning_body.c`: request body read/drain and shared scratch.
 - `node_capability_writer.c`: `device_description` writer only.
 
 If a file grows because a feature is being staged, split it before adding the

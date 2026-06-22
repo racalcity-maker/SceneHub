@@ -4,6 +4,7 @@
 #include <string.h>
 
 static bool s_initialized;
+static node_event_router_sink_fn s_sink;
 
 static void copy_text(char *dst, size_t dst_size, const char *src)
 {
@@ -24,6 +25,7 @@ static void clear_event(node_rule_event_t *event)
 esp_err_t node_event_router_init(void)
 {
     s_initialized = true;
+    s_sink = NULL;
     return ESP_OK;
 }
 
@@ -32,7 +34,28 @@ esp_err_t node_event_router_reset(void)
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
+    s_sink = NULL;
     return ESP_OK;
+}
+
+esp_err_t node_event_router_set_sink(node_event_router_sink_fn sink)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_sink = sink;
+    return ESP_OK;
+}
+
+esp_err_t node_event_router_route_event(const node_rule_event_t *event)
+{
+    if (!s_initialized || !event) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_sink) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return s_sink(event);
 }
 
 void node_event_router_make_boot_event(node_rule_event_t *out_event)
@@ -103,6 +126,21 @@ void node_event_router_make_local_event(node_rule_event_t *out_event,
     copy_text(out_event->event_name, sizeof(out_event->event_name), event_name);
     copy_text(out_event->source_id, sizeof(out_event->source_id), source_id);
     copy_text(out_event->uid, sizeof(out_event->uid), uid);
+}
+
+esp_err_t node_event_router_route_local_event(const char *event_name,
+                                              const char *source_id,
+                                              int32_t token_id,
+                                              const char *uid)
+{
+    node_rule_event_t event = {0};
+
+    if (!event_name || event_name[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    node_event_router_make_local_event(&event, event_name, source_id, token_id, uid);
+    return node_event_router_route_event(&event);
 }
 
 void node_event_router_make_mqtt_command_event(node_rule_event_t *out_event, const char *command_name)

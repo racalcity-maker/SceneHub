@@ -31,6 +31,14 @@ hardware/input ISR or poll task
 The runtime task owns high-level state transitions. Hardware modules own low
 level peripheral state.
 
+Read-side snapshot/facade rule:
+
+- `runtime_snapshot` and driver-domain facades may copy bounded owner state,
+  but they must not perform transport publish, storage mutation, JSON parsing
+  or hardware control while holding owner-local locks.
+- If a facade needs data from multiple owners, prefer copied snapshots gathered
+  outside foreign owner locks rather than nested cross-owner lock paths.
+
 ## Lock Scope
 
 Allowed under locks:

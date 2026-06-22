@@ -103,7 +103,7 @@ Rules:
 
 ## Internal Control API
 
-`node_control_execute()` is the only command execution boundary.
+`node_control_submit()` is the only public command execution boundary.
 
 It accepts:
 
@@ -120,6 +120,35 @@ It returns:
 It must not know whether the command came from MQTT, HTTP test route or future
 rule engine for business-logic branching. It may accept source metadata for
 logging, diagnostics and explicitly separated local-preview commands.
+
+Direct inline execution is owner-only:
+
+- `node_control_execute_inline()` stays private to the control owner task;
+- MQTT, provisioning HTTP, admin paths and local rules use `node_control_submit()`;
+- transport/task callers do not touch hardware directly.
+
+## Identifier and JSON Policy
+
+Technical identifiers are validated, bounded ASCII names.
+
+Current whitelist:
+
+- `[A-Za-z0-9_.:-]{1,32}` for command ids, event ids, state keys, driver ids and
+  similar runtime-owned identifiers;
+- resource claims and local-event names must also satisfy this identifier rule.
+
+Human labels and names may contain normal printable text, but firmware must:
+
+- store them in bounded DTO fields;
+- escape them before any JSON output;
+- reject oversize payloads instead of truncating JSON envelopes silently.
+
+Node-side JSON serialization now uses shared helpers from `node_common`:
+
+- `node_json_escape_string()`
+- `node_json_append_escaped()`
+
+Ad hoc per-component JSON escaping helpers should not be added for new code.
 
 ## Error Codes
 
@@ -205,5 +234,5 @@ For MQTT admin transport:
   `node.rules.resume` and `node.reboot` use an empty `{}` args object.
 
 Rule APIs must validate and compile bundles before activation. Runtime rule
-actions must call `node_control_execute()` or typed command handlers, never
+actions must call `node_control_submit()` or typed command handlers, never
 hardware drivers directly.
