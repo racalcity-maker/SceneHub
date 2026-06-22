@@ -1,9 +1,11 @@
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include "node_action_router.h"
 #include "node_board.h"
@@ -27,8 +29,27 @@ static const char *TAG = "scenehub_node";
 
 static node_config_t s_config;
 static StaticTask_t s_network_task_storage;
-static StackType_t s_network_task_stack[4096];
+static StackType_t *s_network_task_stack;
 static bool s_runtime_initialized;
+
+static StackType_t *allocate_network_task_stack(void)
+{
+    const size_t stack_words = 4096U;
+    const size_t stack_bytes = stack_words * sizeof(StackType_t);
+
+    if (s_network_task_stack) {
+        return s_network_task_stack;
+    }
+#if CONFIG_SPIRAM
+    s_network_task_stack = (StackType_t *)heap_caps_malloc(stack_bytes,
+                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_network_task_stack) {
+        return s_network_task_stack;
+    }
+#endif
+    s_network_task_stack = (StackType_t *)heap_caps_malloc(stack_bytes, MALLOC_CAP_8BIT);
+    return s_network_task_stack;
+}
 
 static node_fallback_runtime_config_t build_fallback_runtime_config(const node_config_t *config)
 {
@@ -259,12 +280,17 @@ void app_main(void)
         ESP_LOGI(TAG, "reset/config button disabled by config");
     }
 
+    StackType_t *network_stack = allocate_network_task_stack();
+    if (!network_stack) {
+        ESP_LOGE(TAG, "network task stack alloc failed");
+        return;
+    }
     TaskHandle_t handle = xTaskCreateStatic(network_task,
                                             "node_network",
-                                            sizeof(s_network_task_stack) / sizeof(s_network_task_stack[0]),
+                                            4096U,
                                             &s_config,
                                             tskIDLE_PRIORITY + 2,
-                                            s_network_task_stack,
+                                            network_stack,
                                             &s_network_task_storage);
     if (!handle) {
         ESP_LOGE(TAG, "network task create failed");
