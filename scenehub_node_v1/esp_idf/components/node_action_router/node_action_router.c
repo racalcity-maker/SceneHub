@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -12,7 +11,6 @@
 #include "node_control.h"
 #include "node_mqtt_transport.h"
 #include "node_rule_action_port.h"
-#include "sdkconfig.h"
 
 static const char *TAG = "node_action_router";
 
@@ -39,29 +37,10 @@ static uint8_t s_publish_queue_buffer[NODE_ACTION_ROUTER_PUBLISH_QUEUE_LEN *
                                       sizeof(node_action_router_publish_request_t)];
 static QueueHandle_t s_publish_queue;
 static StaticTask_t s_publish_task_storage;
-static StackType_t *s_publish_task_stack;
+static StackType_t s_publish_task_stack[3072];
 static TaskHandle_t s_publish_task;
 static node_control_result_t s_rule_result;
 static bool s_port_bound;
-
-static StackType_t *allocate_publish_task_stack(void)
-{
-    const size_t stack_words = 3072U;
-    const size_t stack_bytes = stack_words * sizeof(StackType_t);
-
-    if (s_publish_task_stack) {
-        return s_publish_task_stack;
-    }
-#if CONFIG_SPIRAM
-    s_publish_task_stack = (StackType_t *)heap_caps_malloc(stack_bytes,
-                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_publish_task_stack) {
-        return s_publish_task_stack;
-    }
-#endif
-    s_publish_task_stack = (StackType_t *)heap_caps_malloc(stack_bytes, MALLOC_CAP_8BIT);
-    return s_publish_task_stack;
-}
 
 static void publish_task(void *arg)
 {
@@ -102,16 +81,12 @@ static bool ensure_publish_owner(void)
                                              &s_publish_queue_storage);
     }
     if (s_publish_queue && !s_publish_task) {
-        StackType_t *task_stack = allocate_publish_task_stack();
-        if (!task_stack) {
-            return false;
-        }
         s_publish_task = xTaskCreateStatic(publish_task,
                                            "node_evt_pub",
-                                           3072U,
+                                           sizeof(s_publish_task_stack) / sizeof(s_publish_task_stack[0]),
                                            NULL,
                                            tskIDLE_PRIORITY + 1,
-                                           task_stack,
+                                           s_publish_task_stack,
                                            &s_publish_task_storage);
     }
     return s_publish_queue && s_publish_task;

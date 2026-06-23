@@ -25,10 +25,10 @@ static char s_uri[96];
 static char s_rx_payload[NODE_MQTT_PAYLOAD_MAX];
 static char s_command_topic[NODE_MQTT_TOPIC_MAX];
 static StaticTask_t s_heartbeat_task_storage;
-static StackType_t *s_heartbeat_task_stack;
+static StackType_t s_heartbeat_task_stack[3072];
 static bool s_heartbeat_task_started;
 static StaticTask_t s_command_task_storage;
-static StackType_t *s_command_task_stack;
+static StackType_t s_command_task_stack[4096];
 static bool s_command_task_started;
 static StaticQueue_t s_command_queue_storage;
 static uint8_t s_command_queue_buffer[NODE_MQTT_COMMAND_QUEUE_LEN * sizeof(node_mqtt_command_message_t)];
@@ -40,26 +40,6 @@ static StaticQueue_t s_result_queue_storage;
 static uint8_t s_result_queue_buffer[NODE_MQTT_RESULT_QUEUE_LEN * sizeof(node_mqtt_deferred_result_t)];
 static QueueHandle_t s_result_queue;
 static volatile bool s_disconnect_after_result_overflow;
-
-static StackType_t *alloc_task_stack(StackType_t **slot, size_t stack_words)
-{
-    size_t stack_bytes = stack_words * sizeof(StackType_t);
-
-    if (!slot || stack_words == 0) {
-        return NULL;
-    }
-    if (*slot) {
-        return *slot;
-    }
-#if CONFIG_SPIRAM
-    *slot = (StackType_t *)heap_caps_malloc(stack_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (*slot) {
-        return *slot;
-    }
-#endif
-    *slot = (StackType_t *)heap_caps_malloc(stack_bytes, MALLOC_CAP_8BIT);
-    return *slot;
-}
 
 static void *alloc_admin_message_buffer(size_t size)
 {
@@ -338,16 +318,12 @@ esp_err_t node_mqtt_transport_start(const node_config_t *config)
     }
 
     if (!s_heartbeat_task_started) {
-        StackType_t *heartbeat_stack = alloc_task_stack(&s_heartbeat_task_stack, 3072U);
-        if (!heartbeat_stack) {
-            return ESP_ERR_NO_MEM;
-        }
         TaskHandle_t handle = xTaskCreateStatic(heartbeat_task,
                                                 "node_mqtt_hb",
-                                                3072U,
+                                                sizeof(s_heartbeat_task_stack) / sizeof(s_heartbeat_task_stack[0]),
                                                 NULL,
                                                 tskIDLE_PRIORITY + 1,
-                                                heartbeat_stack,
+                                                s_heartbeat_task_stack,
                                                 &s_heartbeat_task_storage);
         if (!handle) {
             return ESP_ERR_NO_MEM;
@@ -355,16 +331,12 @@ esp_err_t node_mqtt_transport_start(const node_config_t *config)
         s_heartbeat_task_started = true;
     }
     if (!s_command_task_started) {
-        StackType_t *command_stack = alloc_task_stack(&s_command_task_stack, 4096U);
-        if (!command_stack) {
-            return ESP_ERR_NO_MEM;
-        }
         TaskHandle_t handle = xTaskCreateStatic(command_task,
                                                 "node_mqtt_cmd",
-                                                4096U,
+                                                sizeof(s_command_task_stack) / sizeof(s_command_task_stack[0]),
                                                 NULL,
                                                 tskIDLE_PRIORITY + 2,
-                                                command_stack,
+                                                s_command_task_stack,
                                                 &s_command_task_storage);
         if (!handle) {
             return ESP_ERR_NO_MEM;
