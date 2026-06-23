@@ -5,12 +5,14 @@
 #include <string.h>
 
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include "node_admin_control.h"
 static const char *TAG = "node_provisioning";
@@ -29,10 +31,30 @@ static esp_err_t ensure_auto_close_task(void);
 static esp_err_t ensure_got_ip_task(void);
 static void arm_auto_close_timer(void);
 static StaticTask_t s_sta_retry_task_storage;
-static StackType_t s_sta_retry_task_stack[2048];
+static StackType_t *s_sta_retry_task_stack;
 static TaskHandle_t s_sta_retry_task;
 static volatile bool s_sta_retry_enabled;
 static uint32_t s_sta_retry_delay_ms = 2000;
+
+static StackType_t *alloc_task_stack(StackType_t **slot, size_t stack_words)
+{
+    size_t stack_bytes = stack_words * sizeof(StackType_t);
+
+    if (!slot || stack_words == 0) {
+        return NULL;
+    }
+    if (*slot) {
+        return *slot;
+    }
+#if CONFIG_SPIRAM
+    *slot = (StackType_t *)heap_caps_malloc(stack_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (*slot) {
+        return *slot;
+    }
+#endif
+    *slot = (StackType_t *)heap_caps_malloc(stack_bytes, MALLOC_CAP_8BIT);
+    return *slot;
+}
 
 static void quiet_idf_wifi_logs(void)
 {
@@ -106,13 +128,16 @@ static esp_err_t ensure_auto_close_task(void)
     if (g_node_prov.auto_close_task) {
         return ESP_OK;
     }
+    StackType_t *task_stack = alloc_task_stack(&g_node_prov.auto_close_task_stack, 4096U);
+    if (!task_stack) {
+        return ESP_ERR_NO_MEM;
+    }
     g_node_prov.auto_close_task = xTaskCreateStatic(provisioning_auto_close_task,
                                                     "node_prov_close",
-                                                    sizeof(g_node_prov.auto_close_task_stack) /
-                                                        sizeof(g_node_prov.auto_close_task_stack[0]),
+                                                    4096U,
                                                     NULL,
                                                     tskIDLE_PRIORITY + 1,
-                                                    g_node_prov.auto_close_task_stack,
+                                                    task_stack,
                                                     &g_node_prov.auto_close_task_storage);
     return g_node_prov.auto_close_task ? ESP_OK : ESP_ERR_NO_MEM;
 }
@@ -122,13 +147,16 @@ static esp_err_t ensure_got_ip_task(void)
     if (g_node_prov.got_ip_task) {
         return ESP_OK;
     }
+    StackType_t *task_stack = alloc_task_stack(&g_node_prov.got_ip_task_stack, 6144U);
+    if (!task_stack) {
+        return ESP_ERR_NO_MEM;
+    }
     g_node_prov.got_ip_task = xTaskCreateStatic(got_ip_task,
                                                 "node_prov_ip",
-                                                sizeof(g_node_prov.got_ip_task_stack) /
-                                                    sizeof(g_node_prov.got_ip_task_stack[0]),
+                                                6144U,
                                                 NULL,
                                                 tskIDLE_PRIORITY + 2,
-                                                g_node_prov.got_ip_task_stack,
+                                                task_stack,
                                                 &g_node_prov.got_ip_task_storage);
     return g_node_prov.got_ip_task ? ESP_OK : ESP_ERR_NO_MEM;
 }
@@ -194,12 +222,16 @@ static esp_err_t ensure_sta_retry_task(void)
     if (s_sta_retry_task) {
         return ESP_OK;
     }
+    StackType_t *task_stack = alloc_task_stack(&s_sta_retry_task_stack, 2048U);
+    if (!task_stack) {
+        return ESP_ERR_NO_MEM;
+    }
     s_sta_retry_task = xTaskCreateStatic(sta_retry_task,
                                          "node_sta_retry",
-                                         sizeof(s_sta_retry_task_stack) / sizeof(s_sta_retry_task_stack[0]),
+                                         2048U,
                                          NULL,
                                          tskIDLE_PRIORITY + 1,
-                                         s_sta_retry_task_stack,
+                                         task_stack,
                                          &s_sta_retry_task_storage);
     return s_sta_retry_task ? ESP_OK : ESP_ERR_NO_MEM;
 }

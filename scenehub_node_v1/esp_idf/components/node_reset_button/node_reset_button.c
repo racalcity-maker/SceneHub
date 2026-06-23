@@ -4,11 +4,13 @@
 #include <stdint.h>
 
 #include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "node_limits.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "node_reset_button";
 
@@ -18,11 +20,30 @@ typedef struct {
     node_reset_button_callback_t callback;
     void *callback_ctx;
     StaticTask_t task_storage;
-    StackType_t task_stack[2048];
+    StackType_t *task_stack;
     TaskHandle_t task_handle;
 } reset_button_state_t;
 
 static reset_button_state_t s_button;
+
+static StackType_t *allocate_reset_button_task_stack(void)
+{
+    const size_t stack_words = 2048U;
+    const size_t stack_bytes = stack_words * sizeof(StackType_t);
+
+    if (s_button.task_stack) {
+        return s_button.task_stack;
+    }
+#if CONFIG_SPIRAM
+    s_button.task_stack = (StackType_t *)heap_caps_malloc(stack_bytes,
+                                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_button.task_stack) {
+        return s_button.task_stack;
+    }
+#endif
+    s_button.task_stack = (StackType_t *)heap_caps_malloc(stack_bytes, MALLOC_CAP_8BIT);
+    return s_button.task_stack;
+}
 
 static bool button_is_pressed(void)
 {
@@ -104,12 +125,16 @@ esp_err_t node_reset_button_start(const node_reset_button_config_t *config)
         return err;
     }
 
+    StackType_t *task_stack = allocate_reset_button_task_stack();
+    if (!task_stack) {
+        return ESP_ERR_NO_MEM;
+    }
     s_button.task_handle = xTaskCreateStatic(reset_button_task,
                                              "node_reset_btn",
-                                             sizeof(s_button.task_stack) / sizeof(s_button.task_stack[0]),
+                                             2048U,
                                              NULL,
                                              tskIDLE_PRIORITY + 1,
-                                             s_button.task_stack,
+                                             task_stack,
                                              &s_button.task_storage);
     if (!s_button.task_handle) {
         return ESP_ERR_NO_MEM;
