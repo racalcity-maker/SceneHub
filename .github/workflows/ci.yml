@@ -63,7 +63,8 @@ jobs:
         working-directory: scenehub_node_v1/esp_idf
         run: |
           source "${IDF_PATH}/export.sh"
-          idf.py build
+          idf.py -DSDKCONFIG_DEFAULTS=sdkconfig.defaults.esp32s3 set-target esp32s3
+          idf.py -DSDKCONFIG_DEFAULTS=sdkconfig.defaults.esp32s3 build
 
       - name: Upload build artifacts
         if: always()
