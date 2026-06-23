@@ -16,10 +16,10 @@ typedef struct {
     node_provisioning_callbacks_t callbacks;
     bool auto_close_closed_for_boot;
     StaticTask_t auto_close_task_storage;
-    StackType_t *auto_close_task_stack;
+    StackType_t auto_close_task_stack[4096];
     TaskHandle_t auto_close_task;
     StaticTask_t got_ip_task_storage;
-    StackType_t *got_ip_task_stack;
+    StackType_t got_ip_task_stack[6144];
     TaskHandle_t got_ip_task;
 } node_provisioning_state_t;
 
